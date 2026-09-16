@@ -129,7 +129,7 @@ async function save() {
       conflict.value = false;
     }
     await refresh();
-    message.value = '节点已保存。';
+    message.value = '节点已保存，相关订阅已安排更新。';
   });
 }
 async function toggle(node: NodeSummary) {
@@ -140,11 +140,18 @@ async function toggle(node: NodeSummary) {
       'PATCH',
     );
     await refresh();
-    message.value = node.enabled ? '节点已禁用。已载入工作台的独立副本不受影响。' : '节点已启用。';
+    message.value = node.enabled
+      ? '节点已禁用，相关订阅旧产物已失效。工作台中的独立副本不受影响。'
+      : '节点已启用。';
   });
 }
 async function remove(node: NodeSummary) {
-  if (!window.confirm('删除这个本地节点？此操作不会删除工作台中的独立副本。')) return;
+  if (
+    !window.confirm(
+      '删除这个本地节点？关联方案会移除此输入并重新生成；工作台中的独立副本不受影响。',
+    )
+  )
+    return;
   await act(async () => {
     await props.api('/api/nodes/' + node.id, { revision: node.revision }, 'DELETE');
     if (baseline.value?.id === node.id) {

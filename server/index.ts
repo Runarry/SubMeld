@@ -6,6 +6,7 @@ import { loadConfig } from './config.js';
 import { openSettings } from './database.js';
 import { Auth } from './auth.js';
 import { Converter } from './converter/pool.js';
+import { Publisher } from './publisher.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -32,7 +33,32 @@ async function main() {
     settings.close();
     throw error;
   }
-  const app = createApp({ webRoot, config, auth, converter, nodes: settings.nodes });
+  const publisher = new Publisher(
+    settings.subscriptions,
+    settings.nodes,
+    settings.sources,
+    converter,
+  );
+  let app: ReturnType<typeof createApp>;
+  try {
+    app = createApp({
+      webRoot,
+      config,
+      auth,
+      converter,
+      nodes: settings.nodes,
+      sources: settings.sources,
+      subscriptions: settings.subscriptions,
+      publisher,
+    });
+    publisher.start();
+  } catch (error) {
+    await publisher.close();
+    await converter.close();
+    auth.close();
+    settings.close();
+    throw error;
+  }
   const hostname = config.development ? '127.0.0.1' : '0.0.0.0';
   const server = serve({ fetch: app.fetch, hostname, port: 3000 }, () =>
     console.info('SubMeld started on port 3000.'),
@@ -43,6 +69,7 @@ async function main() {
     closing = true;
     server.close();
     if ('closeAllConnections' in server) server.closeAllConnections();
+    await publisher.close();
     await converter.close();
     auth.close();
     settings.close();

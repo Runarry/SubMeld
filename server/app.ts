@@ -8,6 +8,10 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import type { Auth } from './auth.js';
 import type { NodeStore } from './nodes.js';
+import type { SourceStore } from './sources.js';
+import type { SubscriptionStore } from './subscriptions.js';
+import type { Publisher } from './publisher.js';
+import { outputFormatSchema } from './shared/subscriptions.js';
 import type { Converter } from './converter/pool.js';
 import { AppError, publicError } from './errors.js';
 import { readJson } from './input.js';
@@ -22,11 +26,23 @@ import {
 export type AppOptions = {
   webRoot?: string;
   nodes: NodeStore;
+  sources: SourceStore;
+  subscriptions: SubscriptionStore;
+  publisher: Publisher;
   config: Config;
   auth: Auth;
   converter: Pick<Converter, 'run'>;
 };
-export function createApp({ webRoot, config, auth, converter, nodes }: AppOptions) {
+export function createApp({
+  webRoot,
+  config,
+  auth,
+  converter,
+  nodes,
+  sources,
+  subscriptions,
+  publisher,
+}: AppOptions) {
   const app = new Hono();
   const cookieName = config.development ? 'submeld-session' : '__Host-submeld-session';
   const writes = new Set([
@@ -36,6 +52,8 @@ export function createApp({ webRoot, config, auth, converter, nodes }: AppOption
     '/api/convert/produce',
     '/api/convert/render',
     '/api/nodes',
+    '/api/sources',
+    '/api/subscriptions',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -51,7 +69,11 @@ export function createApp({ webRoot, config, auth, converter, nodes }: AppOption
     await next();
   });
   app.use('/api/*', async (context, next) => {
-    const managed = writes.has(context.req.path) || context.req.path.startsWith('/api/nodes/');
+    const managed =
+      writes.has(context.req.path) ||
+      ['/api/nodes/', '/api/sources/', '/api/subscriptions/'].some((prefix) =>
+        context.req.path.startsWith(prefix),
+      );
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
       let validOrigin = false;
@@ -171,6 +193,116 @@ export function createApp({ webRoot, config, auth, converter, nodes }: AppOption
     return context.json(
       await converter.run({ kind: 'render', input: input.data }, context.req.raw.signal),
     );
+  });
+  function listPage(value: string | undefined) {
+    const page = z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(1000000)
+      .safeParse(value ?? 0);
+    if (!page.success) throw new AppError('INVALID_REQUEST', '页码无效。', 400);
+    return page.data;
+  }
+  async function requestRevision(request: Request) {
+    const input = revisionRequestSchema.safeParse(await readJson(request, 1024));
+    if (!input.success) throw new AppError('INVALID_REQUEST', '请求缺少有效版本。', 400);
+    return input.data.revision;
+  }
+  const detail = (id: string) =>
+    subscriptions.detail(id, publisher.engineVersion, publisher.status(id));
+  function issued(id: string, token: string) {
+    const subscription = detail(id);
+    return {
+      subscription,
+      urls: Object.fromEntries(
+        subscription.formats.map((format) => [
+          format,
+          config.publicOrigin + '/s/' + token + '/' + format,
+        ]),
+      ),
+    };
+  }
+  app.get('/api/sources', (c) => c.json(sources.list(listPage(c.req.query('page')))));
+  app.post('/api/sources', async (c) =>
+    c.json(
+      await sources.create(
+        await readJson(c.req.raw, 26 * 1024 * 1024),
+        converter,
+        c.req.raw.signal,
+      ),
+      201,
+    ),
+  );
+  app.get('/api/sources/:id', (c) => c.json(sources.get(c.req.param('id'))));
+  app.patch('/api/sources/:id', async (c) =>
+    c.json(
+      await sources.update(
+        c.req.param('id'),
+        await readJson(c.req.raw, 26 * 1024 * 1024),
+        converter,
+        c.req.raw.signal,
+      ),
+    ),
+  );
+  app.delete('/api/sources/:id', async (c) => {
+    sources.delete(c.req.param('id'), await requestRevision(c.req.raw));
+    return c.json({ deleted: true });
+  });
+  app.get('/api/subscriptions', (c) => c.json(subscriptions.list(listPage(c.req.query('page')))));
+  app.post('/api/subscriptions', async (c) => {
+    const { id, token } = subscriptions.create(await readJson(c.req.raw, 26 * 1024 * 1024));
+    return c.json(issued(id, token), 201);
+  });
+  app.get('/api/subscriptions/:id', (c) => c.json(detail(c.req.param('id'))));
+  app.patch('/api/subscriptions/:id', async (c) => {
+    subscriptions.update(c.req.param('id'), await readJson(c.req.raw, 26 * 1024 * 1024));
+    return c.json(detail(c.req.param('id')));
+  });
+  app.delete('/api/subscriptions/:id', async (c) => {
+    subscriptions.delete(c.req.param('id'), await requestRevision(c.req.raw));
+    return c.json({ deleted: true });
+  });
+  app.post('/api/subscriptions/:id/generate', async (c) => {
+    const sub = subscriptions.current(c.req.param('id'), await requestRevision(c.req.raw));
+    if (!sub.enabled) throw new AppError('SUBSCRIPTION_DISABLED', '请先启用方案。', 422);
+    publisher.schedule([sub.id]);
+    return c.json(detail(sub.id), 202);
+  });
+  app.post('/api/subscriptions/:id/reset-token', async (c) => {
+    const { id, token } = subscriptions.resetToken(
+      c.req.param('id'),
+      await requestRevision(c.req.raw),
+    );
+    return c.json(issued(id, token));
+  });
+  app.get('/api/subscriptions/:id/artifacts/:format', (c) => {
+    const format = outputFormatSchema.safeParse(c.req.param('format'));
+    if (!format.success) throw new AppError('NOT_FOUND', '请求的资源不存在。', 404);
+    return c.json(subscriptions.artifact(c.req.param('id'), format.data, publisher.engineVersion));
+  });
+  app.use('/s/*', async (c, next) => {
+    c.header('Cache-Control', 'private, no-store');
+    await next();
+  });
+  app.use('/s', async (c, next) => {
+    c.header('Cache-Control', 'private, no-store');
+    await next();
+  });
+  app.on(['GET', 'HEAD'], '/s/:token/:format', (c) => {
+    const artifact = subscriptions.read(
+      c.req.param('token'),
+      c.req.param('format'),
+      publisher.engineVersion,
+    );
+    const type = artifact.format.startsWith('mihomo')
+      ? 'application/yaml'
+      : ['uri', 'base64'].includes(artifact.format)
+        ? 'text/plain'
+        : 'application/json';
+    c.header('Content-Type', type + '; charset=utf-8');
+    c.header('Content-Length', String(Buffer.byteLength(artifact.content)));
+    return c.req.method === 'HEAD' ? c.body(null, 200) : c.body(artifact.content, 200);
   });
   if (webRoot) {
     const indexHtml = readFileSync(join(webRoot, 'index.html'), 'utf8');

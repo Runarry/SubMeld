@@ -10,6 +10,7 @@ import { openSettings } from '../dist/server/database.js';
 import { createApp } from '../dist/server/app.js';
 import { Auth, hashPassword } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
+import { Publisher } from '../dist/server/publisher.js';
 import { node, TEST_PASSWORD } from './fixtures.mjs';
 function temporary() {
   const dir = mkdtempSync(join(tmpdir(), 'submeld-p2-'));
@@ -131,7 +132,15 @@ test('real HTTP node CRUD and render enforce auth, revision, same origin and sec
     await converter.ready;
     const config = { publicOrigin: 'http://127.0.0.1', development: true, dataDir: temp.dir };
     server = serve({
-      fetch: createApp({ config, auth, converter, nodes: db.nodes }).fetch,
+      fetch: createApp({
+        config,
+        auth,
+        converter,
+        nodes: db.nodes,
+        sources: db.sources,
+        subscriptions: db.subscriptions,
+        publisher: new Publisher(db.subscriptions, db.nodes, db.sources, converter),
+      }).fetch,
       hostname: '127.0.0.1',
       port: 0,
     });

@@ -35,6 +35,21 @@ export class Converter {
   private counter = 0;
   private available = false;
   private closed = false;
+  private idleListeners = new Set<() => void>();
+  isAvailable() {
+    return this.available && !!this.worker && !this.running && !this.closed;
+  }
+  onAvailable(listener: () => void) {
+    this.idleListeners.add(listener);
+    return () => {
+      this.idleListeners.delete(listener);
+    };
+  }
+  private notifyAvailable() {
+    queueMicrotask(() => {
+      if (this.isAvailable()) for (const listener of this.idleListeners) listener();
+    });
+  }
   ready: Promise<void>;
   constructor(
     private workerUrl = new URL(
@@ -80,6 +95,7 @@ export class Converter {
           started = true;
           this.available = true;
           resolve();
+          this.notifyAvailable();
           return;
         }
         const response = replySchema.safeParse(message);
@@ -116,6 +132,7 @@ export class Converter {
               response.data.error.diagnostics,
             ),
           );
+        this.notifyAvailable();
       });
       worker.on('error', () => {
         if (!started) stopStartup('Converter failed to start');

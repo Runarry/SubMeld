@@ -10,6 +10,7 @@ import { serve } from '@hono/node-server';
 import { createApp } from '../dist/server/app.js';
 import { Auth, hashPassword, SESSION_MS } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
+import { Publisher } from '../dist/server/publisher.js';
 import { node, items, UUID, TEST_PASSWORD } from './fixtures.mjs';
 let server, origin, auth, converter, cookie, hash, settings, directory;
 const logs = [];
@@ -25,7 +26,16 @@ before(async () => {
   mock.method(console, 'warn', (value) => logs.push(value));
   const webRoot = fileURLToPath(new URL('../dist/web/', import.meta.url));
   server = serve({
-    fetch: createApp({ webRoot, config, auth, converter, nodes: settings.nodes }).fetch,
+    fetch: createApp({
+      webRoot,
+      config,
+      auth,
+      converter,
+      nodes: settings.nodes,
+      sources: settings.sources,
+      subscriptions: settings.subscriptions,
+      publisher: new Publisher(settings.subscriptions, settings.nodes, settings.sources, converter),
+    }).fetch,
     hostname: '127.0.0.1',
     port: 0,
   });
@@ -153,6 +163,9 @@ test('login creates an HttpOnly Strict cookie and production adds Secure and __H
     auth: new Auth(hash),
     converter,
     nodes: settings.nodes,
+    sources: settings.sources,
+    subscriptions: settings.subscriptions,
+    publisher: new Publisher(settings.subscriptions, settings.nodes, settings.sources, converter),
   });
   const pr = await production.request('https://submeld.example/api/auth/login', {
     method: 'POST',

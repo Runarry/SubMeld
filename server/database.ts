@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3';
 import { createNodeStore } from './nodes.js';
+import { createSourceStore } from './sources.js';
+import { createSubscriptionStore } from './subscriptions.js';
 import { chmodSync, lstatSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -37,7 +39,7 @@ export function openSettings(dataDir: string, development: boolean) {
     db.pragma('journal_mode = WAL');
     db.pragma('busy_timeout = 3000');
     const version = db.pragma('user_version', { simple: true });
-    if (version !== 0 && version !== 1 && version !== 2)
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3)
       throw new Error('数据库版本不受支持，停止启动。');
     if (version === 0)
       db.transaction(() => {
@@ -53,14 +55,46 @@ export function openSettings(dataDir: string, development: boolean) {
           draft_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         ); PRAGMA user_version = 2;`);
       })();
+    if (version !== 3)
+      db.transaction(() => {
+        db?.exec(`CREATE TABLE sources (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+          revision INTEGER NOT NULL CHECK(revision>0), model_version INTEGER NOT NULL,
+          format TEXT NOT NULL, text TEXT NOT NULL, snapshot_json TEXT NOT NULL,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, saved_at TEXT NOT NULL
+        );
+        CREATE TABLE subscriptions (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+          revision INTEGER NOT NULL CHECK(revision>0), config_json TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE subscription_inputs (
+          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK(position>=0),
+          node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+          source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+          PRIMARY KEY(subscription_id,position), CHECK((node_id IS NULL) != (source_id IS NULL))
+        );
+        CREATE INDEX subscription_node ON subscription_inputs(node_id);
+        CREATE INDEX subscription_source ON subscription_inputs(source_id);
+        CREATE TABLE artifacts (
+          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+          format TEXT NOT NULL, body TEXT, built_revision INTEGER, engine_version TEXT,
+          generated_at TEXT, counts_json TEXT, diagnostics_json TEXT, error_json TEXT,
+          PRIMARY KEY(subscription_id,format)
+        ); PRAGMA user_version=3;`);
+      })();
     if (process.platform !== 'win32') {
       for (const file of readdirSync(dataDir))
         if (file.startsWith('submeld.sqlite') || file.startsWith('instance.lock.sqlite'))
           chmodSync(join(dataDir, file), 0o600);
     }
     const database = db;
+    const subscriptions = createSubscriptionStore(database);
     return {
-      nodes: createNodeStore(database),
+      nodes: createNodeStore(database, subscriptions),
+      sources: createSourceStore(database, subscriptions),
+      subscriptions,
       getPasswordHash(): string | undefined {
         const row: unknown = database
           .prepare("SELECT value FROM settings WHERE key = 'admin_password_hash'")

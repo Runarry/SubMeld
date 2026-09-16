@@ -6,6 +6,7 @@ import { createApp } from '../dist/server/app.js';
 import { openSettings } from '../dist/server/database.js';
 import { hashPassword, Auth } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
+import { Publisher } from '../dist/server/publisher.js';
 mkdirSync('.cache', { recursive: true });
 const directory = mkdtempSync(resolve('.cache/browser-'));
 const settings = openSettings(directory, true);
@@ -16,12 +17,22 @@ let clock = Date.now();
 const auth = new Auth(settings.getPasswordHash(), () => clock);
 const converter = new Converter();
 await converter.ready;
+const publisher = new Publisher(
+  settings.subscriptions,
+  settings.nodes,
+  settings.sources,
+  converter,
+);
+publisher.start();
 const app = createApp({
   config: { publicOrigin: 'http://127.0.0.1:3210', dataDir: directory, development: true },
   webRoot: fileURLToPath(new URL('../dist/web/', import.meta.url)),
   auth,
   converter,
   nodes: settings.nodes,
+  sources: settings.sources,
+  subscriptions: settings.subscriptions,
+  publisher,
 });
 const server = serve({
   fetch: (request) => {
@@ -38,6 +49,7 @@ async function close() {
   closed = true;
   server.close();
   server.closeAllConnections();
+  await publisher.close();
   await converter.close();
   auth.close();
   settings.close();

@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import NodeEditor from './NodeEditor.vue';
 import NodeLibrary from './NodeLibrary.vue';
+import SourceLibrary from './SourceLibrary.vue';
+import SubscriptionLibrary from './SubscriptionLibrary.vue';
 import { ApiError, request } from './api';
 import {
   blankDraft,
@@ -30,7 +32,7 @@ const output = ref<ProduceResult | null>(null);
 const selectedIndex = ref(0);
 const newProtocol = ref<Protocol>('vless');
 const target = ref<'uri' | 'base64' | RenderTarget>('uri');
-const view = ref<'workbench' | 'library'>('workbench');
+const view = ref<'workbench' | 'library' | 'sources' | 'subscriptions'>('workbench');
 const selectedForSave = ref<number[]>([]);
 const rendered = ref<Partial<Record<RenderTarget, RenderResult>>>({});
 const outputErrors = ref<Partial<Record<'uri' | 'base64' | RenderTarget, string>>>({});
@@ -346,7 +348,7 @@ onMounted(async () => {
       <div class="brand-identity">
         <span class="brand-mark" aria-hidden="true">S</span
         ><span>SubMeld <span class="brand-divider">/</span> 订融</span
-        ><span class="version">0.2.0</span>
+        ><span class="version">0.3.0</span>
       </div>
       <button v-if="authenticated" :disabled="!!busy" @click="logout">退出登录</button>
     </header>
@@ -378,12 +380,18 @@ onMounted(async () => {
           转换工作台
         </button>
         <button :class="{ primary: view === 'library' }" @click="view = 'library'">本地节点</button>
+        <button :class="{ primary: view === 'sources' }" @click="view = 'sources'">文本来源</button>
+        <button :class="{ primary: view === 'subscriptions' }" @click="view = 'subscriptions'">
+          订阅方案
+        </button>
       </nav>
       <NodeLibrary v-if="view === 'library'" :api="api" @load="appendNodes" />
+      <SourceLibrary v-if="view === 'sources'" :api="api" />
+      <SubscriptionLibrary v-if="view === 'subscriptions'" :api="api" />
       <div v-show="view === 'workbench'">
         <div class="workspace-heading">
           <div>
-            <p class="eyebrow">P2 · 节点与配置工作台</p>
+            <p class="eyebrow">P3 · 节点与私人订阅</p>
             <h1>从输入到可用链接。</h1>
           </div>
           <p class="muted">内容仅在本次页面中保留<br />刷新或退出后清空</p>
@@ -617,7 +625,7 @@ onMounted(async () => {
     </main>
     <footer>
       <span>SubMeld · 订融 · <a href="/source.tar.gz">对应版本源码（AGPL）</a></span
-      ><span>本地节点明确保存；临时工作台刷新即清空。订阅发布尚未开放。</span>
+      ><span>本地节点与文本来源明确保存；临时工作台刷新即清空。私人地址仅创建或重置时展示。</span>
     </footer>
   </div>
 </template>

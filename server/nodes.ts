@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import type { InputChanges } from './subscriptions.js';
 import { AppError } from './errors.js';
 import { validateDraft } from './converter/model.js';
 import {
@@ -46,7 +47,7 @@ function summary(node: StoredNode) {
     updatedAt: node.updatedAt,
   });
 }
-export function createNodeStore(db: Database.Database) {
+export function createNodeStore(db: Database.Database, publications: InputChanges) {
   function get(id: string): StoredNode {
     const raw: unknown = db.prepare('SELECT * FROM nodes WHERE id = ?').get(id);
     if (raw === undefined) throw new AppError('NOT_FOUND', '节点不存在。', 404);
@@ -104,7 +105,7 @@ export function createNodeStore(db: Database.Database) {
       limit(input);
       const parsed = updateNodeSchema.safeParse(input);
       if (!parsed.success) throw new AppError('INVALID_REQUEST', '节点更新请求格式无效。', 400);
-      return db.transaction(() => {
+      const result = db.transaction(() => {
         const node = current(id, parsed.data.revision);
         const changes = parsed.data.changes ?? {};
         const clearSecrets = (values: Record<string, unknown>) =>
@@ -132,14 +133,19 @@ export function createNodeStore(db: Database.Database) {
           id,
           node.revision,
         );
-        return get(id);
+        return { node: get(id), affected: publications.invalidateInput('node', id) };
       })();
+      publications.notify(result.affected);
+      return result.node;
     },
     delete(id: string, revision: number) {
-      db.transaction(() => {
+      const affected = db.transaction(() => {
         current(id, revision);
+        const ids = publications.invalidateInput('node', id);
         db.prepare('DELETE FROM nodes WHERE id=? AND revision=?').run(id, revision);
+        return ids;
       })();
+      publications.notify(affected);
     },
     load(input: unknown) {
       const parsed = nodeIdsSchema.safeParse(input);

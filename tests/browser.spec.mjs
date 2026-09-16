@@ -2,6 +2,7 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { UUID } from './fixtures.mjs';
+import { newSubscription } from '../dist/server/shared/subscriptions.js';
 const password = 'SubMeld-UI-Test-Only-2026';
 async function login(page) {
   await page.goto('/');
@@ -509,4 +510,303 @@ test('local import invalidates edited input, discards delayed parse and file rea
   await page.getByRole('button', { name: '本地节点', exact: true }).click();
   await expect(page.getByRole('region', { name: '本地节点导入', exact: true })).toHaveCount(0);
   expect((await (await page.request.get('/api/nodes')).json()).total).toBe(initial);
+});
+
+async function p3Api(page, path, data, method = 'POST') {
+  const response = await page.request.fetch(path, {
+    method,
+    data,
+    headers: {
+      Origin: new URL(page.url()).origin,
+      'Content-Type': 'application/json',
+      'X-SubMeld-Request': '1',
+    },
+  });
+  expect(response.ok()).toBe(true);
+  return response.json();
+}
+async function p3Fixture(page, name) {
+  const source = await p3Api(page, '/api/sources', {
+    name: name + '-source',
+    format: 'uri',
+    text: 'vless://' + UUID + '@example.com:443?security=tls&type=tcp#' + name,
+  });
+  const issued = await p3Api(page, '/api/subscriptions', {
+    ...newSubscription(),
+    name,
+    inputs: [{ kind: 'source', id: source.id }],
+  });
+  await expect.poll(async () => (await page.request.get(issued.urls.uri)).status()).toBe(200);
+  return { source, issued };
+}
+async function selectP3Input(page, kind, id) {
+  if ((await page.getByLabel('输入类型', { exact: true }).inputValue()) !== kind) {
+    const loading = page.waitForResponse((r) =>
+      r.url().includes(kind === 'node' ? '/api/nodes?page=' : '/api/sources?page='),
+    );
+    await page.getByLabel('输入类型', { exact: true }).selectOption(kind);
+    await loading;
+  }
+  await expect(page.getByRole('button', { name: '刷新可选输入', exact: true })).toBeEnabled();
+  const choice = page.getByLabel('可选输入', { exact: true }).locator('option[value="' + id + '"]');
+  while (!(await choice.count())) {
+    const next = page.getByRole('button', { name: '下一页输入', exact: true });
+    await expect(next).toBeEnabled();
+    const loading = page.waitForResponse((r) =>
+      r.url().includes(kind === 'node' ? '/api/nodes?page=' : '/api/sources?page='),
+    );
+    await next.click();
+    await loading;
+    await expect(page.getByRole('button', { name: '刷新可选输入', exact: true })).toBeEnabled();
+  }
+  await page.getByLabel('可选输入', { exact: true }).selectOption(id);
+  await page.getByRole('button', { name: '添加输入', exact: true }).click();
+}
+
+test('P3 source copy, ordered target filters, address updates, export, reset and transient clearing', async ({
+  page,
+  request,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    window.testCopied = '';
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (value) => {
+          window.testCopied = value;
+        },
+      },
+    });
+  });
+  await login(page);
+  const suffix = testInfo.project.name,
+    sourceName = 'P3来源-' + suffix,
+    subName = 'P3组合-' + suffix;
+  await page.getByRole('button', { name: '文本来源', exact: true }).click();
+  await page.getByRole('button', { name: '新建文本来源', exact: true }).click();
+  await page.getByLabel('来源名称', { exact: true }).fill(sourceName);
+  await page.getByLabel('来源正文', { exact: true }).fill('not-a-node');
+  await page.getByRole('button', { name: '解析并保存来源', exact: true }).click();
+  await expect(page.getByLabel('来源正文', { exact: true })).toHaveValue('not-a-node');
+  await expect(page.getByRole('button', { name: '解析并保存来源', exact: true })).toBeEnabled();
+  const sourceText =
+    'vless://' +
+    UUID +
+    '@example.com:443?security=tls&type=tcp#P3-v-' +
+    suffix +
+    '\nhysteria2://p3-test@example.com:443#P3-h-' +
+    suffix;
+  await page.getByLabel('来源正文', { exact: true }).fill(sourceText);
+  const savedResponse = page.waitForResponse(
+    (r) =>
+      r.url().endsWith('/api/sources') && r.request().method() === 'POST' && r.status() === 201,
+  );
+  await page.getByRole('button', { name: '解析并保存来源', exact: true }).click();
+  const saved = await (await savedResponse).json();
+  await page.getByLabel('选择来源节点 P3-v-' + suffix, { exact: true }).check();
+  const copiedResponse = page.waitForResponse(
+    (r) => r.url().endsWith('/api/nodes') && r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: '复制所选为本地节点', exact: true }).click();
+  const copied = await (await copiedResponse).json();
+  await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+  await page.getByRole('button', { name: '新建订阅方案', exact: true }).click();
+  await page.getByLabel('方案名称', { exact: true }).fill(subName);
+  await selectP3Input(page, 'source', saved.id);
+  await selectP3Input(page, 'node', copied.nodes[0].id);
+  await page.getByRole('button', { name: '上移输入', exact: true }).nth(1).click();
+  await page.getByLabel('名称前缀', { exact: true }).fill('订阅-');
+  for (const name of ['Mihomo 完整配置', 'sing-box 完整配置', 'Xray 完整配置'])
+    await page.getByLabel(name, { exact: true }).check();
+  const xray = page
+    .locator('fieldset.target-filter')
+    .filter({ has: page.locator('legend').filter({ hasText: 'Xray' }) });
+  await xray.getByLabel('HYSTERIA2', { exact: true }).uncheck();
+  await xray.getByLabel('TUIC', { exact: true }).uncheck();
+  await page.getByRole('button', { name: '保存订阅方案', exact: true }).click();
+  const uriField = page.getByLabel('URI 订阅地址', { exact: true });
+  await expect(uriField).toBeVisible();
+  const oldUrl = await uriField.inputValue();
+  const previewButton = page.getByRole('button', { name: '预览 URI', exact: true });
+  await expect(previewButton).toBeEnabled();
+  await page.getByRole('button', { name: '复制 URI 地址', exact: true }).click();
+  expect(await page.evaluate(() => window.testCopied)).toBe(oldUrl);
+  await previewButton.click();
+  const output = await page.getByLabel('已发布订阅内容', { exact: true }).inputValue();
+  expect(output.split('\n').map((v) => new URL(v).protocol)).toEqual([
+    'vless:',
+    'vless:',
+    'hysteria2:',
+  ]);
+  expect(await (await request.get(oldUrl)).text()).toBe(output);
+  await expect(page.getByRole('button', { name: '预览 Xray 完整配置', exact: true })).toBeEnabled();
+  const downloading = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载订阅内容', exact: true }).click();
+  expect(await readFile(await (await downloading).path(), 'utf8')).toBe(output);
+  await page.getByLabel('名称前缀', { exact: true }).fill('更新-');
+  await page.getByRole('button', { name: '保存订阅方案', exact: true }).click();
+  await expect
+    .poll(async () => decodeURIComponent(await (await request.get(oldUrl)).text()))
+    .toContain('更新-');
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: '重置私人地址', exact: true }).click();
+  await expect(uriField).not.toHaveValue(oldUrl);
+  const newUrl = await uriField.inputValue();
+  expect((await request.get(oldUrl)).status()).toBe(404);
+  expect((await request.get(newUrl)).status()).toBe(200);
+  const head = await request.head(newUrl);
+  expect(head.status()).toBe(200);
+  expect(await head.text()).toBe('');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole('button', { name: '文本来源', exact: true }).click();
+  await expect(uriField).toHaveCount(0);
+  await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+  const row = page.locator('.library-list > li').filter({ hasText: subName });
+  await row.getByRole('button', { name: '编辑方案', exact: true }).click();
+  await expect(page.getByLabel('方案名称', { exact: true })).toHaveValue(subName);
+  await expect(uriField).toHaveCount(0);
+  await row.getByRole('button', { name: '停用方案', exact: true }).click();
+  await expect.poll(async () => (await request.get(newUrl)).status()).toBe(404);
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByLabel('方案名称', { exact: true })).toHaveCount(0);
+});
+
+test('P3 two pages retain source and subscription edits on revision conflicts', async ({
+  page,
+}, testInfo) => {
+  await login(page);
+  const name = 'P3冲突-' + testInfo.project.name;
+  const fixture = await p3Fixture(page, name);
+  const other = await page.context().newPage();
+  await other.goto('/');
+  for (const p of [page, other]) {
+    await p.getByRole('button', { name: '订阅方案', exact: true }).click();
+    await p
+      .locator('.library-list > li')
+      .filter({ hasText: name })
+      .getByRole('button', { name: '编辑方案', exact: true })
+      .click();
+  }
+  await page.getByLabel('名称前缀', { exact: true }).fill('first-');
+  await other.getByLabel('名称前缀', { exact: true }).fill('unsaved-');
+  await page.getByRole('button', { name: '保存订阅方案', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存订阅方案', exact: true })).toBeEnabled();
+  await other.getByRole('button', { name: '保存订阅方案', exact: true }).click();
+  await expect(other.getByRole('button', { name: '重新载入方案版本', exact: true })).toBeVisible();
+  await expect(other.getByLabel('名称前缀', { exact: true })).toHaveValue('unsaved-');
+  await other.getByRole('button', { name: '重新载入方案版本', exact: true }).click();
+  await expect(other.getByLabel('名称前缀', { exact: true })).toHaveValue('first-');
+  for (const p of [page, other]) {
+    await p.getByRole('button', { name: '文本来源', exact: true }).click();
+    await p
+      .locator('.library-list > li')
+      .filter({ hasText: fixture.source.name })
+      .getByRole('button', { name: '编辑来源', exact: true })
+      .click();
+  }
+  await page.getByLabel('来源名称', { exact: true }).fill(name + '-changed');
+  await other
+    .getByLabel('来源正文', { exact: true })
+    .fill(fixture.source.text + '\n' + fixture.source.text);
+  await page.getByRole('button', { name: '解析并保存来源', exact: true }).click();
+  await expect(page.getByRole('button', { name: '解析并保存来源', exact: true })).toBeEnabled();
+  await other.getByRole('button', { name: '解析并保存来源', exact: true }).click();
+  await expect(other.getByRole('button', { name: '重新载入来源版本', exact: true })).toBeVisible();
+  await expect(other.getByLabel('来源正文', { exact: true })).toHaveValue(
+    fixture.source.text + '\n' + fixture.source.text,
+  );
+  await other.close();
+});
+
+test('P3 late artifact responses cannot restore a preview after leaving the scheme', async ({
+  page,
+}, testInfo) => {
+  await login(page);
+  const name = 'P3迟到预览-' + testInfo.project.name;
+  await p3Fixture(page, name);
+  await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+  await page
+    .locator('.library-list > li')
+    .filter({ hasText: name })
+    .getByRole('button', { name: '编辑方案', exact: true })
+    .click();
+  let release, entered, delivered;
+  const waiting = new Promise((resolve) => {
+      release = resolve;
+    }),
+    fetched = new Promise((resolve) => {
+      entered = resolve;
+    }),
+    finished = new Promise((resolve) => {
+      delivered = resolve;
+    });
+  await page.route('**/api/subscriptions/*/artifacts/uri', async (route) => {
+    const response = await route.fetch();
+    entered();
+    await waiting;
+    await route.fulfill({ response });
+    delivered();
+  });
+  await page.getByRole('button', { name: '预览 URI', exact: true }).click();
+  await fetched;
+  await page.getByRole('button', { name: '文本来源', exact: true }).click();
+  release();
+  await finished;
+  await page.unroute('**/api/subscriptions/*/artifacts/uri');
+  await expect(page.getByLabel('已发布订阅内容', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+  await page
+    .locator('.library-list > li')
+    .filter({ hasText: name })
+    .getByRole('button', { name: '编辑方案', exact: true })
+    .click();
+  await expect(page.getByLabel('已发布订阅内容', { exact: true })).toHaveCount(0);
+});
+
+test('P3 one-time addresses arriving after navigation remain cleared', async ({
+  page,
+}, testInfo) => {
+  await login(page);
+  const name = 'P3迟到地址-' + testInfo.project.name;
+  const fixture = await p3Fixture(page, name + '-input');
+  await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+  await page.getByRole('button', { name: '新建订阅方案', exact: true }).click();
+  await page.getByLabel('方案名称', { exact: true }).fill(name);
+  await selectP3Input(page, 'source', fixture.source.id);
+  let release, entered, delivered;
+  const waiting = new Promise((resolve) => {
+      release = resolve;
+    }),
+    fetched = new Promise((resolve) => {
+      entered = resolve;
+    }),
+    finished = new Promise((resolve) => {
+      delivered = resolve;
+    });
+  await page.route('**/api/subscriptions', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const response = await route.fetch();
+    entered();
+    await waiting;
+    await route.fulfill({ response });
+    delivered();
+  });
+  await page.getByRole('button', { name: '保存订阅方案', exact: true }).click();
+  await fetched;
+  await page.getByRole('button', { name: '转换工作台', exact: true }).click();
+  release();
+  await finished;
+  await page.unroute('**/api/subscriptions');
+  await expect(page.getByLabel('URI 订阅地址', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+  await page
+    .locator('.library-list > li')
+    .filter({
+      has: page.locator('.node-name', { hasText: name }).filter({ hasNotText: name + '-input' }),
+    })
+    .getByRole('button', { name: '编辑方案', exact: true })
+    .click();
+  await expect(page.getByLabel('URI 订阅地址', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => window.localStorage.length)).toBe(0);
 });
