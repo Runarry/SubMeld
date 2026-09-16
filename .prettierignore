@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.cache/
+.pnpm-store/
+pnpm-lock.yaml
+docs/
+LICENSE
+data/
+backups/
+logs/
+tmp/

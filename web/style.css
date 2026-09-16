@@ -1,0 +1,225 @@
+:root {
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  color: #192b3b;
+  background: #f4f7f9;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at 95% 5%, #dfebe7 0, transparent 45%);
+}
+
+button {
+  font: inherit;
+}
+
+.page {
+  width: min(100% - 48px, 1040px);
+  margin: 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 36px 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: #fff;
+  background: #235f54;
+  font-size: 22px;
+}
+
+.brand-divider {
+  margin: 0 8px;
+  color: #89968e;
+  font-weight: 400;
+}
+
+main {
+  max-width: 700px;
+  padding: 56px 0 64px;
+}
+
+.eyebrow {
+  margin: 0 0 20px;
+  color: #386658;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(30px, 4vw, 46px);
+  font-weight: 650;
+  line-height: 1.5;
+  letter-spacing: -0.035em;
+}
+
+.intro {
+  margin: 20px 0 38px;
+  color: #5c6b75;
+  line-height: 1.8;
+}
+
+.status-card {
+  padding: 26px 30px 0;
+  border: 1px solid #dce4e6;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 40px #21382b05;
+}
+
+.card-heading,
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.stage {
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: #f1f4f5;
+  color: #5c6b75;
+  font-size: 12px;
+}
+
+.status-row {
+  padding: 24px 0;
+  border-bottom: 1px solid #edf0f1;
+}
+
+.status-label {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.status-description,
+.connection {
+  margin: 0;
+  color: #65737c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ready-label {
+  color: #235f54;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.connection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7e8c96;
+}
+
+.online .status-dot {
+  background: #288069;
+}
+
+.offline .status-dot {
+  background: #b56b30;
+}
+
+button {
+  flex-shrink: 0;
+  padding: 9px 14px;
+  border: 1px solid #d9e2e2;
+  border-radius: 8px;
+  color: #284f46;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover:enabled {
+  background: #f0f6f3;
+  border-color: #9cb6ac;
+}
+
+button:focus-visible {
+  outline: 3px solid #8ab5a5;
+  outline-offset: 3px;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.next-step {
+  margin: 0;
+  padding: 20px 0;
+  color: #65737c;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.next-step span {
+  margin-left: 16px;
+  color: #394b57;
+}
+
+footer {
+  padding: 0 0 32px;
+  color: #65737c;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+@media (max-width: 600px) {
+  .page {
+    width: calc(100% - 36px);
+  }
+
+  .brand {
+    padding: 26px 0;
+  }
+
+  main {
+    padding: 30px 0 40px;
+  }
+
+  .status-card {
+    padding: 22px 20px 0;
+  }
+
+  .next-step span {
+    display: block;
+    margin-left: 0;
+  }
+}
