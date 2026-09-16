@@ -7,7 +7,7 @@ import vueParser from 'vue-eslint-parser';
 
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**', '.cache/**', 'data/**'],
+    ignores: ['dist/**', 'node_modules/**', 'coverage/**', '.cache/**', 'data/**', 'vendor/**'],
   },
   js.configs.recommended,
   ...ts.configs.recommended,

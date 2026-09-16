@@ -1,0 +1,38 @@
+import { mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+mkdirSync('dist', { recursive: true });
+// Explicit roots exclude credentials, dependencies, caches and runtime data.
+const sources = [
+  'AGENTS.md',
+  'README.md',
+  'LICENSE',
+  'package.json',
+  'pnpm-lock.yaml',
+  '.npmrc',
+  '.node-version',
+  '.gitattributes',
+  '.gitignore',
+  '.prettierrc.json',
+  '.prettierignore',
+  '.env.example',
+  '.dockerignore',
+  'Dockerfile',
+  'compose.yaml',
+  'eslint.config.js',
+  'vite.config.ts',
+  'playwright.config.ts',
+  'tsconfig.json',
+  'tsconfig.server.json',
+  'tsconfig.web.json',
+  'tsconfig.tools.json',
+  'server',
+  'web',
+  'scripts',
+  'tests',
+  'vendor',
+  'docs',
+];
+const result = spawnSync('tar', ['-czf', 'dist/submeld-source.tar.gz', '--', ...sources], {
+  stdio: 'inherit',
+});
+if (result.error || result.status !== 0) throw new Error('Could not package corresponding source');

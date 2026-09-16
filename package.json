@@ -1,6 +1,6 @@
 {
   "name": "submeld",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "SubMeld · 订融 — 私人节点转换与订阅工具",
   "type": "module",
@@ -12,32 +12,50 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "esbuild",
+      "better-sqlite3",
+      "argon2"
     ]
   },
   "scripts": {
-    "dev": "concurrently --kill-others --names server,web \"pnpm dev:server\" \"pnpm dev:web\"",
-    "dev:server": "node --watch --import tsx server/index.ts --dev",
+    "dev": "pnpm build && concurrently --kill-others --names server,web \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev:server": "node --env-file-if-exists=.env --watch --import tsx server/index.ts --dev",
     "dev:web": "vite",
-    "build": "vite build && tsc -p tsconfig.server.json",
-    "start": "node dist/server/index.js",
+    "build": "pnpm build:converter && vite build && tsc -p tsconfig.server.json && node scripts/package-source.mjs",
+    "start": "node --env-file-if-exists=.env dist/server/index.js",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.tools.json",
     "test": "pnpm build && node --test tests/*.test.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "build:converter": "node scripts/build-converter.mjs",
+    "admin:init": "node --env-file-if-exists=.env --import tsx server/cli.ts init",
+    "admin:reset-password": "node --env-file-if-exists=.env --import tsx server/cli.ts reset-password",
+    "test:browser": "pnpm build && playwright test"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",
+    "argon2": "0.45.1",
+    "better-sqlite3": "12.6.2",
+    "buffer": "6.0.3",
     "hono": "4.13.8",
-    "vue": "3.5.42"
+    "ip-address": "10.7.2",
+    "js-base64": "3.9.3",
+    "json5": "2.2.3",
+    "lodash": "4.18.1",
+    "vue": "3.5.42",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.13.5",
     "@vitejs/plugin-vue": "6.0.9",
     "concurrently": "10.0.5",
+    "esbuild": "0.28.2",
     "eslint": "10.10.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-vue": "10.11.0",
