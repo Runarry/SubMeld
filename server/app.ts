@@ -7,18 +7,26 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { z } from 'zod';
 import type { Config } from './config.js';
 import type { Auth } from './auth.js';
+import type { NodeStore } from './nodes.js';
 import type { Converter } from './converter/pool.js';
 import { AppError, publicError } from './errors.js';
 import { readJson } from './input.js';
-import { MAX_BYTES, parseRequestSchema, produceRequestSchema } from './shared/contracts.js';
+import {
+  MAX_BYTES,
+  parseRequestSchema,
+  produceRequestSchema,
+  renderRequestSchema,
+  revisionRequestSchema,
+} from './shared/contracts.js';
 
 export type AppOptions = {
   webRoot?: string;
+  nodes: NodeStore;
   config: Config;
   auth: Auth;
   converter: Pick<Converter, 'run'>;
 };
-export function createApp({ webRoot, config, auth, converter }: AppOptions) {
+export function createApp({ webRoot, config, auth, converter, nodes }: AppOptions) {
   const app = new Hono();
   const cookieName = config.development ? 'submeld-session' : '__Host-submeld-session';
   const writes = new Set([
@@ -26,6 +34,8 @@ export function createApp({ webRoot, config, auth, converter }: AppOptions) {
     '/api/auth/logout',
     '/api/convert/parse',
     '/api/convert/produce',
+    '/api/convert/render',
+    '/api/nodes',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -41,7 +51,8 @@ export function createApp({ webRoot, config, auth, converter }: AppOptions) {
     await next();
   });
   app.use('/api/*', async (context, next) => {
-    if (context.req.method === 'POST' && writes.has(context.req.path)) {
+    const managed = writes.has(context.req.path) || context.req.path.startsWith('/api/nodes/');
+    if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
       let validOrigin = false;
       try {
@@ -62,7 +73,7 @@ export function createApp({ webRoot, config, auth, converter }: AppOptions) {
         throw new AppError('ORIGIN_REJECTED', '请求未通过同源 JSON 校验。', 403);
     }
     if (
-      (writes.has(context.req.path) && context.req.path !== '/api/auth/login') ||
+      (managed && context.req.path !== '/api/auth/login') ||
       context.req.path === '/api/auth/me'
     ) {
       if (!auth.valid(getCookie(context, cookieName)))
@@ -121,6 +132,44 @@ export function createApp({ webRoot, config, auth, converter }: AppOptions) {
     if (!input.success) throw new AppError('INVALID_REQUEST', '节点数据结构无效。', 400);
     return context.json(
       await converter.run({ kind: 'produce', input: input.data }, context.req.raw.signal),
+    );
+  });
+  app.get('/api/nodes', (context) => {
+    const page = z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(1000000)
+      .safeParse(context.req.query('page') ?? 0);
+    if (!page.success) throw new AppError('INVALID_REQUEST', '页码无效。', 400);
+    return context.json(nodes.list(page.data));
+  });
+  app.post('/api/nodes', async (context) =>
+    context.json(nodes.create(await readJson(context.req.raw, 26 * 1024 * 1024)), 201),
+  );
+  app.post('/api/nodes/load', async (context) =>
+    context.json(nodes.load(await readJson(context.req.raw, 128 * 1024))),
+  );
+  app.get('/api/nodes/:id', (context) => context.json(nodes.get(context.req.param('id'))));
+  app.patch('/api/nodes/:id', async (context) =>
+    context.json(
+      nodes.update(context.req.param('id'), await readJson(context.req.raw, 26 * 1024 * 1024)),
+    ),
+  );
+  app.delete('/api/nodes/:id', async (context) => {
+    const input = revisionRequestSchema.safeParse(await readJson(context.req.raw, 1024));
+    if (!input.success) throw new AppError('INVALID_REQUEST', '删除请求缺少有效版本。', 400);
+    nodes.delete(context.req.param('id'), input.data.revision);
+    return context.json({ deleted: true });
+  });
+  app.post('/api/convert/render', async (context) => {
+    const raw = await readJson(context.req.raw, 26 * 1024 * 1024);
+    if (Buffer.byteLength(JSON.stringify(raw)) > MAX_BYTES)
+      throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数据超过 4 MiB。', 413);
+    const input = renderRequestSchema.safeParse(raw);
+    if (!input.success) throw new AppError('INVALID_REQUEST', '目标生成请求无效。', 400);
+    return context.json(
+      await converter.run({ kind: 'render', input: input.data }, context.req.raw.signal),
     );
   });
   if (webRoot) {

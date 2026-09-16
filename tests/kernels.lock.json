@@ -1,0 +1,53 @@
+{
+  "mihomo": {
+    "version": "1.19.31",
+    "repo": "MetaCubeX/mihomo",
+    "tag": "v1.19.31",
+    "platforms": {
+      "win32-x64": {
+        "asset": "mihomo-windows-amd64-v1-v1.19.31.zip",
+        "sha256": "d89c9bd746e8aacff89b2edf674813e25e8bd2dc565f4e12dc3b4526dd2b3177",
+        "binary": "mihomo-windows-amd64-v1.exe"
+      },
+      "linux-x64": {
+        "asset": "mihomo-linux-amd64-v1-v1.19.31.gz",
+        "sha256": "d4304c546c3cddcb6fafd4b4fddb0ba1a95ffa36606fda56d75db2e59ad24114",
+        "binary": "mihomo"
+      }
+    }
+  },
+  "singbox": {
+    "version": "1.14.1",
+    "repo": "SagerNet/sing-box",
+    "tag": "v1.14.1",
+    "platforms": {
+      "win32-x64": {
+        "asset": "sing-box-1.14.1-windows-amd64.zip",
+        "sha256": "5197f16d492d93202dc623622149a6ed040f8eca263128f91d603f2b901baa89",
+        "binary": "sing-box-1.14.1-windows-amd64/sing-box.exe"
+      },
+      "linux-x64": {
+        "asset": "sing-box-1.14.1-linux-amd64.tar.gz",
+        "sha256": "12cb2816b52febb356f6a885b740cc8758c3f30b8ae0ca8edba80f0d2d35343f",
+        "binary": "sing-box-1.14.1-linux-amd64/sing-box"
+      }
+    }
+  },
+  "xray": {
+    "version": "26.3.27",
+    "repo": "XTLS/Xray-core",
+    "tag": "v26.3.27",
+    "platforms": {
+      "win32-x64": {
+        "asset": "Xray-windows-64.zip",
+        "sha256": "d004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad",
+        "binary": "xray.exe"
+      },
+      "linux-x64": {
+        "asset": "Xray-linux-64.zip",
+        "sha256": "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae",
+        "binary": "xray"
+      }
+    }
+  }
+}

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { NodeDraft } from '../server/shared/contracts';
+defineProps<{ persisted?: boolean }>();
+const emit = defineEmits<{ clearSecret: [field: string] }>();
 const model = defineModel<NodeDraft>({ required: true });
 const showSecrets = ref(false);
 watch(
@@ -47,6 +49,38 @@ const alpn = computed({
         autocomplete="new-password"
         spellcheck="false"
     /></label>
+    <div v-if="persisted" class="toolbar secret-actions">
+      <button
+        v-if="'uuid' in model.auth"
+        type="button"
+        @click="
+          model.auth.uuid = '';
+          emit('clearSecret', 'auth.uuid');
+        "
+      >
+        清空 UUID
+      </button>
+      <button
+        v-if="'password' in model.auth"
+        type="button"
+        @click="
+          model.auth.password = '';
+          emit('clearSecret', 'auth.password');
+        "
+      >
+        清空密码
+      </button>
+      <button
+        v-if="model.protocol === 'hysteria2'"
+        type="button"
+        @click="
+          model.protocolOptions.obfsPassword = '';
+          emit('clearSecret', 'protocolOptions.obfsPassword');
+        "
+      >
+        清空混淆密码
+      </button>
+    </div>
     <label class="check-label"
       ><input v-model="showSecrets" type="checkbox" />显示此节点的认证信息</label
     >

@@ -1,6 +1,6 @@
 {
   "name": "submeld",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "SubMeld · 订融 — 私人节点转换与订阅工具",
   "type": "module",
@@ -28,11 +28,12 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.tools.json",
     "test": "pnpm build && node --test tests/*.test.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:cores",
     "build:converter": "node scripts/build-converter.mjs",
     "admin:init": "node --env-file-if-exists=.env --import tsx server/cli.ts init",
     "admin:reset-password": "node --env-file-if-exists=.env --import tsx server/cli.ts reset-password",
-    "test:browser": "pnpm build && playwright test"
+    "test:browser": "pnpm build && playwright test",
+    "test:cores": "node scripts/check-cores.mjs"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",

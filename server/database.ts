@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { createNodeStore } from './nodes.js';
 import { chmodSync, lstatSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -36,12 +37,21 @@ export function openSettings(dataDir: string, development: boolean) {
     db.pragma('journal_mode = WAL');
     db.pragma('busy_timeout = 3000');
     const version = db.pragma('user_version', { simple: true });
-    if (version !== 0 && version !== 1) throw new Error('数据库版本不受支持，停止启动。');
+    if (version !== 0 && version !== 1 && version !== 2)
+      throw new Error('数据库版本不受支持，停止启动。');
     if (version === 0)
       db.transaction(() => {
         db?.exec(
           'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); PRAGMA user_version = 1;',
         );
+      })();
+    if (version === 0 || version === 1)
+      db.transaction(() => {
+        db?.exec(`CREATE TABLE nodes (
+          id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+          revision INTEGER NOT NULL CHECK(revision > 0), model_version INTEGER NOT NULL,
+          draft_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        ); PRAGMA user_version = 2;`);
       })();
     if (process.platform !== 'win32') {
       for (const file of readdirSync(dataDir))
@@ -50,6 +60,7 @@ export function openSettings(dataDir: string, development: boolean) {
     }
     const database = db;
     return {
+      nodes: createNodeStore(database),
       getPasswordHash(): string | undefined {
         const row: unknown = database
           .prepare("SELECT value FROM settings WHERE key = 'admin_password_hash'")

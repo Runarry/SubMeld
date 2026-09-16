@@ -32,7 +32,7 @@ async function main() {
     settings.close();
     throw error;
   }
-  const app = createApp({ webRoot, config, auth, converter });
+  const app = createApp({ webRoot, config, auth, converter, nodes: settings.nodes });
   const hostname = config.development ? '127.0.0.1' : '0.0.0.0';
   const server = serve({ fetch: app.fetch, hostname, port: 3000 }, () =>
     console.info('SubMeld started on port 3000.'),

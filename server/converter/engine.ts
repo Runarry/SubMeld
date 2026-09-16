@@ -16,7 +16,7 @@ const loaded: unknown = await import(new URL('../../converter/upstream.mjs', imp
 if (!record(loaded) || typeof loaded.parse !== 'function' || typeof loaded.produce !== 'function')
   throw new Error('Invalid converter build');
 const parseUpstream = loaded.parse;
-const produceUpstream = loaded.produce;
+export const produceUpstream = loaded.produce;
 
 export function parseInput(input: unknown): ParseResult {
   const request = parseRequestSchema.safeParse(input);
@@ -55,7 +55,7 @@ export function parseInput(input: unknown): ParseResult {
     },
   };
 }
-export function produceInput(input: unknown): ProduceResult {
+export function prepareItems(input: unknown) {
   byteLimit(JSON.stringify(input));
   const request = produceRequestSchema.safeParse(input);
   if (!request.success) throw new AppError('INVALID_REQUEST', '节点数据结构无效。', 400);
@@ -75,6 +75,10 @@ export function produceInput(input: unknown): ProduceResult {
   }
   if (diagnostics.some((d) => d.level === 'error'))
     throw new AppError('CONVERSION_FAILED', '请修正或明确排除错误节点。', 422, diagnostics);
+  return { items, included, diagnostics };
+}
+export function produceInput(input: unknown): ProduceResult {
+  const { items, included, diagnostics } = prepareItems(input);
   const lines: string[] = [];
   let outputBytes = 0;
   for (const item of included) {

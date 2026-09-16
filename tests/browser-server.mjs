@@ -11,7 +11,9 @@ const directory = mkdtempSync(resolve('.cache/browser-'));
 const settings = openSettings(directory, true);
 const hash = await hashPassword('SubMeld-UI-Test-Only-2026');
 settings.setPasswordHash(hash);
-const auth = new Auth(settings.getPasswordHash());
+// Each browser login advances an injected test clock; production rate limiting is unchanged.
+let clock = Date.now();
+const auth = new Auth(settings.getPasswordHash(), () => clock);
 const converter = new Converter();
 await converter.ready;
 const app = createApp({
@@ -19,8 +21,17 @@ const app = createApp({
   webRoot: fileURLToPath(new URL('../dist/web/', import.meta.url)),
   auth,
   converter,
+  nodes: settings.nodes,
 });
-const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 3210 });
+const server = serve({
+  fetch: (request) => {
+    if (request.method === 'POST' && new URL(request.url).pathname === '/api/auth/login')
+      clock += 300001;
+    return app.fetch(request);
+  },
+  hostname: '127.0.0.1',
+  port: 3210,
+});
 let closed = false;
 async function close() {
   if (closed) return;

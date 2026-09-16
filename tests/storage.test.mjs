@@ -21,7 +21,7 @@ function temporary() {
     },
   };
 }
-test('settings migrate once, persist only a password hash and enforce single instance', async () => {
+test('settings migrate once, preserve password hashes and enforce single instance', async () => {
   const dir = temporary();
   let settings;
   try {
@@ -36,13 +36,13 @@ test('settings migrate once, persist only a password hash and enforce single ins
     assert.equal(reopened.getPasswordHash(), hash);
     reopened.close();
     const db = new Database(join(dir.path, 'submeld.sqlite'));
-    assert.equal(db.pragma('user_version', { simple: true }), 1);
+    assert.equal(db.pragma('user_version', { simple: true }), 2);
     assert.deepEqual(
       db
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
         .all()
         .map((r) => r.name),
-      ['settings'],
+      ['settings', 'nodes'],
     );
     db.close();
     assert.equal(

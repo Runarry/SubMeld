@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { openSettings } from '../dist/server/database.js';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { after, before, test, mock } from 'node:test';
@@ -7,11 +11,13 @@ import { createApp } from '../dist/server/app.js';
 import { Auth, hashPassword, SESSION_MS } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
 import { node, items, UUID, TEST_PASSWORD } from './fixtures.mjs';
-let server, origin, auth, converter, cookie, hash;
+let server, origin, auth, converter, cookie, hash, settings, directory;
 const logs = [];
 const password = 'test-only-admin-password';
 const config = { publicOrigin: 'http://127.0.0.1', dataDir: 'unused', development: true };
 before(async () => {
+  directory = mkdtempSync(join(tmpdir(), 'submeld-http-'));
+  settings = openSettings(directory, true);
   hash = await hashPassword(password);
   auth = new Auth(hash);
   converter = new Converter();
@@ -19,7 +25,7 @@ before(async () => {
   mock.method(console, 'warn', (value) => logs.push(value));
   const webRoot = fileURLToPath(new URL('../dist/web/', import.meta.url));
   server = serve({
-    fetch: createApp({ webRoot, config, auth, converter }).fetch,
+    fetch: createApp({ webRoot, config, auth, converter, nodes: settings.nodes }).fetch,
     hostname: '127.0.0.1',
     port: 0,
   });
@@ -36,6 +42,11 @@ after(async () => {
   }
   await converter?.close();
   auth?.close();
+  settings?.close();
+  assert.ok(
+    resolve(directory).startsWith(resolve(tmpdir())) && directory.includes('submeld-http-'),
+  );
+  rmSync(directory, { recursive: true, force: true });
   mock.restoreAll();
 });
 function post(path, body, headers = {}) {
@@ -141,6 +152,7 @@ test('login creates an HttpOnly Strict cookie and production adds Secure and __H
     config: { ...config, development: false, publicOrigin: 'https://submeld.example' },
     auth: new Auth(hash),
     converter,
+    nodes: settings.nodes,
   });
   const pr = await production.request('https://submeld.example/api/auth/login', {
     method: 'POST',

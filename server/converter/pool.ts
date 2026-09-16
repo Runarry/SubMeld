@@ -5,6 +5,8 @@ import {
   errorSchema,
   parseResultSchema,
   produceResultSchema,
+  renderResultSchema,
+  type RenderResult,
   type WorkerRequest,
   type ParseResult,
   type ProduceResult,
@@ -18,7 +20,7 @@ const replySchema = z.discriminatedUnion('ok', [
     error: errorSchema,
   }),
 ]);
-type Result = ParseResult | ProduceResult;
+type Result = ParseResult | ProduceResult | RenderResult;
 export class Converter {
   private worker: Worker | undefined;
   private running:
@@ -94,7 +96,11 @@ export class Converter {
         current.cleanup();
         if (response.data.ok) {
           const result = (
-            current.kind === 'parse' ? parseResultSchema : produceResultSchema
+            current.kind === 'parse'
+              ? parseResultSchema
+              : current.kind === 'render'
+                ? renderResultSchema
+                : produceResultSchema
           ).safeParse(response.data.result);
           if (result.success) current.resolve(result.data);
           else {

@@ -74,7 +74,8 @@ const result = await build({
             };
           if (rel === 'core/proxy-utils/producers')
             return {
-              contents: "import URI from './uri'; export default {URI:URI()};",
+              contents:
+                "import URI from './uri'; import Mihomo from './clashmeta'; import Singbox from './sing-box'; export default {URI:URI(), Mihomo:Mihomo(), 'sing-box':Singbox()};",
               resolveDir: resolve(root, 'core/proxy-utils/producers'),
             };
           if (rel === 'core/proxy-utils/preprocessors')

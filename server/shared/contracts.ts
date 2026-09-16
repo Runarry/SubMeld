@@ -116,7 +116,8 @@ export type ParseResult = z.infer<typeof parseResultSchema>;
 export type ProduceResult = z.infer<typeof produceResultSchema>;
 export type WorkerRequest =
   | { kind: 'parse'; input: z.infer<typeof parseRequestSchema> }
-  | { kind: 'produce'; input: z.infer<typeof produceRequestSchema> };
+  | { kind: 'produce'; input: z.infer<typeof produceRequestSchema> }
+  | { kind: 'render'; input: z.infer<typeof renderRequestSchema> };
 export const errorSchema = z.object({
   code: z.string(),
   message: z.string(),
@@ -187,3 +188,81 @@ export function blankDraft(protocol: Protocol): NodeDraft {
       };
   }
 }
+
+export const renderTargetSchema = z.enum(['mihomo', 'singbox', 'xray']);
+export type RenderTarget = z.infer<typeof renderTargetSchema>;
+export const renderRequestSchema = produceRequestSchema.extend({
+  target: renderTargetSchema,
+  listenPort: z.number().int().min(1).max(65535).default(1080),
+});
+export const renderResultSchema = z.strictObject({
+  target: renderTargetSchema,
+  full: z.string(),
+  nodes: z.string(),
+  diagnostics: z.array(diagnosticSchema),
+  counts,
+});
+export type RenderResult = z.infer<typeof renderResultSchema>;
+const revisionSchema = z.number().int().positive();
+export const nodeSummarySchema = z.strictObject({
+  id: z.string().uuid(),
+  name: z.string(),
+  protocol: z.enum(protocols),
+  enabled: z.boolean(),
+  revision: revisionSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type NodeSummary = z.infer<typeof nodeSummarySchema>;
+export const storedNodeSchema = nodeSummarySchema.extend({
+  modelVersion: z.literal(1),
+  draft: draftSchema,
+});
+export type StoredNode = z.infer<typeof storedNodeSchema>;
+export const nodeListSchema = z.strictObject({
+  nodes: z.array(nodeSummarySchema),
+  total: z.number().int().nonnegative(),
+});
+export const createNodesSchema = z.strictObject({
+  drafts: z.array(draftSchema).min(1).max(MAX_NODES),
+});
+export const nodeIdsSchema = z.strictObject({
+  ids: z.array(z.string().uuid()).min(1).max(MAX_NODES),
+});
+export const revisionRequestSchema = z.strictObject({ revision: revisionSchema });
+// Secrets have three states: omitted, replacement string, or explicit clear (null).
+export const nodeChangesSchema = z.strictObject({
+  name: base.name.optional(),
+  server: base.server.optional(),
+  port: base.port.optional(),
+  tls: tls.partial().optional(),
+  transport: transport.partial().optional(),
+  auth: z
+    .strictObject({
+      uuid: authText.nullable().optional(),
+      password: authText.nullable().optional(),
+    })
+    .optional(),
+  protocolOptions: z
+    .strictObject({
+      method: z.enum(['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305']).optional(),
+      security: z.enum(['auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero']).optional(),
+      alterId: z.literal(0).optional(),
+      flow: z.enum(['', 'xtls-rprx-vision']).optional(),
+      obfs: z.enum(['', 'salamander']).optional(),
+      obfsPassword: authText.nullable().optional(),
+      version: z.literal(5).optional(),
+      congestionControl: z.enum(['cubic', 'bbr', 'new_reno']).optional(),
+      udpRelayMode: z.enum(['native', 'quic']).optional(),
+      reduceRtt: z.boolean().optional(),
+    })
+    .optional(),
+});
+export const updateNodeSchema = z
+  .strictObject({
+    revision: revisionSchema,
+    enabled: z.boolean().optional(),
+    changes: nodeChangesSchema.optional(),
+  })
+  .refine((v) => v.enabled !== undefined || v.changes !== undefined);
+export const loadedNodesSchema = z.strictObject({ items: z.array(itemSchema).max(MAX_NODES) });

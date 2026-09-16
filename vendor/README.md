@@ -4,7 +4,7 @@
 
 `sub-store/` 保存原始转换目录、相关工具、官方入口、上游包说明和 AGPL 许可证。未修改这些上游文件。来源归档和关键转换文件的 SHA-256 记录在 `upstream.lock.json`；构建先核对关键文件。
 
-`scripts/build-converter.mjs` 是全部构建适配：保留原来的 parse、produce、lastParse 及其辅助函数；去除应用服务与脚本导出；替换无副作用日志运行时、预处理和输出注册表。注册表仅开放六协议与内部 YAML 节点转交。输入分拆、YAML 和 Base64 由 SubMeld 的有界输入模块处理。继续使用上游必要规范化，不启动其后台或运行用户代码。
+`scripts/build-converter.mjs` 是全部构建适配：保留原来的 parse、produce、lastParse 及其辅助函数；去除应用服务与脚本导出；替换无副作用日志运行时、预处理和输出注册表。解析注册表仅开放六协议与内部 YAML 节点转交；输出注册表开放 URI、Mihomo 和 sing-box。P2 使用上游 internal 输出取得对象，逐项核对关键字段和数量，再用本项目固定模板序列化。Xray 四协议映射由本项目维护。输入分拆、YAML 和 Base64 由 SubMeld 的有界输入模块处理。继续使用上游必要规范化，不启动其后台或运行用户代码。
 
 针对当前支持路径的构建补丁：
 
