@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { ApiError } from './api';
 import { formatTime } from './format';
 import ListPagination from './ui/ListPagination.vue';
+import ModalDialog from './ui/ModalDialog.vue';
 import StatusBadge from './ui/StatusBadge.vue';
 import { nodeListSchema, protocols } from '../server/shared/contracts';
 import {
@@ -352,45 +353,59 @@ onMounted(() => void act(refresh));
       </div>
     </div>
     <p v-if="message" class="notice" role="status">{{ message }}</p>
-    <div class="library-layout is-subscription" :class="{ 'has-editor': !!form }">
-      <div class="library-main">
-        <ul v-if="rows.length" class="library-list">
-          <li v-for="row in rows" :key="row.id">
-            <span class="node-name"
-              >{{ row.name
-              }}<small class="list-meta">
-                <StatusBadge
-                  :tone="row.enabled ? 'ok' : 'off'"
-                  :label="row.enabled ? '启用' : '停用'"
-                />
-                {{ row.formats.map((f) => outputLabels[f]).join('、') }}
-              </small></span
-            >
-            <div class="toolbar">
-              <button type="button" :disabled="busy" @click="edit(row.id)">编辑方案</button
-              ><button type="button" :disabled="busy" @click="toggle(row)">
-                {{ row.enabled ? '停用方案' : '启用方案' }}</button
-              ><button type="button" class="danger" :disabled="busy" @click="remove(row)">
-                删除方案
-              </button>
-            </div>
-          </li>
-        </ul>
-        <p v-else class="empty-state">尚无订阅方案。先添加来源或本地节点，再在这里组合发布。</p>
-        <ListPagination
-          :page="page"
-          :total="total"
-          :disabled="busy"
-          @turn="
-            (delta) =>
-              act(async () => {
-                page += delta;
-                await refresh();
-              })
-          "
-        />
-      </div>
-      <div v-if="form" class="subscription-detail">
+    <div class="library-main">
+      <ul v-if="rows.length" class="library-list">
+        <li v-for="row in rows" :key="row.id">
+          <span class="node-name"
+            >{{ row.name
+            }}<small class="list-meta">
+              <StatusBadge
+                :tone="row.enabled ? 'ok' : 'off'"
+                :label="row.enabled ? '启用' : '停用'"
+              />
+              <span v-for="f in row.formats" :key="f" class="format-chip">{{
+                outputLabels[f]
+              }}</span>
+            </small></span
+          >
+          <div class="toolbar">
+            <button type="button" :disabled="busy" @click="edit(row.id)">编辑方案</button
+            ><button type="button" :disabled="busy" @click="toggle(row)">
+              {{ row.enabled ? '停用方案' : '启用方案' }}</button
+            ><button type="button" class="danger" :disabled="busy" @click="remove(row)">
+              删除方案
+            </button>
+          </div>
+        </li>
+      </ul>
+      <p v-else class="empty-state">尚无订阅方案。先添加来源或本地节点，再在这里组合发布。</p>
+      <ListPagination
+        :page="page"
+        :total="total"
+        :disabled="busy"
+        @turn="
+          (delta) =>
+            act(async () => {
+              page += delta;
+              await refresh();
+            })
+        "
+      />
+    </div>
+    <ModalDialog
+      v-if="form"
+      :label="baseline ? '编辑订阅方案' : '新建订阅方案'"
+      wide
+      :dismissible="!busy"
+      @close="
+        epoch++;
+        clearTransient();
+        form = null;
+        baseline = null;
+        status = null;
+      "
+    >
+      <div class="subscription-detail">
         <section
           v-if="Object.keys(urls).length"
           class="node-import-panel editor-fields token-banner"
@@ -564,7 +579,7 @@ onMounted(() => void act(refresh));
                   : '生成任务已结束'
             }}</span>
           </div>
-          <p class="muted">下列内容来自已保存设置；左侧未提交的编辑尚未发布。</p>
+          <p class="muted">下列内容来自已保存设置；未提交的编辑尚未发布。</p>
           <div class="toolbar">
             <button type="button" :disabled="busy" @click="act(refreshSelectedStatus)">
               刷新发布状态</button
@@ -626,6 +641,6 @@ onMounted(() => void act(refresh));
           >
         </section>
       </div>
-    </div>
+    </ModalDialog>
   </section>
 </template>

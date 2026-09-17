@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { ApiError } from './api';
 import { formatTime } from './format';
 import ListPagination from './ui/ListPagination.vue';
+import ModalDialog from './ui/ModalDialog.vue';
 import StatusBadge from './ui/StatusBadge.vue';
 import {
   sourceListSchema,
@@ -315,203 +316,212 @@ const statusLabel = (value: Source['refresh']) =>
       </div>
     </div>
     <p v-if="message" role="status" class="notice">{{ message }}</p>
-    <div class="library-layout" :class="{ 'has-editor': editing }">
-      <div class="library-main">
-        <ul v-if="rows.length" class="library-list">
-          <li v-for="row in rows" :key="row.id">
-            <span class="node-name"
-              >{{ row.name }}
-              <small class="list-meta">
-                {{ row.kind === 'text' ? '文本' : '远端 HTTPS' }} · {{ row.nodeCount }} 节点
-                <StatusBadge
-                  :tone="row.enabled ? 'ok' : 'off'"
-                  :label="row.enabled ? '启用' : '停用'"
-                />
-                <StatusBadge
-                  v-if="row.kind === 'remote'"
-                  :tone="row.refresh === 'idle' ? 'off' : 'busy'"
-                  :label="statusLabel(row.refresh)"
-                />
-              </small>
-              <small>最近成功：{{ row.savedAt ? formatTime(row.savedAt) : '尚无成功快照' }}</small>
-              <small v-if="row.kind === 'remote'"
-                >{{ statusLabel(row.refresh) }} · 最近尝试：{{
-                  row.lastAttemptAt ? formatTime(row.lastAttemptAt) : '尚未完成尝试'
-                }}</small
-              >
-              <small v-if="row.error" class="error-note"
-                >{{ row.error.message
-                }}<span v-if="row.savedAt"> 继续使用上述最近成功内容。</span></small
-              >
-            </span>
-            <div class="toolbar">
-              <button
+    <div class="library-main">
+      <ul v-if="rows.length" class="library-list">
+        <li v-for="row in rows" :key="row.id">
+          <span class="node-name"
+            >{{ row.name }}
+            <small class="list-meta">
+              {{ row.kind === 'text' ? '文本' : '远端 HTTPS' }} · {{ row.nodeCount }} 节点
+              <StatusBadge
+                :tone="row.enabled ? 'ok' : 'off'"
+                :label="row.enabled ? '启用' : '停用'"
+              />
+              <StatusBadge
                 v-if="row.kind === 'remote'"
-                type="button"
-                :disabled="busy || !row.enabled || row.refresh !== 'idle'"
-                @click="fetchSource(row)"
-              >
-                刷新远端来源
-              </button>
-              <button type="button" :disabled="busy" @click="edit(row.id)">编辑来源</button>
-              <button type="button" :disabled="busy" @click="toggle(row)">
-                {{ row.enabled ? '停用来源' : '启用来源' }}
-              </button>
-              <button type="button" class="danger" :disabled="busy" @click="remove(row)">
-                删除来源
-              </button>
-            </div>
-          </li>
-        </ul>
-        <p v-else class="empty-state">尚无来源。可新建文本来源或远端 HTTPS 来源。</p>
-        <ListPagination
-          :page="page"
-          :total="total"
-          :disabled="busy"
-          @turn="
-            (delta) =>
-              act(async () => {
-                page += delta;
-                await refresh();
-              })
-          "
-        />
-      </div>
-      <aside v-if="editing" class="library-editor-pane">
-        <fieldset :disabled="busy" class="library-editor editor-fields">
-          <legend>{{ saved ? '编辑' : '新建' }}{{ kind === 'text' ? '文本' : '远端' }}来源</legend>
-          <p v-if="conflict" class="warning-note">
-            服务器已有更新，当前编辑已保留。重新载入会替换未保存内容。
-          </p>
-          <button v-if="conflict && saved" type="button" @click="edit(saved.id)">
-            重新载入来源版本
-          </button>
-          <label>来源名称<input v-model="name" maxlength="512" /></label>
-          <label
-            >来源格式<select v-model="format" aria-label="来源格式">
-              <option value="auto">自动识别</option>
-              <option value="uri">URI</option>
-              <option value="base64">Base64</option>
-              <option value="yaml">Clash / Mihomo YAML</option>
-            </select></label
-          >
-          <label v-if="kind === 'text'"
-            >来源正文<textarea v-model="text" rows="8" spellcheck="false"></textarea>
-          </label>
-          <template v-else>
-            <label
-              >来源 URL<input
-                v-model="url"
-                :type="showUrl ? 'text' : 'password'"
-                maxlength="8192"
-                autocomplete="off"
-                spellcheck="false"
-            /></label>
-            <button type="button" @click="showUrl = !showUrl">
-              {{ showUrl ? '隐藏来源 URL' : '显示来源 URL' }}
+                :tone="row.refresh === 'idle' ? 'off' : 'busy'"
+                :label="statusLabel(row.refresh)"
+              />
+            </small>
+            <small>最近成功：{{ row.savedAt ? formatTime(row.savedAt) : '尚无成功快照' }}</small>
+            <small v-if="row.kind === 'remote'"
+              >{{ statusLabel(row.refresh) }} · 最近尝试：{{
+                row.lastAttemptAt ? formatTime(row.lastAttemptAt) : '尚未完成尝试'
+              }}</small
+            >
+            <small v-if="row.error" class="error-note"
+              >{{ row.error.message
+              }}<span v-if="row.savedAt"> 继续使用上述最近成功内容。</span></small
+            >
+          </span>
+          <div class="toolbar">
+            <button
+              v-if="row.kind === 'remote'"
+              type="button"
+              :disabled="busy || !row.enabled || row.refresh !== 'idle'"
+              @click="fetchSource(row)"
+            >
+              刷新远端来源
             </button>
-            <label>User-Agent<input v-model="userAgent" maxlength="8192" /></label>
-            <button type="button" @click="userAgent = ''">清空 User-Agent</button>
-            <label>Accept<input v-model="accept" maxlength="8192" /></label>
-            <button type="button" @click="accept = ''">清空 Accept</button>
-            <label
-              >Authorization<input
-                v-model="authorization"
-                :type="showAuthorization ? 'text' : 'password'"
-                maxlength="8192"
-                autocomplete="off"
-                spellcheck="false"
-            /></label>
-            <div class="toolbar">
-              <button type="button" @click="showAuthorization = !showAuthorization">
-                {{ showAuthorization ? '隐藏 Authorization' : '显示 Authorization' }}</button
-              ><button type="button" @click="authorization = ''">清空 Authorization</button>
-            </div>
-            <p class="muted">
-              地址和认证未修改时不提交。修改地址、请求头或格式会清除旧快照与相关订阅产物，成功刷新后重新生成。
-            </p>
-          </template>
-          <label class="check-label"><input v-model="enabled" type="checkbox" />启用来源</label>
-          <div
-            v-for="(d, i) in diagnostics"
-            :key="i"
-            :class="d.level === 'error' ? 'error-note' : 'warning-note'"
+            <button type="button" :disabled="busy" @click="edit(row.id)">编辑来源</button>
+            <button type="button" :disabled="busy" @click="toggle(row)">
+              {{ row.enabled ? '停用来源' : '启用来源' }}
+            </button>
+            <button type="button" class="danger" :disabled="busy" @click="remove(row)">
+              删除来源
+            </button>
+          </div>
+        </li>
+      </ul>
+      <p v-else class="empty-state">尚无来源。可新建文本来源或远端 HTTPS 来源。</p>
+      <ListPagination
+        :page="page"
+        :total="total"
+        :disabled="busy"
+        @turn="
+          (delta) =>
+            act(async () => {
+              page += delta;
+              await refresh();
+            })
+        "
+      />
+    </div>
+    <ModalDialog
+      v-if="editing"
+      :label="(saved ? '编辑' : '新建') + (kind === 'text' ? '文本来源' : '远端来源')"
+      wide
+      :dismissible="!busy"
+      @close="clearEditor"
+    >
+      <fieldset :disabled="busy" class="library-editor editor-fields">
+        <legend>{{ saved ? '编辑' : '新建' }}{{ kind === 'text' ? '文本' : '远端' }}来源</legend>
+        <p v-if="conflict" class="warning-note">
+          服务器已有更新，当前编辑已保留。重新载入会替换未保存内容。
+        </p>
+        <button v-if="conflict && saved" type="button" @click="edit(saved.id)">
+          重新载入来源版本
+        </button>
+        <label>来源名称<input v-model="name" maxlength="512" /></label>
+        <label
+          >来源格式<select v-model="format" aria-label="来源格式">
+            <option value="auto">自动识别</option>
+            <option value="uri">URI</option>
+            <option value="base64">Base64</option>
+            <option value="yaml">Clash / Mihomo YAML</option>
+          </select></label
+        >
+        <label v-if="kind === 'text'"
+          >来源正文<textarea v-model="text" rows="8" spellcheck="false"></textarea>
+        </label>
+        <template v-else>
+          <label
+            >来源 URL<input
+              v-model="url"
+              :type="showUrl ? 'text' : 'password'"
+              maxlength="8192"
+              autocomplete="off"
+              spellcheck="false"
+          /></label>
+          <button type="button" @click="showUrl = !showUrl">
+            {{ showUrl ? '隐藏来源 URL' : '显示来源 URL' }}
+          </button>
+          <label>User-Agent<input v-model="userAgent" maxlength="8192" /></label>
+          <button type="button" @click="userAgent = ''">清空 User-Agent</button>
+          <label>Accept<input v-model="accept" maxlength="8192" /></label>
+          <button type="button" @click="accept = ''">清空 Accept</button>
+          <label
+            >Authorization<input
+              v-model="authorization"
+              :type="showAuthorization ? 'text' : 'password'"
+              maxlength="8192"
+              autocomplete="off"
+              spellcheck="false"
+          /></label>
+          <div class="toolbar">
+            <button type="button" @click="showAuthorization = !showAuthorization">
+              {{ showAuthorization ? '隐藏 Authorization' : '显示 Authorization' }}</button
+            ><button type="button" @click="authorization = ''">清空 Authorization</button>
+          </div>
+          <p class="muted">
+            地址和认证未修改时不提交。修改地址、请求头或格式会清除旧快照与相关订阅产物，成功刷新后重新生成。
+          </p>
+        </template>
+        <label class="check-label"><input v-model="enabled" type="checkbox" />启用来源</label>
+        <div
+          v-for="(d, i) in diagnostics"
+          :key="i"
+          :class="d.level === 'error' ? 'error-note' : 'warning-note'"
+        >
+          {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
+        </div>
+        <div class="toolbar">
+          <button type="button" class="primary" @click="save">
+            {{ kind === 'text' ? '解析并保存来源' : '保存远端来源' }}
+          </button>
+          <button
+            v-if="saved?.kind === 'remote'"
+            type="button"
+            :disabled="!saved.enabled || published?.refresh !== 'idle'"
+            @click="fetchSource(saved)"
           >
-            {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
+            刷新远端来源
+          </button>
+          <button type="button" @click="clearEditor">关闭来源编辑</button>
+        </div>
+        <template v-if="published">
+          <h2>已保存的只读节点</h2>
+          <p class="muted">
+            最近成功：{{
+              published.savedAt ? formatTime(published.savedAt) : '尚无成功快照'
+            }}；未提交编辑不改变以下内容。
+          </p>
+          <p v-if="published.kind === 'remote'" role="status">
+            {{ statusLabel(published.refresh) }} · 最近尝试：{{
+              published.lastAttemptAt ? formatTime(published.lastAttemptAt) : '尚未完成尝试'
+            }}
+          </p>
+          <p v-if="published.error" class="error-note">
+            {{ published.error.message
+            }}<span v-if="published.savedAt"> 继续使用最近成功快照。</span>
+          </p>
+          <p v-for="(d, i) in published.diagnostics" :key="i" class="warning-note">
+            {{ d.message }}
+          </p>
+          <ul class="library-list">
+            <li
+              v-for="item in published.items.slice(nodePage * 25, nodePage * 25 + 25)"
+              :key="item.nodeIndex"
+            >
+              <label class="check-label"
+                ><input
+                  v-model="selected"
+                  type="checkbox"
+                  :value="item.nodeIndex"
+                  :aria-label="'选择来源节点 ' + item.draft?.name"
+                />
+                <span class="node-name"
+                  >{{ item.draft?.name
+                  }}<small
+                    >{{ item.draft?.protocol.toUpperCase() }} · {{ item.draft?.server }}:{{
+                      item.draft?.port
+                    }}</small
+                  ><small v-for="(d, i) in item.diagnostics" :key="i">{{ d.message }}</small></span
+                >
+              </label>
+            </li>
+          </ul>
+          <div class="pagination">
+            <button type="button" :disabled="!nodePage" @click="nodePage--">上一页节点</button
+            ><span
+              >{{ nodePage + 1 }} / {{ Math.max(1, Math.ceil(published.items.length / 25)) }}</span
+            >
+            <button
+              type="button"
+              :disabled="(nodePage + 1) * 25 >= published.items.length"
+              @click="nodePage++"
+            >
+              下一页节点
+            </button>
           </div>
           <div class="toolbar">
-            <button type="button" class="primary" @click="save">
-              {{ kind === 'text' ? '解析并保存来源' : '保存远端来源' }}
+            <button type="button" :disabled="!selected.length" @click="copy">
+              复制所选为本地节点
             </button>
-            <button type="button" @click="clearEditor">关闭来源编辑</button>
+            <button type="button" @click="emit('open-nodes')">打开本地节点</button>
           </div>
-          <template v-if="published">
-            <h2>已保存的只读节点</h2>
-            <p class="muted">
-              最近成功：{{
-                published.savedAt ? formatTime(published.savedAt) : '尚无成功快照'
-              }}；未提交编辑不改变以下内容。
-            </p>
-            <p v-if="published.kind === 'remote'" role="status">
-              {{ statusLabel(published.refresh) }} · 最近尝试：{{
-                published.lastAttemptAt ? formatTime(published.lastAttemptAt) : '尚未完成尝试'
-              }}
-            </p>
-            <p v-if="published.error" class="error-note">
-              {{ published.error.message
-              }}<span v-if="published.savedAt"> 继续使用最近成功快照。</span>
-            </p>
-            <p v-for="(d, i) in published.diagnostics" :key="i" class="warning-note">
-              {{ d.message }}
-            </p>
-            <ul class="library-list">
-              <li
-                v-for="item in published.items.slice(nodePage * 25, nodePage * 25 + 25)"
-                :key="item.nodeIndex"
-              >
-                <label class="check-label"
-                  ><input
-                    v-model="selected"
-                    type="checkbox"
-                    :value="item.nodeIndex"
-                    :aria-label="'选择来源节点 ' + item.draft?.name"
-                  />
-                  <span class="node-name"
-                    >{{ item.draft?.name
-                    }}<small
-                      >{{ item.draft?.protocol.toUpperCase() }} · {{ item.draft?.server }}:{{
-                        item.draft?.port
-                      }}</small
-                    ><small v-for="(d, i) in item.diagnostics" :key="i">{{
-                      d.message
-                    }}</small></span
-                  >
-                </label>
-              </li>
-            </ul>
-            <div class="pagination">
-              <button type="button" :disabled="!nodePage" @click="nodePage--">上一页节点</button
-              ><span
-                >{{ nodePage + 1 }} /
-                {{ Math.max(1, Math.ceil(published.items.length / 25)) }}</span
-              >
-              <button
-                type="button"
-                :disabled="(nodePage + 1) * 25 >= published.items.length"
-                @click="nodePage++"
-              >
-                下一页节点
-              </button>
-            </div>
-            <div class="toolbar">
-              <button type="button" :disabled="!selected.length" @click="copy">
-                复制所选为本地节点
-              </button>
-              <button type="button" @click="emit('open-nodes')">打开本地节点</button>
-            </div>
-          </template>
-        </fieldset>
-      </aside>
-    </div>
+        </template>
+      </fieldset>
+    </ModalDialog>
   </section>
 </template>

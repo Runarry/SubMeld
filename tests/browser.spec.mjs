@@ -157,6 +157,7 @@ test('P2 saves selected nodes, reloads, edits without resending secrets, toggles
   const body = (await patch).postDataJSON();
   expect(body.changes).toEqual({ name: updated });
   await expect(page.locator('.library').getByRole('status')).toContainText('已保存');
+  await page.getByRole('button', { name: '关闭编辑', exact: true }).click();
   await row.getByRole('button', { name: '禁用', exact: true }).click();
   await expect(page.getByLabel('选择本地节点 ' + updated, { exact: true })).toBeDisabled();
   await row.getByRole('button', { name: '启用', exact: true }).click();
@@ -312,8 +313,9 @@ test('local import previews paginated URI nodes, preserves manual edits and save
       .locator('.library-editor')
       .getByLabel('名称', { exact: true })
       .fill('尚未保存的独立表单');
-    await page.getByRole('button', { name: '导入节点', exact: true }).click();
+    await page.getByRole('button', { name: '导入节点', exact: true }).dispatchEvent('click');
     const panel = page.getByRole('region', { name: '本地节点导入', exact: true });
+    await expect(page.getByRole('dialog', { name: '导入节点', exact: true })).toBeVisible();
     const prefix = '直接导入-' + testInfo.project.name,
       duplicate = prefix + '重复';
     await panel
@@ -670,6 +672,7 @@ test('P3 source copy, ordered target filters, address updates, export, reset and
   await row.getByRole('button', { name: '编辑方案', exact: true }).click();
   await expect(page.getByLabel('方案名称', { exact: true })).toHaveValue(subName);
   await expect(uriField).toHaveCount(0);
+  await page.getByRole('button', { name: '关闭方案编辑', exact: true }).click();
   await row.getByRole('button', { name: '停用方案', exact: true }).click();
   await expect.poll(async () => (await request.get(newUrl)).status()).toBe(404);
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
@@ -863,14 +866,14 @@ test('P4 remote creation, copy, subscription, failure retention and refresh pres
   const row = page.locator('.library-main > .library-list > li').filter({ hasText: name });
   await row.getByRole('button', { name: '编辑来源', exact: true }).click();
   await page.getByLabel('来源 URL', { exact: true }).fill('https://source.test/unsaved');
-  await row.getByRole('button', { name: '刷新远端来源', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '刷新远端来源', exact: true }).click();
   await expect(row).toContainText('HTTP 503');
   expect(await (await request.get(privateUrl)).text()).toBe(before);
   await expect(page.getByLabel('来源 URL', { exact: true })).toHaveValue(
     'https://source.test/unsaved',
   );
   await page.getByLabel('选择来源节点 ' + name + '-1', { exact: true }).check();
-  await row.getByRole('button', { name: '刷新远端来源', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '刷新远端来源', exact: true }).click();
   await expect
     .poll(async () => decodeURIComponent(await (await request.get(privateUrl)).text()))
     .toContain(name + '-3');

@@ -164,6 +164,7 @@ h3 {
 .rail-foot {
   background: var(--sidebar);
   color: var(--sidebar-text);
+  z-index: 70;
 }
 .rail-brand {
   grid-area: brand;
@@ -459,11 +460,12 @@ h3 {
   display: flex;
   gap: 10px;
 }
-.field-pair > label:first-child {
+.field-pair > label {
   flex: 1;
   min-width: 0;
 }
-.port-field {
+.field-pair > .port-field {
+  flex: 0 0 96px;
   width: 96px;
 }
 .check-label {
@@ -613,7 +615,11 @@ summary {
   grid-template-columns: minmax(0, 1fr) minmax(300px, 440px);
 }
 .library-layout.is-subscription.has-editor {
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  grid-template-columns: 1fr;
+}
+.library-layout.is-subscription.has-editor .library-list {
+  max-height: 240px;
+  overflow: auto;
 }
 .library-list {
   list-style: none;
@@ -622,15 +628,20 @@ summary {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: auto;
 }
 .library-list li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(12rem, 1fr) auto;
   align-items: center;
   gap: 12px;
   border-bottom: 1px solid var(--border);
   padding: 10px 12px;
+}
+.library-list .toolbar {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .library-list li:last-child {
   border-bottom: 0;
@@ -643,6 +654,15 @@ summary {
 }
 .library-list .node-name {
   white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  min-width: 0;
+}
+.format-chip {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
 }
 .library-list input[type='checkbox'] {
   flex-shrink: 0;
@@ -773,6 +793,50 @@ summary {
   padding: 48px 24px;
   color: var(--muted);
 }
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--sidebar-width);
+  z-index: 50;
+  display: grid;
+  place-items: start center;
+  padding: 16px;
+  overflow: auto;
+  background: #14231e99;
+  pointer-events: none;
+}
+.modal-dialog {
+  pointer-events: auto;
+  width: min(640px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  margin: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px 18px;
+  box-shadow: 0 18px 50px #14231e40;
+  min-width: 0;
+}
+.modal-overlay.wide .modal-dialog,
+.modal-dialog.wide {
+  width: min(1040px, 100%);
+}
+.modal-overlay.elevated {
+  z-index: 60;
+}
+.modal-dialog .library-editor,
+.modal-dialog .node-import-panel {
+  border: 0;
+  padding: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.modal-dialog .library-list {
+  max-height: 280px;
+}
 
 @media (max-width: 1100px) {
   .workbench-body,
@@ -854,5 +918,14 @@ summary {
   }
   .field-pair > label {
     flex: 1 1 160px;
+  }
+  .modal-overlay {
+    left: 0;
+    top: 52px;
+    bottom: var(--bottom-nav);
+    padding: 12px;
+  }
+  .modal-dialog {
+    max-height: 100%;
   }
 }

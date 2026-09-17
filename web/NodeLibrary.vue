@@ -3,6 +3,7 @@ import { computed, ref, onMounted } from 'vue';
 import NodeEditor from './NodeEditor.vue';
 import NodeImport from './NodeImport.vue';
 import ListPagination from './ui/ListPagination.vue';
+import ModalDialog from './ui/ModalDialog.vue';
 import StatusBadge from './ui/StatusBadge.vue';
 import { ApiError } from './api';
 import {
@@ -216,74 +217,88 @@ onMounted(() => void act(refresh));
         载入所选到工作台
       </button>
     </div>
-    <NodeImport
-      v-if="importing"
-      :api="api"
-      :disabled="busy"
-      @close="importing = false"
-      @saving="importSaving = $event"
-      @saved="imported"
-    />
-    <div class="library-layout" :class="{ 'has-editor': !!draft }">
-      <div class="library-main">
-        <p v-if="!rows.length" class="empty-state">
-          还没有本地节点。可直接导入、手动新建，或从工作台选择后另存。
-        </p>
-        <ul v-else class="library-list">
-          <li v-for="node in rows" :key="node.id">
-            <label class="check-label"
-              ><input
-                v-model="selected"
-                type="checkbox"
-                :value="node.id"
-                :disabled="locked || !node.enabled"
-                :aria-label="'选择本地节点 ' + node.name"
-              />
-              <span class="node-name"
-                >{{ node.name
-                }}<small
-                  >{{ node.protocol.toUpperCase() }} · 版本 {{ node.revision }}
-                  <StatusBadge
-                    :tone="node.enabled ? 'ok' : 'off'"
-                    :label="node.enabled ? '启用' : '禁用'" /></small
-              ></span>
-            </label>
-            <div class="toolbar">
-              <button type="button" :disabled="locked" @click="edit(node.id)">编辑</button
-              ><button type="button" :disabled="locked" @click="toggle(node)">
-                {{ node.enabled ? '禁用' : '启用' }}</button
-              ><button type="button" class="danger" :disabled="locked" @click="remove(node)">
-                删除
-              </button>
-            </div>
-          </li>
-        </ul>
-        <ListPagination :page="page" :total="total" :disabled="locked" @turn="turnPage" />
-      </div>
-      <aside v-if="draft" class="library-editor-pane">
-        <fieldset :disabled="locked" class="library-editor">
-          <legend>{{ baseline ? '编辑本地节点' : '新建本地节点' }}</legend>
-          <p v-if="conflict" class="warning-note">
-            服务器已有更新。当前编辑已保留；重新载入会替换这些未保存内容。
-          </p>
-          <button v-if="conflict && baseline" type="button" @click="edit(baseline.id)">
-            重新载入服务器版本
-          </button>
-          <NodeEditor v-model="draft" :persisted="!!baseline" @clear-secret="cleared.add($event)" />
+    <div class="library-main">
+      <p v-if="!rows.length" class="empty-state">
+        还没有本地节点。可直接导入、手动新建，或从工作台选择后另存。
+      </p>
+      <ul v-else class="library-list">
+        <li v-for="node in rows" :key="node.id">
+          <label class="check-label"
+            ><input
+              v-model="selected"
+              type="checkbox"
+              :value="node.id"
+              :disabled="locked || !node.enabled"
+              :aria-label="'选择本地节点 ' + node.name"
+            />
+            <span class="node-name"
+              >{{ node.name
+              }}<small
+                >{{ node.protocol.toUpperCase() }} · 版本 {{ node.revision }}
+                <StatusBadge
+                  :tone="node.enabled ? 'ok' : 'off'"
+                  :label="node.enabled ? '启用' : '禁用'" /></small
+            ></span>
+          </label>
           <div class="toolbar">
-            <button type="button" class="primary" @click="save">保存本地节点</button
-            ><button
-              type="button"
-              @click="
-                draft = null;
-                baseline = null;
-              "
-            >
-              关闭编辑
+            <button type="button" :disabled="locked" @click="edit(node.id)">编辑</button
+            ><button type="button" :disabled="locked" @click="toggle(node)">
+              {{ node.enabled ? '禁用' : '启用' }}</button
+            ><button type="button" class="danger" :disabled="locked" @click="remove(node)">
+              删除
             </button>
           </div>
-        </fieldset>
-      </aside>
+        </li>
+      </ul>
+      <ListPagination :page="page" :total="total" :disabled="locked" @turn="turnPage" />
     </div>
+    <ModalDialog
+      v-if="draft"
+      :label="baseline ? '编辑本地节点' : '新建本地节点'"
+      :dismissible="!locked"
+      @close="
+        draft = null;
+        baseline = null;
+      "
+    >
+      <fieldset :disabled="locked" class="library-editor">
+        <legend>{{ baseline ? '编辑本地节点' : '新建本地节点' }}</legend>
+        <p v-if="conflict" class="warning-note">
+          服务器已有更新。当前编辑已保留；重新载入会替换这些未保存内容。
+        </p>
+        <button v-if="conflict && baseline" type="button" @click="edit(baseline.id)">
+          重新载入服务器版本
+        </button>
+        <NodeEditor v-model="draft" :persisted="!!baseline" @clear-secret="cleared.add($event)" />
+        <div class="toolbar">
+          <button type="button" class="primary" @click="save">保存本地节点</button
+          ><button
+            type="button"
+            @click="
+              draft = null;
+              baseline = null;
+            "
+          >
+            关闭编辑
+          </button>
+        </div>
+      </fieldset>
+    </ModalDialog>
+    <ModalDialog
+      v-if="importing"
+      label="导入节点"
+      wide
+      elevated
+      :dismissible="!importSaving && !busy"
+      @close="importing = false"
+    >
+      <NodeImport
+        :api="api"
+        :disabled="busy"
+        @close="importing = false"
+        @saving="importSaving = $event"
+        @saved="imported"
+      />
+    </ModalDialog>
   </section>
 </template>
