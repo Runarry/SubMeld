@@ -4,11 +4,15 @@ import { readFile } from 'node:fs/promises';
 import { UUID } from './fixtures.mjs';
 import { newSubscription } from '../dist/server/shared/subscriptions.js';
 const password = 'SubMeld-UI-Test-Only-2026';
-async function login(page) {
+async function login(page, next = 'subscriptions') {
   await page.goto('/');
   await page.getByLabel('管理员密码', { exact: true }).fill(password);
-  await page.getByRole('button', { name: '登录工作台', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '从输入到可用链接。' })).toBeVisible();
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '订阅方案', exact: true })).toBeVisible();
+  if (next === 'workbench') {
+    await page.getByRole('button', { name: '转换工作台', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '转换工作台', exact: true })).toBeVisible();
+  }
 }
 test('login, YAML upload, editing, URI/Base64 copy/download, exclusion and logout', async ({
   page,
@@ -23,7 +27,7 @@ test('login, YAML upload, editing, URI/Base64 copy/download, exclusion and logou
       },
     });
   });
-  await login(page);
+  await login(page, 'workbench');
   const yaml =
     'proxies:\n  - {type: vless, name: Uploaded, server: example.com, port: 443, uuid: ' +
     UUID +
@@ -71,14 +75,14 @@ test('login, YAML upload, editing, URI/Base64 copy/download, exclusion and logou
   await expect(page.getByLabel('输出预览', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '管理员登录', exact: true })).toBeVisible();
-  await login(page);
+  await login(page, 'workbench');
   await expect(page.getByLabel('节点输入', { exact: true })).toHaveValue('');
   await expect(page.getByText('从一条节点开始', { exact: true })).toBeVisible();
 });
 test('manual form generates real URI and a response arriving after an edit is discarded', async ({
   page,
 }) => {
-  await login(page);
+  await login(page, 'workbench');
   await page.getByRole('button', { name: '添加节点', exact: true }).click();
   await page.getByLabel('名称', { exact: true }).fill('Manual');
   await page.getByLabel('服务器', { exact: true }).fill('example.com');
@@ -115,7 +119,7 @@ test('manual form generates real URI and a response arriving after an edit is di
 test('P2 saves selected nodes, reloads, edits without resending secrets, toggles, sorts and exports three targets', async ({
   page,
 }, testInfo) => {
-  await login(page);
+  await login(page, 'workbench');
   const suffix = testInfo.project.name;
   const name = 'P2保存-' + suffix,
     second = 'P2第二-' + suffix;
@@ -252,7 +256,7 @@ test('P2 two pages preserve conflicting edits; new local nodes and explicit secr
 test('P2 target failure retains other outputs and delayed render cannot restore an edited preview', async ({
   page,
 }, testInfo) => {
-  await login(page);
+  await login(page, 'workbench');
   await page
     .getByLabel('节点输入', { exact: true })
     .fill('hysteria2://test-password@example.com:443?sni=tls.example.com#' + testInfo.project.name);
@@ -350,7 +354,7 @@ test('local import previews paginated URI nodes, preserves manual edits and save
     await expect(panel.getByRole('button', { name: '关闭导入', exact: true })).toBeDisabled();
     release();
     await expect(panel.getByRole('status')).toContainText('已添加 26 个');
-    await expect(page.locator('.library > .pagination')).toContainText(
+    await expect(page.locator('.library-main .pagination')).toContainText(
       '第 ' + Math.ceil((initial + 26) / 25) + ' 页',
     );
     await expect(panel.getByLabel('本地节点导入内容', { exact: true })).toHaveValue('');
@@ -856,7 +860,7 @@ test('P4 remote creation, copy, subscription, failure retention and refresh pres
   await expect.poll(async () => (await request.get(privateUrl)).status()).toBe(200);
   const before = await (await request.get(privateUrl)).text();
   await page.getByRole('button', { name: '来源管理', exact: true }).click();
-  const row = page.locator('.library > .library-list > li').filter({ hasText: name });
+  const row = page.locator('.library-main > .library-list > li').filter({ hasText: name });
   await row.getByRole('button', { name: '编辑来源', exact: true }).click();
   await page.getByLabel('来源 URL', { exact: true }).fill('https://source.test/unsaved');
   await row.getByRole('button', { name: '刷新远端来源', exact: true }).click();
@@ -890,7 +894,7 @@ test('P4 remote secret deltas, explicit clear and two-page revision conflicts ke
   await other.goto('/');
   await other.getByRole('button', { name: '来源管理', exact: true }).click();
   await other
-    .locator('.library > .library-list > li')
+    .locator('.library-main > .library-list > li')
     .filter({ hasText: name })
     .getByRole('button', { name: '编辑来源', exact: true })
     .click();
@@ -918,7 +922,7 @@ test('P4 remote secret deltas, explicit clear and two-page revision conflicts ke
   await expect(page.getByRole('button', { name: '保存远端来源', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '关闭来源编辑', exact: true }).click();
   await page
-    .locator('.library > .library-list > li')
+    .locator('.library-main > .library-list > li')
     .filter({ hasText: name })
     .getByRole('button', { name: '编辑来源', exact: true })
     .click();
@@ -931,7 +935,7 @@ test('P4 a never-successful remote stays editable and cannot be selected as subs
   await login(page);
   const name = 'P4失败-' + testInfo.project.name,
     source = await createRemote(page, name, '/failure');
-  const row = page.locator('.library > .library-list > li').filter({ hasText: name });
+  const row = page.locator('.library-main > .library-list > li').filter({ hasText: name });
   await expect(row).toContainText('HTTP 503');
   await expect(row).toContainText('尚无成功快照');
   await expect(page.getByLabel('来源 URL', { exact: true })).toHaveValue(source.url);
@@ -963,7 +967,7 @@ test('P4 late remote details cannot restore URL or authorization after leaving t
     await route.fulfill({ response });
   });
   await page
-    .locator('.library > .library-list > li')
+    .locator('.library-main > .library-list > li')
     .filter({ hasText: name })
     .getByRole('button', { name: '编辑来源', exact: true })
     .click();

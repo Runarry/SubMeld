@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { ApiError } from './api';
+import { formatTime } from './format';
+import ListPagination from './ui/ListPagination.vue';
+import StatusBadge from './ui/StatusBadge.vue';
 import { nodeListSchema, protocols } from '../server/shared/contracts';
 import {
   sourceListSchema,
@@ -335,264 +338,294 @@ function download() {
 onMounted(() => void act(refresh));
 </script>
 <template>
-  <section class="panel library" aria-label="订阅方案">
-    <div class="section-title">
-      <h1>订阅方案</h1>
+  <section class="library" aria-label="订阅方案">
+    <div class="page-header">
+      <div>
+        <h1>订阅方案</h1>
+        <p class="muted">组合已保存的节点与来源。保存后自动生成；客户端读取已发布内容。</p>
+      </div>
       <div class="toolbar">
-        <button :disabled="busy" @click="act(refresh)">刷新方案列表</button
-        ><button :disabled="busy" @click="startNew">新建订阅方案</button>
+        <button type="button" :disabled="busy" @click="act(refresh)">刷新方案列表</button>
+        <button type="button" class="primary" :disabled="busy" @click="startNew">
+          新建订阅方案
+        </button>
       </div>
     </div>
-    <p class="muted">组合已保存的节点与文本来源。保存后自动生成；客户端更新时读取已发布内容。</p>
     <p v-if="message" class="notice" role="status">{{ message }}</p>
-    <ul class="library-list">
-      <li v-for="row in rows" :key="row.id">
-        <span class="node-name"
-          >{{ row.name
-          }}<small
-            >{{ row.enabled ? '启用' : '停用' }} ·
-            {{ row.formats.map((f) => outputLabels[f]).join('、') }}</small
-          ></span
-        >
-        <div class="toolbar">
-          <button :disabled="busy" @click="edit(row.id)">编辑方案</button
-          ><button :disabled="busy" @click="toggle(row)">
-            {{ row.enabled ? '停用方案' : '启用方案' }}</button
-          ><button :disabled="busy" @click="remove(row)">删除方案</button>
-        </div>
-      </li>
-    </ul>
-    <p v-if="!rows.length" class="muted">尚无订阅方案。</p>
-    <div class="pagination">
-      <button
-        :disabled="busy || !page"
-        @click="
-          act(async () => {
-            page--;
-            await refresh();
-          })
-        "
-      >
-        上一页</button
-      ><span>第 {{ page + 1 }} 页 · 共 {{ total }} 项</span
-      ><button
-        :disabled="busy || (page + 1) * 25 >= total"
-        @click="
-          act(async () => {
-            page++;
-            await refresh();
-          })
-        "
-      >
-        下一页
-      </button>
-    </div>
-    <fieldset v-if="form" :disabled="busy" class="library-editor editor-fields">
-      <legend>{{ baseline ? '编辑订阅方案' : '新建订阅方案' }}</legend>
-      <p v-if="conflict" class="warning-note">
-        服务器已有更新，当前编辑已保留。重新载入会替换未保存内容。
-      </p>
-      <button v-if="conflict && baseline" @click="edit(baseline.id)">重新载入方案版本</button>
-      <label>方案名称<input v-model="form.name" maxlength="512" /></label
-      ><label class="check-label"><input v-model="form.enabled" type="checkbox" />启用方案</label>
-      <h2>输入与顺序</h2>
-      <p class="muted">先按以下顺序展开，再筛选和改名；每个目标以保留的第一项为默认节点。</p>
-      <div class="field-pair">
-        <label
-          >输入类型<select v-model="inputKind" aria-label="输入类型">
-            <option value="source">来源</option>
-            <option value="node">本地节点</option>
-          </select></label
-        ><label
-          >可选输入<select v-model="candidateId" aria-label="可选输入">
-            <option
-              v-for="item in candidates"
-              :key="item.id"
-              :value="item.id"
-              :disabled="!item.available"
+    <div class="library-layout is-subscription" :class="{ 'has-editor': !!form }">
+      <div class="library-main">
+        <ul v-if="rows.length" class="library-list">
+          <li v-for="row in rows" :key="row.id">
+            <span class="node-name"
+              >{{ row.name
+              }}<small class="list-meta">
+                <StatusBadge
+                  :tone="row.enabled ? 'ok' : 'off'"
+                  :label="row.enabled ? '启用' : '停用'"
+                />
+                {{ row.formats.map((f) => outputLabels[f]).join('、') }}
+              </small></span
             >
-              {{ item.name
-              }}{{ item.available ? (item.enabled ? '' : '（已停用）') : '（尚无成功快照）' }}
-            </option>
-          </select></label
-        >
-      </div>
-      <div class="toolbar">
-        <button
-          :disabled="!candidateId || selectedKeys.has(inputKind + candidateId)"
-          @click="addInput"
-        >
-          添加输入</button
-        ><button @click="act(loadCandidates)">刷新可选输入</button>
-      </div>
-      <div class="pagination">
-        <button
-          :disabled="!inputPage"
-          @click="
-            act(async () => {
-              inputPage--;
-              await loadCandidates();
-            })
+            <div class="toolbar">
+              <button type="button" :disabled="busy" @click="edit(row.id)">编辑方案</button
+              ><button type="button" :disabled="busy" @click="toggle(row)">
+                {{ row.enabled ? '停用方案' : '启用方案' }}</button
+              ><button type="button" class="danger" :disabled="busy" @click="remove(row)">
+                删除方案
+              </button>
+            </div>
+          </li>
+        </ul>
+        <p v-else class="empty-state">尚无订阅方案。先添加来源或本地节点，再在这里组合发布。</p>
+        <ListPagination
+          :page="page"
+          :total="total"
+          :disabled="busy"
+          @turn="
+            (delta) =>
+              act(async () => {
+                page += delta;
+                await refresh();
+              })
           "
-        >
-          上一页输入</button
-        ><span>{{ inputPage + 1 }} / {{ Math.max(1, Math.ceil(inputTotal / 25)) }}</span
-        ><button
-          :disabled="(inputPage + 1) * 25 >= inputTotal"
-          @click="
-            act(async () => {
-              inputPage++;
-              await loadCandidates();
-            })
-          "
-        >
-          下一页输入
-        </button>
+        />
       </div>
-      <ol class="subscription-inputs">
-        <li v-for="(input, i) in form.inputs" :key="input.kind + input.id">
-          <span
-            >{{ i + 1 }}. {{ input.kind === 'source' ? '来源' : '节点' }} ·
-            {{ inputName(input) }}</span
+      <div v-if="form" class="subscription-detail">
+        <section
+          v-if="Object.keys(urls).length"
+          class="node-import-panel editor-fields token-banner"
+          aria-label="一次性私人地址"
+        >
+          <h2>请保存私人地址</h2>
+          <p class="warning-note">
+            只在创建或重置时展示。离开本页后无法再次查看；丢失可重置，旧地址会失效。持有地址即可读取对应方案。
+          </p>
+          <label v-for="(url, f) in urls" :key="f"
+            >{{ outputLabels[f] }} 订阅地址<input
+              :value="url"
+              readonly
+              :aria-label="outputLabels[f] + ' 订阅地址'"
+            /><button type="button" :disabled="busy" @click="copy(url ?? '')">
+              复制 {{ outputLabels[f] }} 地址
+            </button></label
           >
-          <div class="toolbar">
-            <button :disabled="i === 0" @click="move(i, -1)">上移输入</button
-            ><button :disabled="i === form.inputs.length - 1" @click="move(i, 1)">下移输入</button
-            ><button @click="form.inputs.splice(i, 1)">移除输入</button>
+          <button type="button" @click="urls = {}">已保存，隐藏地址</button>
+        </section>
+        <fieldset :disabled="busy" class="library-editor editor-fields">
+          <legend>{{ baseline ? '编辑订阅方案' : '新建订阅方案' }}</legend>
+          <p v-if="conflict" class="warning-note">
+            服务器已有更新，当前编辑已保留。重新载入会替换未保存内容。
+          </p>
+          <button v-if="conflict && baseline" type="button" @click="edit(baseline.id)">
+            重新载入方案版本
+          </button>
+          <label>方案名称<input v-model="form.name" maxlength="512" /></label
+          ><label class="check-label"
+            ><input v-model="form.enabled" type="checkbox" />启用方案</label
+          >
+          <h2>输入与顺序</h2>
+          <p class="muted">先按以下顺序展开，再筛选和改名；每个目标以保留的第一项为默认节点。</p>
+          <div class="field-pair">
+            <label
+              >输入类型<select v-model="inputKind" aria-label="输入类型">
+                <option value="source">来源</option>
+                <option value="node">本地节点</option>
+              </select></label
+            ><label
+              >可选输入<select v-model="candidateId" aria-label="可选输入">
+                <option
+                  v-for="item in candidates"
+                  :key="item.id"
+                  :value="item.id"
+                  :disabled="!item.available"
+                >
+                  {{ item.name
+                  }}{{ item.available ? (item.enabled ? '' : '（已停用）') : '（尚无成功快照）' }}
+                </option>
+              </select></label
+            >
           </div>
-        </li>
-      </ol>
-      <h2>名称筛选与改名</h2>
-      <p class="muted">按原名称做区分大小写的字面匹配，空值不限制；筛选后添加前后缀。</p>
-      <div class="field-pair">
-        <label>名称包含<input v-model="form.includeName" maxlength="512" /></label
-        ><label>名称排除<input v-model="form.excludeName" maxlength="512" /></label>
-      </div>
-      <div class="field-pair">
-        <label>名称前缀<input v-model="form.prefix" maxlength="512" /></label
-        ><label>名称后缀<input v-model="form.suffix" maxlength="512" /></label>
-      </div>
-      <h2>输出格式</h2>
-      <div class="toolbar">
-        <label v-for="f in outputFormats" :key="f" class="check-label"
-          ><input v-model="form.formats" type="checkbox" :value="f" />{{ outputLabels[f] }}</label
+          <div class="toolbar">
+            <button
+              type="button"
+              :disabled="!candidateId || selectedKeys.has(inputKind + candidateId)"
+              @click="addInput"
+            >
+              添加输入</button
+            ><button type="button" @click="act(loadCandidates)">刷新可选输入</button>
+          </div>
+          <div class="pagination">
+            <button
+              type="button"
+              :disabled="!inputPage"
+              @click="
+                act(async () => {
+                  inputPage--;
+                  await loadCandidates();
+                })
+              "
+            >
+              上一页输入</button
+            ><span>{{ inputPage + 1 }} / {{ Math.max(1, Math.ceil(inputTotal / 25)) }}</span
+            ><button
+              type="button"
+              :disabled="(inputPage + 1) * 25 >= inputTotal"
+              @click="
+                act(async () => {
+                  inputPage++;
+                  await loadCandidates();
+                })
+              "
+            >
+              下一页输入
+            </button>
+          </div>
+          <ol class="subscription-inputs">
+            <li v-for="(input, i) in form.inputs" :key="input.kind + input.id">
+              <span
+                >{{ i + 1 }}. {{ input.kind === 'source' ? '来源' : '节点' }} ·
+                {{ inputName(input) }}</span
+              >
+              <div class="toolbar">
+                <button type="button" :disabled="i === 0" @click="move(i, -1)">上移输入</button
+                ><button type="button" :disabled="i === form.inputs.length - 1" @click="move(i, 1)">
+                  下移输入</button
+                ><button type="button" @click="form.inputs.splice(i, 1)">移除输入</button>
+              </div>
+            </li>
+          </ol>
+          <h2>名称筛选与改名</h2>
+          <p class="muted">按原名称做区分大小写的字面匹配，空值不限制；筛选后添加前后缀。</p>
+          <div class="field-pair">
+            <label>名称包含<input v-model="form.includeName" maxlength="512" /></label
+            ><label>名称排除<input v-model="form.excludeName" maxlength="512" /></label>
+          </div>
+          <div class="field-pair">
+            <label>名称前缀<input v-model="form.prefix" maxlength="512" /></label
+            ><label>名称后缀<input v-model="form.suffix" maxlength="512" /></label>
+          </div>
+          <h2>输出格式</h2>
+          <div class="toolbar">
+            <label v-for="f in outputFormats" :key="f" class="check-label"
+              ><input v-model="form.formats" type="checkbox" :value="f" />{{
+                outputLabels[f]
+              }}</label
+            >
+          </div>
+          <label
+            >完整配置监听端口<input
+              v-model.number="form.listenPort"
+              type="number"
+              min="1"
+              max="65535"
+          /></label>
+          <fieldset v-for="group in targetGroups" :key="group" class="target-filter">
+            <legend>{{ groupLabels[group] }} 协议筛选</legend>
+            <div class="toolbar">
+              <label v-for="protocol in protocols" :key="protocol" class="check-label"
+                ><input v-model="form.protocols[group]" type="checkbox" :value="protocol" />{{
+                  protocol.toUpperCase()
+                }}</label
+              >
+            </div>
+          </fieldset>
+          <p class="muted">
+            URI 与 Base64 共用筛选；同一内核完整配置和片段共用筛选。Xray
+            不支持的协议或参数会明确报错，请按需调整。
+          </p>
+          <div class="toolbar">
+            <button type="button" class="primary" @click="save">保存订阅方案</button
+            ><button
+              type="button"
+              @click="
+                epoch++;
+                clearTransient();
+                form = null;
+                baseline = null;
+                status = null;
+              "
+            >
+              关闭方案编辑
+            </button>
+          </div>
+        </fieldset>
+        <section
+          v-if="status && baseline"
+          class="node-import-panel editor-fields"
+          aria-label="发布状态"
         >
-      </div>
-      <label
-        >完整配置监听端口<input v-model.number="form.listenPort" type="number" min="1" max="65535"
-      /></label>
-      <fieldset v-for="group in targetGroups" :key="group" class="target-filter">
-        <legend>{{ groupLabels[group] }} 协议筛选</legend>
-        <div class="toolbar">
-          <label v-for="protocol in protocols" :key="protocol" class="check-label"
-            ><input v-model="form.protocols[group]" type="checkbox" :value="protocol" />{{
-              protocol.toUpperCase()
-            }}</label
+          <div class="section-title">
+            <h2>已保存方案的发布状态</h2>
+            <span role="status">{{
+              status.generation === 'running'
+                ? '正在生成'
+                : status.generation === 'queued'
+                  ? '等待生成'
+                  : '生成任务已结束'
+            }}</span>
+          </div>
+          <p class="muted">下列内容来自已保存设置；左侧未提交的编辑尚未发布。</p>
+          <div class="toolbar">
+            <button type="button" :disabled="busy" @click="act(refreshSelectedStatus)">
+              刷新发布状态</button
+            ><button
+              type="button"
+              :disabled="busy || !status.enabled || status.generation !== 'idle'"
+              @click="generate"
+            >
+              更新订阅</button
+            ><button type="button" :disabled="busy" @click="resetToken">重置私人地址</button>
+          </div>
+          <article
+            v-for="artifact in status.artifacts"
+            :key="artifact.format"
+            class="artifact-status"
           >
-        </div>
-      </fieldset>
-      <p class="muted">
-        URI 与 Base64 共用筛选；同一内核完整配置和片段共用筛选。Xray
-        不支持的协议或参数会明确报错，请按需调整。
-      </p>
-      <div class="toolbar">
-        <button class="primary" @click="save">保存订阅方案</button
-        ><button
-          @click="
-            epoch++;
-            clearTransient();
-            form = null;
-            baseline = null;
-            status = null;
-          "
-        >
-          关闭方案编辑
-        </button>
-      </div>
-    </fieldset>
-    <section
-      v-if="Object.keys(urls).length"
-      class="node-import-panel editor-fields"
-      aria-label="一次性私人地址"
-    >
-      <h2>请保存私人地址</h2>
-      <p class="warning-note">
-        只在创建或重置时展示。离开本页后无法再次查看；丢失可重置，旧地址会失效。持有地址即可读取对应方案。
-      </p>
-      <label v-for="(url, f) in urls" :key="f"
-        >{{ outputLabels[f] }} 订阅地址<input
-          :value="url"
-          readonly
-          :aria-label="outputLabels[f] + ' 订阅地址'"
-        /><button :disabled="busy" @click="copy(url ?? '')">
-          复制 {{ outputLabels[f] }} 地址
-        </button></label
-      >
-      <button @click="urls = {}">已保存，隐藏地址</button>
-    </section>
-    <section
-      v-if="status && baseline"
-      class="node-import-panel editor-fields"
-      aria-label="发布状态"
-    >
-      <div class="section-title">
-        <h2>已保存方案的发布状态</h2>
-        <span role="status">{{
-          status.generation === 'running'
-            ? '正在生成'
-            : status.generation === 'queued'
-              ? '等待生成'
-              : '生成任务已结束'
-        }}</span>
-      </div>
-      <p class="muted">下列内容来自已保存设置；上方未提交的编辑尚未发布。</p>
-      <div class="toolbar">
-        <button :disabled="busy" @click="act(refreshSelectedStatus)">刷新发布状态</button
-        ><button
-          :disabled="busy || !status.enabled || status.generation !== 'idle'"
-          @click="generate"
-        >
-          更新订阅</button
-        ><button :disabled="busy" @click="resetToken">重置私人地址</button>
-      </div>
-      <article v-for="artifact in status.artifacts" :key="artifact.format" class="artifact-status">
-        <h3>
-          {{ outputLabels[artifact.format] }} · {{ artifact.readable ? '可读取' : '不可读取' }}
-        </h3>
-        <p class="muted">
-          最近成功：{{ artifact.generatedAt ?? '尚无'
-          }}<template v-if="artifact.counts">
-            · 输入 {{ artifact.counts.input }} / 输出 {{ artifact.counts.output }} / 过滤
-            {{ artifact.counts.filtered }}</template
+            <h3>
+              {{ outputLabels[artifact.format] }} ·
+              {{ artifact.readable ? '可读取' : '不可读取' }}
+            </h3>
+            <p class="muted">
+              最近成功：{{ artifact.generatedAt ? formatTime(artifact.generatedAt) : '尚无'
+              }}<template v-if="artifact.counts">
+                · 输入 {{ artifact.counts.input }} / 输出 {{ artifact.counts.output }} / 过滤
+                {{ artifact.counts.filtered }}</template
+              >
+            </p>
+            <p v-if="artifact.error" class="error-note">
+              {{ artifact.error.message }}{{ artifact.readable ? ' 当前仍提供最近成功结果。' : '' }}
+            </p>
+            <p
+              v-for="(d, i) in [...artifact.diagnostics, ...(artifact.error?.diagnostics ?? [])]"
+              :key="i"
+              :class="d.level === 'error' ? 'error-note' : 'warning-note'"
+            >
+              {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
+            </p>
+            <button
+              type="button"
+              :disabled="busy || !artifact.readable"
+              @click="showArtifact(artifact.format)"
+            >
+              预览 {{ outputLabels[artifact.format] }}
+            </button>
+          </article>
+          <template v-if="preview"
+            ><h3>已发布内容：{{ outputLabels[preview.format] }}</h3>
+            <textarea
+              class="output-text"
+              readonly
+              :value="preview.content"
+              aria-label="已发布订阅内容"
+            ></textarea>
+            <div class="toolbar">
+              <button type="button" :disabled="busy" @click="copy(preview.content)">
+                复制订阅内容</button
+              ><button type="button" @click="download">下载订阅内容</button>
+            </div></template
           >
-        </p>
-        <p v-if="artifact.error" class="error-note">
-          {{ artifact.error.message }}{{ artifact.readable ? ' 当前仍提供最近成功结果。' : '' }}
-        </p>
-        <p
-          v-for="(d, i) in [...artifact.diagnostics, ...(artifact.error?.diagnostics ?? [])]"
-          :key="i"
-          :class="d.level === 'error' ? 'error-note' : 'warning-note'"
-        >
-          {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
-        </p>
-        <button :disabled="busy || !artifact.readable" @click="showArtifact(artifact.format)">
-          预览 {{ outputLabels[artifact.format] }}
-        </button>
-      </article>
-      <template v-if="preview"
-        ><h3>已发布内容：{{ outputLabels[preview.format] }}</h3>
-        <textarea
-          class="output-text"
-          readonly
-          :value="preview.content"
-          aria-label="已发布订阅内容"
-        ></textarea>
-        <div class="toolbar">
-          <button :disabled="busy" @click="copy(preview.content)">复制订阅内容</button
-          ><button @click="download">下载订阅内容</button>
-        </div></template
-      >
-    </section>
+        </section>
+      </div>
+    </div>
   </section>
 </template>
