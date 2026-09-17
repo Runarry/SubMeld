@@ -19,20 +19,43 @@ const rows = ref<SourceSummary[]>([]),
   conflict = ref(false);
 const editing = ref(false),
   saved = ref<Source | null>(null),
+  published = ref<Source | null>(null),
   name = ref(''),
   text = ref(''),
   format = ref<'auto' | 'uri' | 'base64' | 'yaml'>('auto'),
-  enabled = ref(true);
+  enabled = ref(true),
+  kind = ref<'text' | 'remote'>('text'),
+  url = ref(''),
+  userAgent = ref('SubMeld/1.0.0'),
+  accept = ref('*/*'),
+  authorization = ref(''),
+  showUrl = ref(false),
+  showAuthorization = ref(false);
 const selected = ref<number[]>([]),
   nodePage = ref(0),
   diagnostics = ref<Diagnostic[]>([]);
 let alive = true,
-  epoch = 0;
+  epoch = 0,
+  listTicket = 0,
+  timer: ReturnType<typeof setTimeout> | undefined;
+function clearEditor() {
+  epoch++;
+  editing.value = false;
+  saved.value = null;
+  published.value = null;
+  text.value = '';
+  url.value = '';
+  authorization.value = '';
+  userAgent.value = 'SubMeld/1.0.0';
+  accept.value = '*/*';
+  showUrl.value = false;
+  showAuthorization.value = false;
+  selected.value = [];
+}
 onBeforeUnmount(() => {
   alive = false;
-  epoch++;
-  text.value = '';
-  saved.value = null;
+  clearTimeout(timer);
+  clearEditor();
 });
 async function act(fn: () => Promise<void>) {
   if (busy.value) return;
@@ -54,8 +77,10 @@ async function act(fn: () => Promise<void>) {
   }
 }
 async function refresh() {
-  const result = sourceListSchema.parse(await props.api('/api/sources?page=' + page.value));
-  if (!alive) return;
+  const ticket = ++listTicket,
+    currentPage = page.value;
+  const result = sourceListSchema.parse(await props.api('/api/sources?page=' + currentPage));
+  if (!alive || ticket !== listTicket || page.value !== currentPage) return;
   rows.value = result.sources;
   total.value = result.total;
   if (!rows.value.length && page.value) {
@@ -63,27 +88,44 @@ async function refresh() {
     await refresh();
   }
 }
+function updatePublished(source: Source) {
+  if (
+    published.value?.savedAt !== source.savedAt ||
+    published.value?.revision !== source.revision
+  ) {
+    selected.value = [];
+    nodePage.value = 0;
+  }
+  published.value = source;
+  if (saved.value && source.revision !== saved.value.revision) conflict.value = true;
+}
 function fill(source: Source) {
   saved.value = source;
+  published.value = source;
   name.value = source.name;
-  text.value = source.text;
+  text.value = source.kind === 'text' ? source.text : '';
   format.value = source.format;
   enabled.value = source.enabled;
+  kind.value = source.kind;
+  url.value = source.url ?? '';
+  userAgent.value = source.headers?.userAgent ?? 'SubMeld/1.0.0';
+  accept.value = source.headers?.accept ?? '*/*';
+  authorization.value = source.headers?.authorization ?? '';
+  showUrl.value = false;
+  showAuthorization.value = false;
   editing.value = true;
   conflict.value = false;
   selected.value = [];
   nodePage.value = 0;
 }
-function startNew() {
-  epoch++;
+function startNew(sourceKind: 'text' | 'remote') {
+  clearEditor();
   editing.value = true;
-  saved.value = null;
+  kind.value = sourceKind;
   name.value = '';
-  text.value = '';
   format.value = 'auto';
   enabled.value = true;
   conflict.value = false;
-  selected.value = [];
   diagnostics.value = [];
   message.value = '';
 }
@@ -97,26 +139,82 @@ async function edit(id: string) {
 async function save() {
   const current = epoch;
   await act(async () => {
-    const input = {
-      name: name.value,
-      text: text.value,
-      format: format.value,
-      enabled: enabled.value,
-    };
+    const before = saved.value;
+    let input: Record<string, unknown>;
+    if (!before) {
+      input = {
+        name: name.value,
+        format: format.value,
+        enabled: enabled.value,
+        kind: kind.value,
+        ...(kind.value === 'text'
+          ? { text: text.value }
+          : {
+              url: url.value,
+              headers: {
+                userAgent: userAgent.value,
+                accept: accept.value,
+                authorization: authorization.value,
+              },
+            }),
+      };
+    } else {
+      input = { revision: before.revision };
+      if (name.value !== before.name) input.name = name.value;
+      if (format.value !== before.format) input.format = format.value;
+      if (enabled.value !== before.enabled) input.enabled = enabled.value;
+      if (kind.value === 'text') {
+        if (text.value !== before.text) input.text = text.value;
+      } else {
+        if (url.value !== before.url) input.url = url.value;
+        const headers: Record<string, string | null> = {};
+        for (const [key, value] of Object.entries({
+          userAgent: userAgent.value,
+          accept: accept.value,
+          authorization: authorization.value,
+        })) {
+          if (value !== before.headers?.[key as keyof NonNullable<Source['headers']>])
+            headers[key] = value || null;
+        }
+        if (Object.keys(headers).length) input.headers = headers;
+      }
+      if (Object.keys(input).length === 1) {
+        message.value = '来源设置未更改。';
+        return;
+      }
+    }
     const value = sourceSchema.parse(
       await props.api(
-        saved.value ? '/api/sources/' + saved.value.id : '/api/sources',
-        saved.value ? { ...input, revision: saved.value.revision } : input,
-        saved.value ? 'PATCH' : 'POST',
+        before ? '/api/sources/' + before.id : '/api/sources',
+        input,
+        before ? 'PATCH' : 'POST',
       ),
     );
     if (!alive || current !== epoch) return;
+    epoch++;
     fill(value);
     await refresh();
-    if (alive) message.value = '文本来源已保存，相关订阅已安排更新。';
+    if (alive)
+      message.value =
+        value.kind === 'text'
+          ? '文本来源已保存，相关订阅已安排更新。'
+          : '远端来源设置已保存；刷新状态和最近成功内容见下方。';
+  });
+}
+async function fetchSource(row: SourceSummary) {
+  const current = epoch;
+  await act(async () => {
+    const value = sourceSchema.parse(
+      await props.api('/api/sources/' + row.id + '/refresh', { revision: row.revision }),
+    );
+    if (!alive) return;
+    if (current === epoch && saved.value?.id === row.id) updatePublished(value);
+    await refresh();
+    if (alive) message.value = '已安排刷新已保存的来源；未提交编辑不参与本次刷新。';
   });
 }
 async function toggle(row: SourceSummary) {
+  const current = epoch;
   await act(async () => {
     const value = sourceSchema.parse(
       await props.api(
@@ -126,11 +224,13 @@ async function toggle(row: SourceSummary) {
       ),
     );
     if (!alive) return;
-    if (saved.value?.id === row.id) {
+    if (current === epoch && saved.value?.id === row.id) {
       if (saved.value.revision === row.revision) {
-        saved.value = value;
+        saved.value = { ...saved.value, revision: value.revision, enabled: value.enabled };
         enabled.value = value.enabled;
-      } else conflict.value = true;
+      }
+      epoch++;
+      updatePublished(value);
     }
     await refresh();
     if (alive) message.value = row.enabled ? '来源已停用，相关旧产物已失效。' : '来源已启用。';
@@ -141,17 +241,12 @@ async function remove(row: SourceSummary) {
   await act(async () => {
     await props.api('/api/sources/' + row.id, { revision: row.revision }, 'DELETE');
     if (!alive) return;
-    if (saved.value?.id === row.id) {
-      editing.value = false;
-      saved.value = null;
-      text.value = '';
-      epoch++;
-    }
+    if (saved.value?.id === row.id) clearEditor();
     await refresh();
   });
 }
 async function copy() {
-  const source = saved.value;
+  const source = published.value;
   if (!source) return;
   await act(async () => {
     await props.api('/api/nodes', {
@@ -163,40 +258,91 @@ async function copy() {
     }
   });
 }
-onMounted(() => void act(refresh));
+async function poll() {
+  try {
+    if (!busy.value) {
+      await refresh();
+      const id = saved.value?.id,
+        current = epoch;
+      if (id && saved.value?.kind === 'remote') {
+        const value = sourceSchema.parse(await props.api('/api/sources/' + id));
+        if (alive && current === epoch && saved.value?.id === id) updatePublished(value);
+      }
+    }
+  } catch (error) {
+    if (alive) {
+      message.value =
+        error instanceof Error
+          ? '来源状态更新失败：' + error.message
+          : '来源状态更新失败，请刷新列表重试。';
+      if (error instanceof ApiError && error.status === 404) {
+        published.value = null;
+        selected.value = [];
+        conflict.value = true;
+      }
+    }
+  } finally {
+    if (alive) timer = setTimeout(poll, 2000);
+  }
+}
+onMounted(() => {
+  void act(refresh);
+  timer = setTimeout(poll, 2000);
+});
+const statusLabel = (value: Source['refresh']) =>
+  value === 'running' ? '刷新中' : value === 'queued' ? '等待刷新' : '空闲';
 </script>
 <template>
-  <section class="panel library" aria-label="文本来源">
+  <section class="panel library" aria-label="来源管理">
     <div class="section-title">
-      <h1>文本来源</h1>
+      <h1>来源管理</h1>
       <div class="toolbar">
-        <button :disabled="busy" @click="act(refresh)">刷新来源列表</button
-        ><button :disabled="busy" @click="startNew">新建文本来源</button>
+        <button :disabled="busy" @click="act(refresh)">刷新来源列表</button>
+        <button :disabled="busy" @click="startNew('text')">新建文本来源</button>
+        <button :disabled="busy" @click="startNew('remote')">新建远端来源</button>
       </div>
     </div>
     <p class="muted">
-      保存粘贴文本供方案引用。来源节点只读；复制成本地节点后可独立编辑。URL 和 provider
-      不会触发网络请求。
+      文本来源保存粘贴内容；远端来源仅抓取公网 HTTPS，每 6
+      小时顺序刷新。来源节点只读，复制成本地节点后可独立编辑。
     </p>
     <p v-if="message" role="status" class="notice">{{ message }}</p>
     <ul class="library-list">
       <li v-for="row in rows" :key="row.id">
         <span class="node-name"
-          >{{ row.name
-          }}<small
-            >{{ row.nodeCount }} 节点 · {{ row.enabled ? '启用' : '停用' }} ·
-            {{ row.savedAt }}</small
-          ></span
-        >
+          >{{ row.name }}
+          <small
+            >{{ row.kind === 'text' ? '文本' : '远端 HTTPS' }} · {{ row.nodeCount }} 节点 ·
+            {{ row.enabled ? '启用' : '停用' }}</small
+          >
+          <small>最近成功：{{ row.savedAt ?? '尚无成功快照' }}</small>
+          <small v-if="row.kind === 'remote'"
+            >{{ statusLabel(row.refresh) }} · 最近尝试：{{
+              row.lastAttemptAt ?? '尚未完成尝试'
+            }}</small
+          >
+          <small v-if="row.error" class="error-note"
+            >{{ row.error.message
+            }}<span v-if="row.savedAt"> 继续使用上述最近成功内容。</span></small
+          >
+        </span>
         <div class="toolbar">
-          <button :disabled="busy" @click="edit(row.id)">编辑来源</button
-          ><button :disabled="busy" @click="toggle(row)">
-            {{ row.enabled ? '停用来源' : '启用来源' }}</button
-          ><button :disabled="busy" @click="remove(row)">删除来源</button>
+          <button
+            v-if="row.kind === 'remote'"
+            :disabled="busy || !row.enabled || row.refresh !== 'idle'"
+            @click="fetchSource(row)"
+          >
+            刷新远端来源
+          </button>
+          <button :disabled="busy" @click="edit(row.id)">编辑来源</button>
+          <button :disabled="busy" @click="toggle(row)">
+            {{ row.enabled ? '停用来源' : '启用来源' }}
+          </button>
+          <button :disabled="busy" @click="remove(row)">删除来源</button>
         </div>
       </li>
     </ul>
-    <p v-if="!rows.length" class="muted">尚无文本来源。</p>
+    <p v-if="!rows.length" class="muted">尚无来源。</p>
     <div class="pagination">
       <button
         :disabled="busy || !page"
@@ -207,9 +353,10 @@ onMounted(() => void act(refresh));
           })
         "
       >
-        上一页</button
-      ><span>第 {{ page + 1 }} 页 · 共 {{ total }} 项</span
-      ><button
+        上一页
+      </button>
+      <span>第 {{ page + 1 }} 页 · 共 {{ total }} 项</span>
+      <button
         :disabled="busy || (page + 1) * 25 >= total"
         @click="
           act(async () => {
@@ -222,7 +369,7 @@ onMounted(() => void act(refresh));
       </button>
     </div>
     <fieldset v-if="editing" :disabled="busy" class="library-editor editor-fields">
-      <legend>{{ saved ? '编辑文本来源' : '新建文本来源' }}</legend>
+      <legend>{{ saved ? '编辑' : '新建' }}{{ kind === 'text' ? '文本' : '远端' }}来源</legend>
       <p v-if="conflict" class="warning-note">
         服务器已有更新，当前编辑已保留。重新载入会替换未保存内容。
       </p>
@@ -236,7 +383,42 @@ onMounted(() => void act(refresh));
           <option value="yaml">Clash / Mihomo YAML</option>
         </select></label
       >
-      <label>来源正文<textarea v-model="text" rows="8" spellcheck="false"></textarea></label>
+      <label v-if="kind === 'text'"
+        >来源正文<textarea v-model="text" rows="8" spellcheck="false"></textarea>
+      </label>
+      <template v-else>
+        <label
+          >来源 URL<input
+            v-model="url"
+            :type="showUrl ? 'text' : 'password'"
+            maxlength="8192"
+            autocomplete="off"
+            spellcheck="false"
+        /></label>
+        <button type="button" @click="showUrl = !showUrl">
+          {{ showUrl ? '隐藏来源 URL' : '显示来源 URL' }}
+        </button>
+        <label>User-Agent<input v-model="userAgent" maxlength="8192" /></label>
+        <button type="button" @click="userAgent = ''">清空 User-Agent</button>
+        <label>Accept<input v-model="accept" maxlength="8192" /></label>
+        <button type="button" @click="accept = ''">清空 Accept</button>
+        <label
+          >Authorization<input
+            v-model="authorization"
+            :type="showAuthorization ? 'text' : 'password'"
+            maxlength="8192"
+            autocomplete="off"
+            spellcheck="false"
+        /></label>
+        <div class="toolbar">
+          <button type="button" @click="showAuthorization = !showAuthorization">
+            {{ showAuthorization ? '隐藏 Authorization' : '显示 Authorization' }}</button
+          ><button type="button" @click="authorization = ''">清空 Authorization</button>
+        </div>
+        <p class="muted">
+          地址和认证未修改时不提交。修改地址、请求头或格式会清除旧快照与相关订阅产物，成功刷新后重新生成。
+        </p>
+      </template>
       <label class="check-label"><input v-model="enabled" type="checkbox" />启用来源</label>
       <div
         v-for="(d, i) in diagnostics"
@@ -246,25 +428,28 @@ onMounted(() => void act(refresh));
         {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
       </div>
       <div class="toolbar">
-        <button class="primary" @click="save">解析并保存来源</button
-        ><button
-          @click="
-            editing = false;
-            saved = null;
-            text = '';
-            epoch++;
-          "
-        >
-          关闭来源编辑
+        <button class="primary" @click="save">
+          {{ kind === 'text' ? '解析并保存来源' : '保存远端来源' }}
         </button>
+        <button @click="clearEditor">关闭来源编辑</button>
       </div>
-      <template v-if="saved">
+      <template v-if="published">
         <h2>已保存的只读节点</h2>
-        <p class="muted">以下为 {{ saved.savedAt }} 保存的版本；未提交的正文编辑不改变它。</p>
-        <p v-for="(d, i) in saved.diagnostics" :key="i" class="warning-note">{{ d.message }}</p>
+        <p class="muted">
+          最近成功：{{ published.savedAt ?? '尚无成功快照' }}；未提交编辑不改变以下内容。
+        </p>
+        <p v-if="published.kind === 'remote'" role="status">
+          {{ statusLabel(published.refresh) }} · 最近尝试：{{
+            published.lastAttemptAt ?? '尚未完成尝试'
+          }}
+        </p>
+        <p v-if="published.error" class="error-note">
+          {{ published.error.message }}<span v-if="published.savedAt"> 继续使用最近成功快照。</span>
+        </p>
+        <p v-for="(d, i) in published.diagnostics" :key="i" class="warning-note">{{ d.message }}</p>
         <ul class="library-list">
           <li
-            v-for="item in saved.items.slice(nodePage * 25, nodePage * 25 + 25)"
+            v-for="item in published.items.slice(nodePage * 25, nodePage * 25 + 25)"
             :key="item.nodeIndex"
           >
             <label class="check-label"
@@ -273,21 +458,24 @@ onMounted(() => void act(refresh));
                 type="checkbox"
                 :value="item.nodeIndex"
                 :aria-label="'选择来源节点 ' + item.draft?.name"
-              /><span class="node-name"
+              />
+              <span class="node-name"
                 >{{ item.draft?.name
                 }}<small
                   >{{ item.draft?.protocol.toUpperCase() }} · {{ item.draft?.server }}:{{
                     item.draft?.port
                   }}</small
                 ><small v-for="(d, i) in item.diagnostics" :key="i">{{ d.message }}</small></span
-              ></label
-            >
+              >
+            </label>
           </li>
         </ul>
         <div class="pagination">
           <button :disabled="!nodePage" @click="nodePage--">上一页节点</button
-          ><span>{{ nodePage + 1 }} / {{ Math.max(1, Math.ceil(saved.items.length / 25)) }}</span
-          ><button :disabled="(nodePage + 1) * 25 >= saved.items.length" @click="nodePage++">
+          ><span
+            >{{ nodePage + 1 }} / {{ Math.max(1, Math.ceil(published.items.length / 25)) }}</span
+          >
+          <button :disabled="(nodePage + 1) * 25 >= published.items.length" @click="nodePage++">
             下一页节点
           </button>
         </div>

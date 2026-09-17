@@ -7,6 +7,7 @@ import { openSettings } from './database.js';
 import { Auth } from './auth.js';
 import { Converter } from './converter/pool.js';
 import { Publisher } from './publisher.js';
+import { SourceRefresher } from './source-refresher.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -39,6 +40,7 @@ async function main() {
     settings.sources,
     converter,
   );
+  const refresher = new SourceRefresher(settings.sources, converter);
   let app: ReturnType<typeof createApp>;
   try {
     app = createApp({
@@ -52,7 +54,9 @@ async function main() {
       publisher,
     });
     publisher.start();
+    refresher.start();
   } catch (error) {
+    await refresher.close();
     await publisher.close();
     await converter.close();
     auth.close();
@@ -69,6 +73,7 @@ async function main() {
     closing = true;
     server.close();
     if ('closeAllConnections' in server) server.closeAllConnections();
+    await refresher.close();
     await publisher.close();
     await converter.close();
     auth.close();

@@ -38,7 +38,7 @@ const inputKind = ref<'source' | 'node'>('source'),
   inputPage = ref(0),
   inputTotal = ref(0),
   candidateId = ref('');
-const candidates = ref<{ id: string; name: string; enabled: boolean }[]>([]),
+const candidates = ref<{ id: string; name: string; enabled: boolean; available: boolean }[]>([]),
   labels = ref<Record<string, string>>({});
 const groupLabels = { uri: 'URI / Base64', mihomo: 'Mihomo', singbox: 'sing-box', xray: 'Xray' };
 const selectedKeys = computed(() => new Set(form.value?.inputs.map((i) => i.kind + i.id)));
@@ -143,9 +143,12 @@ async function loadCandidates() {
   const result = kind === 'source' ? sourceListSchema.parse(raw) : nodeListSchema.parse(raw);
   if (!alive || ticket !== inputTicket) return;
   const list = 'sources' in result ? result.sources : result.nodes;
-  candidates.value = list;
+  candidates.value = list.map((item) => ({
+    ...item,
+    available: !('savedAt' in item) || item.savedAt !== null,
+  }));
   inputTotal.value = result.total;
-  candidateId.value = list[0]?.id ?? '';
+  candidateId.value = candidates.value.find((item) => item.available)?.id ?? '';
   for (const item of list)
     labels.value[kind + item.id] = item.name + (item.enabled ? '' : '（已停用）');
 }
@@ -397,13 +400,19 @@ onMounted(() => void act(refresh));
       <div class="field-pair">
         <label
           >输入类型<select v-model="inputKind" aria-label="输入类型">
-            <option value="source">文本来源</option>
+            <option value="source">来源</option>
             <option value="node">本地节点</option>
           </select></label
         ><label
           >可选输入<select v-model="candidateId" aria-label="可选输入">
-            <option v-for="item in candidates" :key="item.id" :value="item.id">
-              {{ item.name }}{{ item.enabled ? '' : '（已停用）' }}
+            <option
+              v-for="item in candidates"
+              :key="item.id"
+              :value="item.id"
+              :disabled="!item.available"
+            >
+              {{ item.name
+              }}{{ item.available ? (item.enabled ? '' : '（已停用）') : '（尚无成功快照）' }}
             </option>
           </select></label
         >

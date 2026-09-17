@@ -14,79 +14,11 @@ import { AppError } from '../dist/server/errors.js';
 import { Publisher } from '../dist/server/publisher.js';
 import { ENGINE_VERSION } from '../dist/server/subscriptions.js';
 import { Converter } from '../dist/server/converter/pool.js';
-import { parseInput, produceInput } from '../dist/server/converter/engine.js';
-import { renderInput } from '../dist/server/converter/render.js';
+import { produceInput } from '../dist/server/converter/engine.js';
 import { newSubscription, outputFormats } from '../dist/server/shared/subscriptions.js';
 import { node, items, TEST_PASSWORD } from './fixtures.mjs';
 
-function deferred() {
-  let resolve;
-  const promise = new Promise((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-class ControlledConverter {
-  ready = Promise.resolve();
-  listeners = new Set();
-  busy = false;
-  calls = [];
-  next;
-  transform;
-  isAvailable() {
-    return !this.busy;
-  }
-  onAvailable(fn) {
-    this.listeners.add(fn);
-    return () => this.listeners.delete(fn);
-  }
-  hold(error) {
-    const entered = deferred(),
-      released = deferred();
-    this.next = { entered, released, error };
-    return { entered: entered.promise, release: () => released.resolve() };
-  }
-  async run(request, signal) {
-    if (this.busy) throw new AppError('CONVERTER_BUSY', '繁忙', 503);
-    this.busy = true;
-    this.calls.push(structuredClone(request));
-    const gate = this.next;
-    this.next = undefined;
-    try {
-      if (gate) {
-        gate.entered.resolve();
-        await new Promise((resolve, reject) => {
-          const abort = () => {
-            cleanup();
-            reject(new AppError('REQUEST_CANCELLED', '已取消'));
-          };
-          const cleanup = () => signal?.removeEventListener('abort', abort);
-          signal?.addEventListener('abort', abort, { once: true });
-          gate.released.promise.then(() => {
-            cleanup();
-            resolve();
-          });
-          if (signal?.aborted) abort();
-        });
-        if (gate.error) throw gate.error;
-      }
-      if (this.transform) {
-        const value = this.transform(request);
-        if (value !== undefined) return value;
-      }
-      return request.kind === 'parse'
-        ? parseInput(request.input)
-        : request.kind === 'produce'
-          ? produceInput(request.input)
-          : renderInput(request.input);
-    } finally {
-      this.busy = false;
-      queueMicrotask(() => {
-        for (const fn of this.listeners) fn();
-      });
-    }
-  }
-}
+import { ControlledConverter } from './publication-fixtures.mjs';
 function temporary() {
   const dir = mkdtempSync(join(tmpdir(), 'submeld-p3-'));
   return {
@@ -453,7 +385,7 @@ test('P3 schema 2 migration, restart, engine changes and stopped restore preserv
   publisher = undefined;
   settings = undefined;
   const db = new Database(join(temp.dir, 'submeld.sqlite'));
-  assert.equal(db.pragma('user_version', { simple: true }), 3);
+  assert.equal(db.pragma('user_version', { simple: true }), 4);
   assert.equal(
     db.prepare('SELECT token_hash FROM subscriptions').get().token_hash,
     createHash('sha256').update(sub.token).digest('hex'),

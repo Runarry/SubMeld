@@ -380,7 +380,7 @@ onMounted(async () => {
           转换工作台
         </button>
         <button :class="{ primary: view === 'library' }" @click="view = 'library'">本地节点</button>
-        <button :class="{ primary: view === 'sources' }" @click="view = 'sources'">文本来源</button>
+        <button :class="{ primary: view === 'sources' }" @click="view = 'sources'">来源管理</button>
         <button :class="{ primary: view === 'subscriptions' }" @click="view = 'subscriptions'">
           订阅方案
         </button>
@@ -625,7 +625,7 @@ onMounted(async () => {
     </main>
     <footer>
       <span>SubMeld · 订融 · <a href="/source.tar.gz">对应版本源码（AGPL）</a></span
-      ><span>本地节点与文本来源明确保存；临时工作台刷新即清空。私人地址仅创建或重置时展示。</span>
+      ><span>本地节点与来源明确保存；临时工作台刷新即清空。私人地址仅创建或重置时展示。</span>
     </footer>
   </div>
 </template>

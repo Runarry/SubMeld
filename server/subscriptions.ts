@@ -21,7 +21,7 @@ import type { NodeStore } from './nodes.js';
 import type { SourceStore } from './sources.js';
 
 // Bump when conversion, composition or template semantics change.
-export const ENGINE_VERSION = 'p3-1';
+export const ENGINE_VERSION = 'p4-1';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const rowSchema = z.object({
   id: z.string(),
@@ -45,6 +45,7 @@ const artifactRowSchema = z.object({
 });
 export type InputChanges = {
   invalidateInput(kind: 'node' | 'source', id: string): string[];
+  updateInput(kind: 'node' | 'source', id: string): string[];
   notify(ids: string[]): void;
 };
 export type ArtifactWrite = {
@@ -97,16 +98,16 @@ export function createSubscriptionStore(db: Database.Database) {
   function isEnabled(id: string) {
     return !!db.prepare('SELECT id FROM subscriptions WHERE id=? AND enabled=1').get(id);
   }
-  function invalidate(ids: string[]) {
+  function invalidate(ids: string[], clearArtifacts = true) {
     for (const id of ids) {
       db.prepare('UPDATE subscriptions SET revision=revision+1,updated_at=? WHERE id=?').run(
         new Date().toISOString(),
         id,
       );
-      db.prepare('DELETE FROM artifacts WHERE subscription_id=?').run(id);
+      if (clearArtifacts) db.prepare('DELETE FROM artifacts WHERE subscription_id=?').run(id);
     }
   }
-  function invalidateInput(kind: 'node' | 'source', id: string) {
+  function invalidateInput(kind: 'node' | 'source', id: string, clearArtifacts = true) {
     const rows = z
       .array(z.object({ subscription_id: z.string() }))
       .parse(
@@ -117,7 +118,7 @@ export function createSubscriptionStore(db: Database.Database) {
           .all(id),
       );
     const ids = rows.map((r) => r.subscription_id);
-    invalidate(ids);
+    invalidate(ids, clearArtifacts);
     return ids;
   }
   function saveConfig(id: string, config: SubscriptionConfig) {
@@ -132,6 +133,19 @@ export function createSubscriptionStore(db: Database.Database) {
           'INVALID_INPUT_REFERENCE',
           '所选来源或节点已删除，请刷新后重新选择。',
           422,
+        );
+      if (
+        input.kind === 'source' &&
+        db
+          .prepare("SELECT id FROM sources WHERE id=? AND kind='remote' AND snapshot_json IS NULL")
+          .get(input.id) &&
+        !db
+          .prepare('SELECT 1 FROM subscription_inputs WHERE subscription_id=? AND source_id=?')
+          .get(id, input.id)
+      )
+        throw new AppError(
+          'SOURCE_SNAPSHOT_MISSING',
+          '远端来源尚无成功快照，请先刷新成功后再加入方案。',
         );
     }
     db.prepare(
@@ -213,6 +227,7 @@ export function createSubscriptionStore(db: Database.Database) {
     isEnabled,
     notify,
     invalidateInput,
+    updateInput: (kind: 'node' | 'source', id: string) => invalidateInput(kind, id, false),
     listen(callback: (ids: string[]) => void) {
       listener = callback;
       return () => {
@@ -357,6 +372,11 @@ export function createSubscriptionStore(db: Database.Database) {
               append({ draft: node.draft, nodeIndex: 0, excluded: false, diagnostics: [] });
           } else {
             const source = sources.get(input.id);
+            if (source.enabled && source.savedAt === null)
+              throw new AppError(
+                'SOURCE_SNAPSHOT_MISSING',
+                '方案包含尚无成功快照的来源，未生成不完整订阅。',
+              );
             if (source.enabled)
               source.items.forEach((item, index) =>
                 append({

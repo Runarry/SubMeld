@@ -59,6 +59,8 @@ for (const [target, lock] of Object.entries(locks)) {
   // Re-extract from the verified archive, so a modified cached executable cannot pass unnoticed.
   if (asset.asset.endsWith('.gz') && !asset.asset.endsWith('.tar.gz'))
     await writeFile(binary, gunzipSync(data));
+  else if (asset.asset.endsWith('.zip') && process.platform !== 'win32')
+    execute('unzip', ['-o', archive, '-d', dir]);
   else execute('tar', ['-xf', archive, '-C', dir]);
   await access(binary);
   if (process.platform !== 'win32') await chmod(binary, 0o700);

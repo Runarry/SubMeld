@@ -1,7 +1,7 @@
 services:
   submeld:
     build: .
-    image: submeld:0.1.0
+    image: submeld:1.0.0
     environment:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to your HTTPS origin}
       DATA_DIR: /data

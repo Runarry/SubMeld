@@ -39,7 +39,7 @@ export function openSettings(dataDir: string, development: boolean) {
     db.pragma('journal_mode = WAL');
     db.pragma('busy_timeout = 3000');
     const version = db.pragma('user_version', { simple: true });
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3)
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4)
       throw new Error('数据库版本不受支持，停止启动。');
     if (version === 0)
       db.transaction(() => {
@@ -55,7 +55,7 @@ export function openSettings(dataDir: string, development: boolean) {
           draft_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         ); PRAGMA user_version = 2;`);
       })();
-    if (version !== 3)
+    if (version === 0 || version === 1 || version === 2)
       db.transaction(() => {
         db?.exec(`CREATE TABLE sources (
           id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
@@ -84,6 +84,32 @@ export function openSettings(dataDir: string, development: boolean) {
           PRIMARY KEY(subscription_id,format)
         ); PRAGMA user_version=3;`);
       })();
+    if (version !== 4) {
+      // Rebuild with foreign keys disabled outside the transaction, preserving child references.
+      db.pragma('foreign_keys = OFF');
+      try {
+        db.transaction(() => {
+          db?.exec(`CREATE TABLE sources_p4 (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+            revision INTEGER NOT NULL CHECK(revision>0), model_version INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('text','remote')),
+            format TEXT NOT NULL, text TEXT NOT NULL, snapshot_json TEXT,
+            url TEXT, headers_json TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, saved_at TEXT,
+            last_attempt_at TEXT, error_json TEXT
+          );
+          INSERT INTO sources_p4(id,name,enabled,revision,model_version,kind,format,text,snapshot_json,created_at,updated_at,saved_at)
+            SELECT id,name,enabled,revision,model_version,'text',format,text,snapshot_json,created_at,updated_at,saved_at FROM sources;
+          DROP TABLE sources;
+          ALTER TABLE sources_p4 RENAME TO sources;`);
+          if (db?.prepare('PRAGMA foreign_key_check').all().length)
+            throw new Error('Migration foreign key check failed');
+          db?.pragma('user_version = 4');
+        })();
+      } finally {
+        db.pragma('foreign_keys = ON');
+      }
+    }
     if (process.platform !== 'win32') {
       for (const file of readdirSync(dataDir))
         if (file.startsWith('submeld.sqlite') || file.startsWith('instance.lock.sqlite'))

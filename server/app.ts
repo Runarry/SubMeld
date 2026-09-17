@@ -235,6 +235,9 @@ export function createApp({
     ),
   );
   app.get('/api/sources/:id', (c) => c.json(sources.get(c.req.param('id'))));
+  app.post('/api/sources/:id/refresh', async (c) =>
+    c.json(sources.requestRefresh(c.req.param('id'), await requestRevision(c.req.raw)), 202),
+  );
   app.patch('/api/sources/:id', async (c) =>
     c.json(
       await sources.update(

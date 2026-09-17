@@ -42,25 +42,67 @@ const identity = {
   createdAt: z.string(),
   updatedAt: z.string(),
 };
-export const sourceInputSchema = z.strictObject({
+const sourceConfig = {
   name: identity.name,
   enabled: z.boolean().default(true),
   format: formatSchema,
-  text: z.string(),
+};
+const headerValue = z
+  .string()
+  .max(8192)
+  .regex(/^[\x20-\x7e\x80-\xff]*$/);
+export const sourceHeadersSchema = z.strictObject({
+  userAgent: headerValue.default('SubMeld/1.0.0'),
+  accept: headerValue.default('*/*'),
+  authorization: headerValue.default(''),
 });
-export const sourceUpdateSchema = sourceInputSchema
-  .partial()
-  .extend({ revision, enabled: z.boolean().optional() })
+export const remoteConfigSchema = z.strictObject({
+  url: z.string().min(1).max(8192),
+  headers: sourceHeadersSchema.default({
+    userAgent: 'SubMeld/1.0.0',
+    accept: '*/*',
+    authorization: '',
+  }),
+});
+export type RemoteConfig = z.infer<typeof remoteConfigSchema>;
+export const sourceInputSchema = z.union([
+  z.strictObject({ ...sourceConfig, kind: z.literal('text').default('text'), text: z.string() }),
+  z.strictObject({ ...sourceConfig, kind: z.literal('remote'), ...remoteConfigSchema.shape }),
+]);
+export const sourceUpdateSchema = z
+  .strictObject({
+    name: identity.name.optional(),
+    enabled: z.boolean().optional(),
+    format: formatSchema.optional(),
+    text: z.string().optional(),
+    url: remoteConfigSchema.shape.url.optional(),
+    headers: z
+      .strictObject({
+        userAgent: headerValue.nullable().optional(),
+        accept: headerValue.nullable().optional(),
+        authorization: headerValue.nullable().optional(),
+      })
+      .optional(),
+    revision,
+  })
   .refine((v) => Object.keys(v).length > 1);
+export const sourceErrorSchema = z.strictObject({ code: z.string(), message: z.string() });
+export const refreshStatusSchema = z.enum(['idle', 'queued', 'running']);
 export const sourceSummarySchema = z.strictObject({
   ...identity,
+  kind: z.enum(['text', 'remote']),
   format: formatSchema,
   nodeCount: z.number().int().nonnegative(),
-  savedAt: z.string(),
+  savedAt: z.string().nullable(),
+  lastAttemptAt: z.string().nullable(),
+  error: sourceErrorSchema.nullable(),
+  refresh: refreshStatusSchema,
 });
 export const sourceSchema = sourceSummarySchema.extend({
   modelVersion: z.literal(1),
   text: z.string(),
+  url: z.string().nullable(),
+  headers: sourceHeadersSchema.nullable(),
   items: z.array(itemSchema).max(MAX_NODES),
   diagnostics: z.array(diagnosticSchema),
 });
