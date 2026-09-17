@@ -38,6 +38,7 @@ const rowSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   saved_at: z.string().nullable(),
+  snapshot_version: z.number().int().nonnegative(),
   last_attempt_at: z.string().nullable(),
   error_json: z.string().nullable(),
 });
@@ -95,6 +96,7 @@ export function createSourceStore(db: Database.Database, changes: InputChanges) 
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       savedAt: row.saved_at,
+      snapshotVersion: row.snapshot_version,
       lastAttemptAt: row.last_attempt_at,
       error: row.error_json === null ? null : sourceErrorSchema.parse(JSON.parse(row.error_json)),
       refresh: refreshStatus(id),
@@ -166,6 +168,7 @@ export function createSourceStore(db: Database.Database, changes: InputChanges) 
             format,
             nodeCount,
             savedAt,
+            snapshotVersion,
             lastAttemptAt,
             error,
             refresh,
@@ -181,6 +184,7 @@ export function createSourceStore(db: Database.Database, changes: InputChanges) 
             format,
             nodeCount,
             savedAt,
+            snapshotVersion,
             lastAttemptAt,
             error,
             refresh,
@@ -224,6 +228,7 @@ export function createSourceStore(db: Database.Database, changes: InputChanges) 
           now,
           snapshot ? now : null,
         );
+        if (snapshot) db.prepare('UPDATE sources SET snapshot_version=1 WHERE id=?').run(id);
       })();
       if (value.kind === 'remote') onRefresh?.(id, true);
       return get(id);
@@ -277,11 +282,9 @@ export function createSourceStore(db: Database.Database, changes: InputChanges) 
           id,
         );
         if (snapshot)
-          db.prepare('UPDATE sources SET snapshot_json=?,saved_at=? WHERE id=?').run(
-            JSON.stringify(snapshot),
-            now,
-            id,
-          );
+          db.prepare(
+            'UPDATE sources SET snapshot_json=?,saved_at=?,snapshot_version=snapshot_version+1 WHERE id=?',
+          ).run(JSON.stringify(snapshot), now, id);
         if (remote)
           db.prepare('UPDATE sources SET url=?,headers_json=? WHERE id=?').run(
             remote.url,
@@ -290,8 +293,10 @@ export function createSourceStore(db: Database.Database, changes: InputChanges) 
           );
         if (connectionChanged)
           db.prepare(
-            "UPDATE sources SET text='',snapshot_json=NULL,saved_at=NULL,last_attempt_at=NULL,error_json=NULL WHERE id=?",
+            "UPDATE sources SET text='',snapshot_json=NULL,saved_at=NULL,last_attempt_at=NULL,error_json=NULL,snapshot_version=snapshot_version+1 WHERE id=?",
           ).run(id);
+        if (snapshot || connectionChanged)
+          db.prepare('DELETE FROM node_test_results WHERE source_id=?').run(id);
         return changes.invalidateInput('source', id);
       })();
       changes.notify(affected);
@@ -303,8 +308,9 @@ export function createSourceStore(db: Database.Database, changes: InputChanges) 
       const affected = db.transaction(() => {
         if (!canAccept(id, revision)) return null;
         db.prepare(
-          'UPDATE sources SET text=?,snapshot_json=?,saved_at=?,last_attempt_at=?,error_json=NULL WHERE id=?',
+          'UPDATE sources SET text=?,snapshot_json=?,saved_at=?,last_attempt_at=?,error_json=NULL,snapshot_version=snapshot_version+1 WHERE id=?',
         ).run(text, JSON.stringify(snapshot), new Date().toISOString(), attemptedAt, id);
+        db.prepare('DELETE FROM node_test_results WHERE source_id=?').run(id);
         return changes.updateInput('source', id);
       })();
       if (affected === null) return false;

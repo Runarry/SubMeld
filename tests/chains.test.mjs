@@ -321,7 +321,7 @@ test('schema 5 migrates references, snapshots and both token digests once; new c
     reopened.close();
   }
   const check = new Database(join(f.dir, 'submeld.sqlite'));
-  assert.equal(check.pragma('user_version', { simple: true }), 6);
+  assert.equal(check.pragma('user_version', { simple: true }), 7);
   assert.deepEqual(check.pragma('foreign_key_check'), []);
   check.close();
 });

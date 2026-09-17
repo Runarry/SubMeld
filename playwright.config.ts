@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests',
-  testMatch: 'browser.spec.mjs',
+  testMatch: ['browser.spec.mjs', 'node-tests.browser.mjs'],
   outputDir: '.cache/browser-results',
   workers: 1,
   retries: 0,

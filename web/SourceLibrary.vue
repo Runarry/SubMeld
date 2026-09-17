@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { ApiError } from './api';
+import NodeTestSummary from './NodeTestSummary.vue';
+import { useNodeTests } from './nodeTests';
+import type { TestSubject } from '../server/shared/node-tests';
 import { formatTime } from './format';
 import ListPagination from './ui/ListPagination.vue';
 import ModalDialog from './ui/ModalDialog.vue';
@@ -39,6 +42,31 @@ const editing = ref(false),
 const selected = ref<number[]>([]),
   nodePage = ref(0),
   diagnostics = ref<Diagnostic[]>([]);
+function subject(source: Source, nodeIndex: number): TestSubject {
+  return {
+    kind: 'source',
+    id: source.id,
+    revision: source.revision,
+    snapshotVersion: source.snapshotVersion,
+    nodeIndex,
+  };
+}
+const testing = useNodeTests(() => {
+  const source = published.value;
+  return source
+    ? source.items
+        .slice(nodePage.value * 25, nodePage.value * 25 + 25)
+        .map((item) => subject(source, item.nodeIndex))
+    : [];
+}, props.api);
+const selectedSubjects = () => {
+  const source = published.value;
+  return source
+    ? source.items
+        .filter((item) => selected.value.includes(item.nodeIndex))
+        .map((item) => subject(source, item.nodeIndex))
+    : [];
+};
 let alive = true,
   epoch = 0,
   listTicket = 0,
@@ -95,6 +123,7 @@ async function refresh() {
 }
 function updatePublished(source: Source) {
   if (
+    published.value?.snapshotVersion !== source.snapshotVersion ||
     published.value?.savedAt !== source.savedAt ||
     published.value?.revision !== source.revision
   ) {
@@ -458,6 +487,7 @@ const statusLabel = (value: Source['refresh']) =>
         </div>
         <template v-if="published">
           <h2>已保存的只读节点</h2>
+          <p v-if="testing.error" class="error-note">{{ testing.error }}</p>
           <p class="muted">
             最近成功：{{
               published.savedAt ? formatTime(published.savedAt) : '尚无成功快照'
@@ -493,9 +523,19 @@ const statusLabel = (value: Source['refresh']) =>
                     >{{ item.draft?.protocol.toUpperCase() }} · {{ item.draft?.server }}:{{
                       item.draft?.port
                     }}</small
-                  ><small v-for="(d, i) in item.diagnostics" :key="i">{{ d.message }}</small></span
-                >
+                  ><small v-for="(d, i) in item.diagnostics" :key="i">{{ d.message }}</small
+                  ><NodeTestSummary
+                    :results="testing.forSubject(subject(published, item.nodeIndex))"
+                    @show="testing.show([subject(published, item.nodeIndex)])"
+                /></span>
               </label>
+              <button
+                type="button"
+                :disabled="testing.starting"
+                @click="testing.start([subject(published, item.nodeIndex)])"
+              >
+                测试来源节点
+              </button>
             </li>
           </ul>
           <div class="pagination">
@@ -512,6 +552,13 @@ const statusLabel = (value: Source['refresh']) =>
             </button>
           </div>
           <div class="toolbar">
+            <button
+              type="button"
+              :disabled="testing.starting || !selected.length"
+              @click="testing.start(selectedSubjects())"
+            >
+              测试所选来源节点
+            </button>
             <button type="button" :disabled="!selected.length" @click="copy">
               复制所选为本地节点
             </button>

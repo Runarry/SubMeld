@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ApiError } from './api';
+import NodeTestSummary from './NodeTestSummary.vue';
+import { useNodeTests } from './nodeTests';
+import type { TestSubject } from '../server/shared/node-tests';
 import ModalDialog from './ui/ModalDialog.vue';
 import ListPagination from './ui/ListPagination.vue';
 import StatusBadge from './ui/StatusBadge.vue';
@@ -23,6 +26,17 @@ const rows = ref<Chain[]>([]),
   total = ref(0),
   busy = ref(false),
   message = ref('');
+const selected = ref<string[]>([]);
+const subject = (chain: Chain): TestSubject => ({
+  kind: 'chain',
+  id: chain.id,
+  revision: chain.revision,
+  entryRevision: chain.entry.revision,
+  exitRevision: chain.exit.revision,
+});
+const testing = useNodeTests(() => rows.value.map(subject), props.api);
+const selectedSubjects = () =>
+  rows.value.filter((chain) => selected.value.includes(chain.id)).map(subject);
 const form = ref<ChainConfig | null>(null),
   baseline = ref<Chain | null>(null),
   conflict = ref(false);
@@ -72,6 +86,7 @@ async function refresh() {
   const result = chainListSchema.parse(await props.api('/api/chains?page=' + page.value));
   if (!alive || ticket !== listTicket) return;
   rows.value = result.chains;
+  selected.value = selected.value.filter((id) => rows.value.some((chain) => chain.id === id));
   total.value = result.total;
   if (!rows.value.length && page.value) {
     page.value--;
@@ -192,6 +207,13 @@ onMounted(() => {
         <p class="muted">将两个本地节点组合为一条两跳链，再加入订阅方案。原节点修改会同步生效。</p>
       </div>
       <div class="toolbar">
+        <button
+          type="button"
+          :disabled="locked || testing.starting || !selected.length"
+          @click="testing.start(selectedSubjects())"
+        >
+          测试所选链
+        </button>
         <button type="button" :disabled="locked" @click="act(refresh)">刷新链式代理</button>
         <button type="button" class="primary" :disabled="locked" @click="startNew">
           新建链式代理
@@ -199,9 +221,17 @@ onMounted(() => {
       </div>
     </div>
     <p v-if="message && !form" role="status" class="notice">{{ message }}</p>
+    <p v-if="testing.error" class="error-note">{{ testing.error }}</p>
     <p v-if="!rows.length" class="empty-state">还没有链式代理。</p>
     <ul v-else class="library-list">
       <li v-for="chain in rows" :key="chain.id">
+        <input
+          v-model="selected"
+          type="checkbox"
+          :value="chain.id"
+          :disabled="locked"
+          :aria-label="'选择测试链 ' + chain.name"
+        />
         <span class="node-name"
           >{{ chain.name }}
           <small>本机 → {{ chain.entry.name }} → {{ chain.exit.name }} → 目标</small>
@@ -212,8 +242,19 @@ onMounted(() => {
               :label="!chain.enabled ? '禁用' : chain.available ? '启用' : '成员已停用'"
             />
           </small>
+          <NodeTestSummary
+            :results="testing.forSubject(subject(chain))"
+            @show="testing.show([subject(chain)])"
+          />
         </span>
         <div class="toolbar">
+          <button
+            type="button"
+            :disabled="locked || testing.starting"
+            @click="testing.start([subject(chain)])"
+          >
+            测试整条链
+          </button>
           <button type="button" :disabled="locked" @click="edit(chain.id)">编辑链</button>
           <button type="button" :disabled="locked" @click="toggle(chain)">
             {{ chain.enabled ? '禁用链' : '启用链' }}

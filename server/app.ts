@@ -12,6 +12,9 @@ import type { ChainStore } from './chains.js';
 import type { SourceStore } from './sources.js';
 import type { SubscriptionStore } from './subscriptions.js';
 import type { Publisher } from './publisher.js';
+import type { NodeTester } from './node-tests.js';
+import { testSelectionSchema } from './shared/node-tests.js';
+import { renderTargetSchema } from './shared/contracts.js';
 import { outputFormatSchema } from './shared/subscriptions.js';
 import type { Converter } from './converter/pool.js';
 import { AppError, publicError } from './errors.js';
@@ -26,6 +29,7 @@ import {
 
 export type AppOptions = {
   webRoot?: string;
+  tester?: NodeTester;
   nodes: NodeStore;
   chains: ChainStore;
   sources: SourceStore;
@@ -37,6 +41,7 @@ export type AppOptions = {
 };
 export function createApp({
   webRoot,
+  tester,
   config,
   auth,
   converter,
@@ -58,6 +63,8 @@ export function createApp({
     '/api/chains',
     '/api/sources',
     '/api/subscriptions',
+    '/api/node-tests',
+    '/api/kernels',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -75,9 +82,14 @@ export function createApp({
   app.use('/api/*', async (context, next) => {
     const managed =
       writes.has(context.req.path) ||
-      ['/api/nodes/', '/api/chains/', '/api/sources/', '/api/subscriptions/'].some((prefix) =>
-        context.req.path.startsWith(prefix),
-      );
+      [
+        '/api/nodes/',
+        '/api/chains/',
+        '/api/sources/',
+        '/api/subscriptions/',
+        '/api/node-tests/',
+        '/api/kernels/',
+      ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
       let validOrigin = false;
@@ -227,6 +239,48 @@ export function createApp({
       ),
     };
   }
+  function testing() {
+    if (!tester) throw new AppError('TEST_UNAVAILABLE', '节点测试服务尚未就绪。', 503);
+    return tester;
+  }
+  async function empty(request: Request) {
+    if (!z.strictObject({}).safeParse(await readJson(request, 1024)).success)
+      throw new AppError('INVALID_REQUEST', '此操作不接受额外参数。', 400);
+  }
+  app.get('/api/node-tests/settings', (c) => c.json(testing().store.settings()));
+  app.patch('/api/node-tests/settings', async (c) =>
+    c.json(testing().store.updateSettings(await readJson(c.req.raw, 8192))),
+  );
+  app.post('/api/node-tests', async (c) =>
+    c.json(testing().start(await readJson(c.req.raw, MAX_BYTES)), 202),
+  );
+  app.get('/api/node-tests/current', (c) =>
+    c.json(testing().current(listPage(c.req.query('page')))),
+  );
+  app.post('/api/node-tests/results/query', async (c) => {
+    const selection = testSelectionSchema.safeParse(await readJson(c.req.raw, MAX_BYTES));
+    if (!selection.success) throw new AppError('INVALID_REQUEST', '测试结果查询对象无效。', 400);
+    const runner = testing();
+    return c.json(runner.store.results(selection.data.subjects, runner.kernels.versions()));
+  });
+  app.get('/api/node-tests/:id', (c) =>
+    c.json(testing().get(c.req.param('id'), listPage(c.req.query('page')))),
+  );
+  app.post('/api/node-tests/:id/cancel', async (c) => {
+    await empty(c.req.raw);
+    return c.json(testing().cancel(c.req.param('id')));
+  });
+  app.get('/api/kernels', (c) => c.json(testing().kernels.status()));
+  app.post('/api/kernels/check', async (c) => {
+    await empty(c.req.raw);
+    return c.json(await testing().kernels.check());
+  });
+  app.post('/api/kernels/:target/update', async (c) => {
+    await empty(c.req.raw);
+    const target = renderTargetSchema.safeParse(c.req.param('target'));
+    if (!target.success) throw new AppError('INVALID_REQUEST', '内核目标无效。', 400);
+    return c.json(testing().kernels.update(target.data), 202);
+  });
   app.get('/api/chains', (c) => c.json(chains.list(listPage(c.req.query('page')))));
   app.post('/api/chains', async (c) =>
     c.json(chains.create(await readJson(c.req.raw, 16 * 1024)), 201),

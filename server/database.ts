@@ -6,6 +6,7 @@ import { createSubscriptionStore } from './subscriptions.js';
 import { chmodSync, lstatSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { createNodeTestStore } from './node-test-store.js';
 
 export function openSettings(dataDir: string, development: boolean) {
   if (process.platform === 'win32' && !development)
@@ -47,7 +48,8 @@ export function openSettings(dataDir: string, development: boolean) {
       version !== 3 &&
       version !== 4 &&
       version !== 5 &&
-      version !== 6
+      version !== 6 &&
+      version !== 7
     )
       throw new Error('数据库版本不受支持，停止启动。');
     if (version === 0)
@@ -119,7 +121,7 @@ export function openSettings(dataDir: string, development: boolean) {
         db.pragma('foreign_keys = ON');
       }
     }
-    if (version !== 5 && version !== 6) {
+    if (version !== 5 && version !== 6 && version !== 7) {
       db.transaction(() => {
         if (
           !db
@@ -133,7 +135,7 @@ export function openSettings(dataDir: string, development: boolean) {
         db?.pragma('user_version = 5');
       })();
     }
-    if (version !== 6) {
+    if (version !== 6 && version !== 7) {
       db.transaction(() => {
         db?.exec(`CREATE TABLE chains (
           id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -167,6 +169,26 @@ export function openSettings(dataDir: string, development: boolean) {
         db?.pragma('user_version = 6');
       })();
     }
+    if (version !== 7)
+      db.transaction(() => {
+        if (
+          !db
+            ?.prepare("SELECT 1 FROM pragma_table_info('sources') WHERE name='snapshot_version'")
+            .get()
+        ) {
+          db?.exec(
+            'ALTER TABLE sources ADD COLUMN snapshot_version INTEGER NOT NULL DEFAULT 0; UPDATE sources SET snapshot_version=1 WHERE snapshot_json IS NOT NULL;',
+          );
+        }
+        db?.exec(`CREATE TABLE IF NOT EXISTS node_test_results (
+        key TEXT PRIMARY KEY,
+        node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+        source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+        chain_id TEXT REFERENCES chains(id) ON DELETE CASCADE,
+        result_json TEXT NOT NULL,
+        CHECK((node_id IS NOT NULL)+(source_id IS NOT NULL)+(chain_id IS NOT NULL)=1)
+      ); CREATE INDEX IF NOT EXISTS node_test_source ON node_test_results(source_id); PRAGMA user_version=7;`);
+      })();
     if (process.platform !== 'win32') {
       for (const file of readdirSync(dataDir))
         if (file.startsWith('submeld.sqlite') || file.startsWith('instance.lock.sqlite'))
@@ -175,10 +197,13 @@ export function openSettings(dataDir: string, development: boolean) {
     const database = db;
     const subscriptions = createSubscriptionStore(database);
     const nodes = createNodeStore(database, subscriptions);
+    const chains = createChainStore(database, nodes, subscriptions);
+    const sources = createSourceStore(database, subscriptions);
     return {
       nodes,
-      chains: createChainStore(database, nodes, subscriptions),
-      sources: createSourceStore(database, subscriptions),
+      chains,
+      sources,
+      nodeTests: createNodeTestStore(database, nodes, chains, sources),
       subscriptions,
       getPasswordHash(): string | undefined {
         const row: unknown = database

@@ -7,6 +7,9 @@ import ListPagination from './ui/ListPagination.vue';
 import ModalDialog from './ui/ModalDialog.vue';
 import StatusBadge from './ui/StatusBadge.vue';
 import { ApiError } from './api';
+import NodeTestSummary from './NodeTestSummary.vue';
+import { useNodeTests } from './nodeTests';
+import type { TestSubject } from '../server/shared/node-tests';
 import {
   blankDraft,
   protocols,
@@ -28,6 +31,14 @@ const rows = ref<NodeSummary[]>([]),
   total = ref(0),
   page = ref(0),
   selected = ref<string[]>([]);
+const subject = (node: NodeSummary): TestSubject => ({
+  kind: 'node',
+  id: node.id,
+  revision: node.revision,
+});
+const testing = useNodeTests(() => rows.value.map(subject), props.api);
+const selectedSubjects = () =>
+  rows.value.filter((node) => selected.value.includes(node.id)).map(subject);
 const busy = ref(false),
   message = ref(''),
   conflict = ref(false);
@@ -59,7 +70,7 @@ async function refresh() {
   rows.value = result.nodes;
   total.value = result.total;
   chainRefresh.value++;
-  selected.value = selected.value.filter((id) => rows.value.some((n) => n.id === id && n.enabled));
+  selected.value = selected.value.filter((id) => rows.value.some((n) => n.id === id));
 }
 async function act(action: () => Promise<void>) {
   if (busy.value) return;
@@ -199,7 +210,15 @@ onMounted(() => void act(refresh));
       <button type="button" :disabled="locked" @click="act(refresh)">刷新列表</button>
     </div>
     <p v-if="message" role="status" class="notice">{{ message }}</p>
+    <p v-if="testing.error" class="error-note">{{ testing.error }}</p>
     <div class="toolbar">
+      <button
+        type="button"
+        :disabled="locked || testing.starting || !selected.length"
+        @click="testing.start(selectedSubjects())"
+      >
+        测试所选本地节点
+      </button>
       <label
         >新建协议<select v-model="newProtocol" :disabled="locked">
           <option v-for="p in protocols" :key="p" :value="p">{{ p.toUpperCase() }}</option>
@@ -216,7 +235,15 @@ onMounted(() => void act(refresh));
       >
         导入节点
       </button>
-      <button type="button" :disabled="locked || !selected.length" @click="load">
+      <button
+        type="button"
+        :disabled="
+          locked ||
+          !selected.length ||
+          rows.some((node) => selected.includes(node.id) && !node.enabled)
+        "
+        @click="load"
+      >
         载入所选到工作台
       </button>
     </div>
@@ -231,7 +258,7 @@ onMounted(() => void act(refresh));
               v-model="selected"
               type="checkbox"
               :value="node.id"
-              :disabled="locked || !node.enabled"
+              :disabled="locked"
               :aria-label="'选择本地节点 ' + node.name"
             />
             <span class="node-name"
@@ -241,9 +268,19 @@ onMounted(() => void act(refresh));
                 <StatusBadge
                   :tone="node.enabled ? 'ok' : 'off'"
                   :label="node.enabled ? '启用' : '禁用'" /></small
-            ></span>
+              ><NodeTestSummary
+                :results="testing.forSubject(subject(node))"
+                @show="testing.show([subject(node)])"
+            /></span>
           </label>
           <div class="toolbar" @click.stop>
+            <button
+              type="button"
+              :disabled="locked || testing.starting"
+              @click="testing.start([subject(node)])"
+            >
+              测试节点
+            </button>
             <button type="button" :disabled="locked" @click="edit(node.id)">编辑</button
             ><button type="button" :disabled="locked" @click="toggle(node)">
               {{ node.enabled ? '禁用' : '启用' }}</button

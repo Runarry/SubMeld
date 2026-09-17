@@ -8,6 +8,8 @@ import { Auth } from './auth.js';
 import { Converter } from './converter/pool.js';
 import { Publisher } from './publisher.js';
 import { SourceRefresher } from './source-refresher.js';
+import { KernelManager } from './kernels.js';
+import { NodeTester } from './node-tests.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -41,10 +43,14 @@ async function main() {
     converter,
   );
   const refresher = new SourceRefresher(settings.sources, converter);
+  const kernels = new KernelManager(config.dataDir);
+  const tester = new NodeTester(settings.nodeTests, kernels, converter, config.dataDir);
   let app: ReturnType<typeof createApp>;
   try {
+    await kernels.initialize();
     app = createApp({
       webRoot,
+      tester,
       config,
       auth,
       converter,
@@ -57,6 +63,8 @@ async function main() {
     publisher.start();
     refresher.start();
   } catch (error) {
+    await tester.close();
+    await kernels.close();
     await refresher.close();
     await publisher.close();
     await converter.close();
@@ -74,6 +82,8 @@ async function main() {
     closing = true;
     server.close();
     if ('closeAllConnections' in server) server.closeAllConnections();
+    await tester.close();
+    await kernels.close();
     await refresher.close();
     await publisher.close();
     await converter.close();

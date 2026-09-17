@@ -36,7 +36,7 @@ test('settings migrate once, preserve password hashes and enforce single instanc
     assert.equal(reopened.getPasswordHash(), hash);
     reopened.close();
     const db = new Database(join(dir.path, 'submeld.sqlite'));
-    assert.equal(db.pragma('user_version', { simple: true }), 6);
+    assert.equal(db.pragma('user_version', { simple: true }), 7);
     assert.deepEqual(
       db
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
@@ -51,6 +51,7 @@ test('settings migrate once, preserve password hashes and enforce single instanc
         'subscription_inputs',
         'artifacts',
         'chains',
+        'node_test_results',
       ].sort(),
     );
     db.close();

@@ -9,6 +9,7 @@ import { items } from '../tests/fixtures.mjs';
 import { renderFixtures } from '../tests/render-fixtures.mjs';
 import { chainFixtures } from '../tests/chain-fixtures.mjs';
 import { checkChainConnections } from '../tests/chain-connections.mjs';
+import { checkNodeTestConnections } from '../tests/node-test-connections.mjs';
 const locks = JSON.parse(
   await readFile(new URL('../tests/kernels.lock.json', import.meta.url), 'utf8'),
 );
@@ -97,3 +98,5 @@ for (const [target, lock] of Object.entries(locks)) {
 }
 
 await checkChainConnections(binaries, results);
+
+await checkNodeTestConnections(binaries, results, locks);

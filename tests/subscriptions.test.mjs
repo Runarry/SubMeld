@@ -385,7 +385,7 @@ test('P3 schema 2 migration, restart, engine changes and stopped restore preserv
   publisher = undefined;
   settings = undefined;
   const db = new Database(join(temp.dir, 'submeld.sqlite'));
-  assert.equal(db.pragma('user_version', { simple: true }), 6);
+  assert.equal(db.pragma('user_version', { simple: true }), 7);
   assert.equal(
     db.prepare('SELECT token_hash FROM subscriptions').get().token_hash,
     createHash('sha256').update(sub.token).digest('hex'),

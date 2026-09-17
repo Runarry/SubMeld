@@ -1,18 +1,22 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onBeforeUnmount, ref } from 'vue';
+import { nextTick, onMounted, onBeforeUnmount, ref, provide } from 'vue';
 import LoginView from './LoginView.vue';
 import NodeLibrary from './NodeLibrary.vue';
+import NodeTestsPage from './NodeTestsPage.vue';
+import { testActionsKey } from './nodeTests';
+import { testBatchSchema, type TestSubject } from '../server/shared/node-tests';
 import SourceLibrary from './SourceLibrary.vue';
 import SubscriptionLibrary from './SubscriptionLibrary.vue';
 import WorkbenchPage from './WorkbenchPage.vue';
 import { ApiError, request } from './api';
 import type { WorkbenchItem } from '../server/shared/contracts';
 
-type View = 'workbench' | 'library' | 'sources' | 'subscriptions';
+type View = 'workbench' | 'library' | 'sources' | 'subscriptions' | 'tests';
 const nav = [
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '订阅方案' },
   { view: 'sources' as const, hash: 'sources', label: '来源管理' },
   { view: 'library' as const, hash: 'nodes', label: '本地节点' },
+  { view: 'tests' as const, hash: 'tests', label: '节点测试' },
   { view: 'workbench' as const, hash: 'workbench', label: '转换工作台' },
 ];
 const authenticated = ref(false);
@@ -21,10 +25,30 @@ const password = ref('');
 const view = ref<View | null>('subscriptions');
 const busy = ref('');
 const message = ref('');
+const testMessage = ref('');
+const testSubjects = ref<TestSubject[]>([]);
+provide(testActionsKey, {
+  async start(subjects) {
+    const batch = testBatchSchema.parse(await api('/api/node-tests', { subjects }));
+    testSubjects.value = [];
+    testMessage.value =
+      '已开始测试 ' +
+      subjects.length +
+      ' 项，共 ' +
+      batch.total +
+      ' 组内核结果；离开页面后继续运行。';
+  },
+  show(subjects = []) {
+    testSubjects.value = subjects;
+    testMessage.value = '';
+    setView('tests');
+  },
+});
 const workbench = ref<{ appendNodes: (items: WorkbenchItem[]) => void } | null>(null);
 
 function parseHash(): View {
   const key = location.hash.replace(/^#\/?/, '');
+  if (key === 'tests') return 'tests';
   if (key === 'sources') return 'sources';
   if (key === 'nodes' || key === 'library') return 'library';
   if (key === 'workbench') return 'workbench';
@@ -46,6 +70,8 @@ function onHashChange() {
 }
 function lockWorkspace() {
   authenticated.value = false;
+  testSubjects.value = [];
+  testMessage.value = '';
   password.value = '';
   message.value = '';
   view.value = 'subscriptions';
@@ -155,6 +181,20 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       <a class="source-link" href="/source.tar.gz">对应版本源码（AGPL）</a>
     </div>
     <main class="content">
+      <p v-if="testMessage" class="notice" role="status">
+        {{ testMessage }}
+        <button
+          type="button"
+          @click="
+            testSubjects = [];
+            testMessage = '';
+            setView('tests');
+          "
+        >
+          查看测试进度
+        </button>
+      </p>
+      <NodeTestsPage v-if="view === 'tests'" :api="api" :subjects="testSubjects" />
       <WorkbenchPage v-show="view === 'workbench'" ref="workbench" :api="api" />
       <NodeLibrary v-if="view === 'library'" :api="api" @load="openWorkbench" />
       <SourceLibrary v-if="view === 'sources'" :api="api" @open-nodes="setView('library')" />

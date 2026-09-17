@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 mkdirSync('dist', { recursive: true });
 // Explicit roots exclude credentials, dependencies, caches and runtime data.
@@ -32,6 +32,11 @@ const sources = [
   'vendor',
   'docs',
 ];
+if (existsSync('dist/kernel-sources/manifest.json'))
+  sources.push(
+    'dist/kernel-sources/manifest.json',
+    ...['mihomo', 'singbox', 'xray'].map((target) => 'dist/kernel-sources/' + target + '.tar.gz'),
+  );
 const result = spawnSync('tar', ['-czf', 'dist/submeld-source.tar.gz', '--', ...sources], {
   stdio: 'inherit',
 });

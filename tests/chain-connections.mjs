@@ -29,7 +29,7 @@ async function closeUdp(socket) {
     if (error.code !== 'ERR_SOCKET_DGRAM_NOT_RUNNING') throw error;
   }
 }
-async function dualPort() {
+export async function dualPort() {
   for (let attempt = 0; attempt < 20; attempt++) {
     const udp = createSocket('udp4'),
       tcp = createTcpServer();
@@ -51,7 +51,7 @@ async function dualPort() {
   }
   throw new Error('No loopback TCP/UDP port available');
 }
-async function start(binary, target, config, path) {
+export async function start(binary, target, config, path) {
   await mkdir(path, { recursive: true });
   const file = join(path, target === 'mihomo' ? 'config.yaml' : 'config.json');
   await writeFile(file, target === 'mihomo' ? stringify(config) : JSON.stringify(config));

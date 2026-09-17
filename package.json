@@ -18,7 +18,7 @@
     ]
   },
   "scripts": {
-    "dev": "pnpm build && concurrently --kill-others --names server,web \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev": "pnpm build && pnpm cores:prepare && concurrently --kill-others --names server,web \"pnpm dev:server\" \"pnpm dev:web\"",
     "dev:server": "node --env-file-if-exists=.env --watch --import tsx server/index.ts --dev",
     "dev:web": "vite",
     "build": "pnpm build:converter && vite build && tsc -p tsconfig.server.json && node scripts/package-source.mjs",
@@ -32,8 +32,9 @@
     "build:converter": "node scripts/build-converter.mjs",
     "admin:init": "node --env-file-if-exists=.env --import tsx server/cli.ts init",
     "admin:reset-password": "node --env-file-if-exists=.env --import tsx server/cli.ts reset-password",
-    "test:browser": "pnpm build && playwright test",
-    "test:cores": "node scripts/check-cores.mjs"
+    "test:browser": "pnpm build && pnpm cores:prepare && playwright test",
+    "test:cores": "node scripts/check-cores.mjs",
+    "cores:prepare": "node scripts/prepare-cores.mjs"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",

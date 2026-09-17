@@ -94,6 +94,7 @@ export const sourceSummarySchema = z.strictObject({
   format: formatSchema,
   nodeCount: z.number().int().nonnegative(),
   savedAt: z.string().nullable(),
+  snapshotVersion: z.number().int().nonnegative(),
   lastAttemptAt: z.string().nullable(),
   error: sourceErrorSchema.nullable(),
   refresh: refreshStatusSchema,

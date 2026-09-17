@@ -557,7 +557,7 @@ test('P4 schema 3 migration preserves source IDs, references, password, snapshot
   assert.equal(restarted.subscriptions.read(token, 'uri', ENGINE_VERSION).content, text);
   restarted.close();
   const check = new Database(join(f.directory, 'submeld.sqlite'));
-  assert.equal(check.pragma('user_version', { simple: true }), 6);
+  assert.equal(check.pragma('user_version', { simple: true }), 7);
   assert.deepEqual(check.pragma('foreign_key_check'), []);
   check.close();
   cpSync(backup, join(f.directory, 'submeld.sqlite'));
