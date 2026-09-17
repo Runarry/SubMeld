@@ -38,6 +38,22 @@ const form = ref<SubscriptionConfig | null>(null),
   status = ref<SubscriptionDetail | null>(null);
 const urls = ref<Partial<Record<OutputFormat, string>>>({}),
   preview = ref<Artifact | null>(null);
+const pane = ref<'settings' | 'publish'>('settings');
+const urlOrder: OutputFormat[] = [
+  'uri',
+  'mihomo',
+  'base64',
+  'mihomo-proxies',
+  'singbox',
+  'singbox-outbounds',
+  'xray',
+  'xray-outbounds',
+];
+const urlEntries = computed(() =>
+  urlOrder
+    .filter((format) => urls.value[format])
+    .map((format) => [format, urls.value[format] ?? ''] as const),
+);
 const inputKind = ref<'source' | 'node'>('source'),
   inputPage = ref(0),
   inputTotal = ref(0),
@@ -160,6 +176,13 @@ watch(inputKind, () => {
   inputPage.value = 0;
   void act(loadCandidates);
 });
+function closeForm() {
+  epoch++;
+  clearTransient();
+  form.value = null;
+  baseline.value = null;
+  status.value = null;
+}
 function startNew() {
   epoch++;
   clearTransient();
@@ -168,15 +191,17 @@ function startNew() {
   status.value = null;
   conflict.value = false;
   message.value = '';
+  pane.value = 'settings';
   void act(loadCandidates);
 }
-async function edit(id: string) {
+async function edit(id: string, nextPane: 'settings' | 'publish' = 'publish') {
   const current = ++epoch;
   clearTransient();
   await act(async () => {
     const value = subscriptionDetailSchema.parse(await props.api('/api/subscriptions/' + id));
     if (!alive || current !== epoch) return;
     apply(value);
+    pane.value = nextPane;
     await loadCandidates();
     if (alive) pollLater();
   });
@@ -204,6 +229,7 @@ async function save() {
       if (!alive || current !== epoch) return;
       apply(value.subscription);
       urls.value = value.urls;
+      pane.value = 'publish';
     }
     pollLater();
     await refresh();
@@ -257,13 +283,7 @@ async function remove(row: SubscriptionSummary) {
   await act(async () => {
     await props.api('/api/subscriptions/' + row.id, { revision: row.revision }, 'DELETE');
     if (!alive) return;
-    if (baseline.value?.id === row.id) {
-      epoch++;
-      clearTransient();
-      baseline.value = null;
-      status.value = null;
-      form.value = null;
-    }
+    if (baseline.value?.id === row.id) closeForm();
     await refresh();
   });
 }
@@ -297,6 +317,7 @@ async function resetToken() {
     baseline.value = value.subscription;
     status.value = value.subscription;
     urls.value = value.urls;
+    pane.value = 'publish';
     pollLater();
     await refresh();
   });
@@ -355,7 +376,7 @@ onMounted(() => void act(refresh));
     <p v-if="message" class="notice" role="status">{{ message }}</p>
     <div class="library-main">
       <ul v-if="rows.length" class="library-list">
-        <li v-for="row in rows" :key="row.id">
+        <li v-for="row in rows" :key="row.id" @click="edit(row.id)">
           <span class="node-name"
             >{{ row.name
             }}<small class="list-meta">
@@ -368,11 +389,11 @@ onMounted(() => void act(refresh));
               }}</span>
             </small></span
           >
-          <div class="toolbar">
+          <div class="toolbar" @click.stop>
             <button type="button" :disabled="busy" @click="edit(row.id)">编辑方案</button
             ><button type="button" :disabled="busy" @click="toggle(row)">
               {{ row.enabled ? '停用方案' : '启用方案' }}</button
-            ><button type="button" class="danger" :disabled="busy" @click="remove(row)">
+            ><button type="button" class="danger linkish" :disabled="busy" @click="remove(row)">
               删除方案
             </button>
           </div>
@@ -397,41 +418,132 @@ onMounted(() => void act(refresh));
       :label="baseline ? '编辑订阅方案' : '新建订阅方案'"
       wide
       :dismissible="!busy"
-      @close="
-        epoch++;
-        clearTransient();
-        form = null;
-        baseline = null;
-        status = null;
-      "
+      @close="closeForm"
     >
-      <div class="subscription-detail">
-        <section
-          v-if="Object.keys(urls).length"
-          class="node-import-panel editor-fields token-banner"
-          aria-label="一次性私人地址"
+      <template v-if="message" #banner>
+        <p class="notice" role="status">{{ message }}</p>
+      </template>
+      <template #tabs>
+        <button
+          v-if="baseline"
+          type="button"
+          :class="{ active: pane === 'publish' }"
+          @click="pane = 'publish'"
         >
-          <h2>请保存私人地址</h2>
-          <p class="warning-note">
-            只在创建或重置时展示。离开本页后无法再次查看；丢失可重置，旧地址会失效。持有地址即可读取对应方案。
-          </p>
-          <label v-for="(url, f) in urls" :key="f"
-            >{{ outputLabels[f] }} 订阅地址<input
-              :value="url"
-              readonly
-              :aria-label="outputLabels[f] + ' 订阅地址'"
-            /><button type="button" :disabled="busy" @click="copy(url ?? '')">
-              复制 {{ outputLabels[f] }} 地址
-            </button></label
+          发布与地址
+        </button>
+        <button type="button" :class="{ active: pane === 'settings' }" @click="pane = 'settings'">
+          方案设置
+        </button>
+      </template>
+      <div class="subscription-detail">
+        <div v-show="pane === 'publish'">
+          <section
+            v-if="urlEntries.length"
+            class="node-import-panel editor-fields token-banner"
+            aria-label="一次性私人地址"
           >
-          <button type="button" @click="urls = {}">已保存，隐藏地址</button>
-        </section>
-        <fieldset :disabled="busy" class="library-editor editor-fields">
+            <h2>请保存私人地址</h2>
+            <p class="warning-note">
+              只在创建或重置时展示。离开本页后无法再次查看；丢失可重置，旧地址会失效。持有地址即可读取对应方案。
+            </p>
+            <div v-for="[f, url] in urlEntries" :key="f" class="address-row">
+              <span>{{ outputLabels[f] }}</span>
+              <input :value="url" readonly :aria-label="outputLabels[f] + ' 订阅地址'" />
+              <button type="button" :disabled="busy" @click="copy(url)">
+                复制 {{ outputLabels[f] }} 地址
+              </button>
+            </div>
+            <button type="button" @click="urls = {}">已保存，隐藏地址</button>
+          </section>
+          <section
+            v-if="status && baseline"
+            class="node-import-panel editor-fields"
+            aria-label="发布状态"
+          >
+            <div class="section-title">
+              <h2>已保存方案的发布状态</h2>
+              <span role="status">{{
+                status.generation === 'running'
+                  ? '正在生成'
+                  : status.generation === 'queued'
+                    ? '等待生成'
+                    : '生成任务已结束'
+              }}</span>
+            </div>
+            <p class="muted">下列内容来自已保存设置；未提交的编辑尚未发布。</p>
+            <div class="toolbar">
+              <button type="button" :disabled="busy" @click="act(refreshSelectedStatus)">
+                刷新发布状态</button
+              ><button
+                type="button"
+                :disabled="busy || !status.enabled || status.generation !== 'idle'"
+                @click="generate"
+              >
+                更新订阅</button
+              ><button type="button" :disabled="busy" @click="resetToken">重置私人地址</button>
+            </div>
+            <article
+              v-for="artifact in status.artifacts"
+              :key="artifact.format"
+              class="artifact-status"
+            >
+              <h3>
+                {{ outputLabels[artifact.format] }} ·
+                {{ artifact.readable ? '可读取' : '不可读取' }}
+              </h3>
+              <p class="muted">
+                最近成功：{{ artifact.generatedAt ? formatTime(artifact.generatedAt) : '尚无'
+                }}<template v-if="artifact.counts">
+                  · 输入 {{ artifact.counts.input }} / 输出 {{ artifact.counts.output }} / 过滤
+                  {{ artifact.counts.filtered }}</template
+                >
+              </p>
+              <p v-if="artifact.error" class="error-note">
+                {{ artifact.error.message
+                }}{{ artifact.readable ? ' 当前仍提供最近成功结果。' : '' }}
+              </p>
+              <p
+                v-for="(d, i) in [...artifact.diagnostics, ...(artifact.error?.diagnostics ?? [])]"
+                :key="i"
+                :class="d.level === 'error' ? 'error-note' : 'warning-note'"
+              >
+                {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
+              </p>
+              <button
+                type="button"
+                :disabled="busy || !artifact.readable"
+                @click="showArtifact(artifact.format)"
+              >
+                预览 {{ outputLabels[artifact.format] }}
+              </button>
+            </article>
+            <template v-if="preview"
+              ><h3>已发布内容：{{ outputLabels[preview.format] }}</h3>
+              <textarea
+                class="output-text"
+                readonly
+                :value="preview.content"
+                aria-label="已发布订阅内容"
+              ></textarea>
+              <div class="toolbar">
+                <button type="button" :disabled="busy" @click="copy(preview.content)">
+                  复制订阅内容</button
+                ><button type="button" @click="download">下载订阅内容</button>
+              </div></template
+            >
+          </section>
+        </div>
+        <fieldset
+          v-show="pane === 'settings'"
+          :disabled="busy"
+          class="library-editor editor-fields"
+        >
           <legend>{{ baseline ? '编辑订阅方案' : '新建订阅方案' }}</legend>
           <p v-if="conflict" class="warning-note">
             服务器已有更新，当前编辑已保留。重新载入会替换未保存内容。
           </p>
-          <button v-if="conflict && baseline" type="button" @click="edit(baseline.id)">
+          <button v-if="conflict && baseline" type="button" @click="edit(baseline.id, 'settings')">
             重新载入方案版本
           </button>
           <label>方案名称<input v-model="form.name" maxlength="512" /></label
@@ -548,99 +660,12 @@ onMounted(() => void act(refresh));
             URI 与 Base64 共用筛选；同一内核完整配置和片段共用筛选。Xray
             不支持的协议或参数会明确报错，请按需调整。
           </p>
-          <div class="toolbar">
-            <button type="button" class="primary" @click="save">保存订阅方案</button
-            ><button
-              type="button"
-              @click="
-                epoch++;
-                clearTransient();
-                form = null;
-                baseline = null;
-                status = null;
-              "
-            >
-              关闭方案编辑
-            </button>
-          </div>
         </fieldset>
-        <section
-          v-if="status && baseline"
-          class="node-import-panel editor-fields"
-          aria-label="发布状态"
-        >
-          <div class="section-title">
-            <h2>已保存方案的发布状态</h2>
-            <span role="status">{{
-              status.generation === 'running'
-                ? '正在生成'
-                : status.generation === 'queued'
-                  ? '等待生成'
-                  : '生成任务已结束'
-            }}</span>
-          </div>
-          <p class="muted">下列内容来自已保存设置；未提交的编辑尚未发布。</p>
-          <div class="toolbar">
-            <button type="button" :disabled="busy" @click="act(refreshSelectedStatus)">
-              刷新发布状态</button
-            ><button
-              type="button"
-              :disabled="busy || !status.enabled || status.generation !== 'idle'"
-              @click="generate"
-            >
-              更新订阅</button
-            ><button type="button" :disabled="busy" @click="resetToken">重置私人地址</button>
-          </div>
-          <article
-            v-for="artifact in status.artifacts"
-            :key="artifact.format"
-            class="artifact-status"
-          >
-            <h3>
-              {{ outputLabels[artifact.format] }} ·
-              {{ artifact.readable ? '可读取' : '不可读取' }}
-            </h3>
-            <p class="muted">
-              最近成功：{{ artifact.generatedAt ? formatTime(artifact.generatedAt) : '尚无'
-              }}<template v-if="artifact.counts">
-                · 输入 {{ artifact.counts.input }} / 输出 {{ artifact.counts.output }} / 过滤
-                {{ artifact.counts.filtered }}</template
-              >
-            </p>
-            <p v-if="artifact.error" class="error-note">
-              {{ artifact.error.message }}{{ artifact.readable ? ' 当前仍提供最近成功结果。' : '' }}
-            </p>
-            <p
-              v-for="(d, i) in [...artifact.diagnostics, ...(artifact.error?.diagnostics ?? [])]"
-              :key="i"
-              :class="d.level === 'error' ? 'error-note' : 'warning-note'"
-            >
-              {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
-            </p>
-            <button
-              type="button"
-              :disabled="busy || !artifact.readable"
-              @click="showArtifact(artifact.format)"
-            >
-              预览 {{ outputLabels[artifact.format] }}
-            </button>
-          </article>
-          <template v-if="preview"
-            ><h3>已发布内容：{{ outputLabels[preview.format] }}</h3>
-            <textarea
-              class="output-text"
-              readonly
-              :value="preview.content"
-              aria-label="已发布订阅内容"
-            ></textarea>
-            <div class="toolbar">
-              <button type="button" :disabled="busy" @click="copy(preview.content)">
-                复制订阅内容</button
-              ><button type="button" @click="download">下载订阅内容</button>
-            </div></template
-          >
-        </section>
       </div>
+      <template #footer>
+        <button type="button" class="primary" :disabled="busy" @click="save">保存订阅方案</button>
+        <button type="button" :disabled="busy" @click="closeForm">关闭方案编辑</button>
+      </template>
     </ModalDialog>
   </section>
 </template>

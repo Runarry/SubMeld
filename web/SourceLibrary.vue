@@ -318,7 +318,7 @@ const statusLabel = (value: Source['refresh']) =>
     <p v-if="message" role="status" class="notice">{{ message }}</p>
     <div class="library-main">
       <ul v-if="rows.length" class="library-list">
-        <li v-for="row in rows" :key="row.id">
+        <li v-for="row in rows" :key="row.id" @click="edit(row.id)">
           <span class="node-name"
             >{{ row.name }}
             <small class="list-meta">
@@ -335,16 +335,15 @@ const statusLabel = (value: Source['refresh']) =>
             </small>
             <small>最近成功：{{ row.savedAt ? formatTime(row.savedAt) : '尚无成功快照' }}</small>
             <small v-if="row.kind === 'remote'"
-              >{{ statusLabel(row.refresh) }} · 最近尝试：{{
+              >最近尝试：{{
                 row.lastAttemptAt ? formatTime(row.lastAttemptAt) : '尚未完成尝试'
               }}</small
             >
-            <small v-if="row.error" class="error-note"
-              >{{ row.error.message
-              }}<span v-if="row.savedAt"> 继续使用上述最近成功内容。</span></small
-            >
+            <p v-if="row.error" class="error-note row-error">
+              {{ row.error.message }}<span v-if="row.savedAt"> 继续使用上述最近成功内容。</span>
+            </p>
           </span>
-          <div class="toolbar">
+          <div class="toolbar" @click.stop>
             <button
               v-if="row.kind === 'remote'"
               type="button"
@@ -357,7 +356,7 @@ const statusLabel = (value: Source['refresh']) =>
             <button type="button" :disabled="busy" @click="toggle(row)">
               {{ row.enabled ? '停用来源' : '启用来源' }}
             </button>
-            <button type="button" class="danger" :disabled="busy" @click="remove(row)">
+            <button type="button" class="danger linkish" :disabled="busy" @click="remove(row)">
               删除来源
             </button>
           </div>
@@ -380,10 +379,13 @@ const statusLabel = (value: Source['refresh']) =>
     <ModalDialog
       v-if="editing"
       :label="(saved ? '编辑' : '新建') + (kind === 'text' ? '文本来源' : '远端来源')"
-      wide
+      :wide="kind === 'remote'"
       :dismissible="!busy"
       @close="clearEditor"
     >
+      <template v-if="message" #banner>
+        <p class="notice" role="status">{{ message }}</p>
+      </template>
       <fieldset :disabled="busy" class="library-editor editor-fields">
         <legend>{{ saved ? '编辑' : '新建' }}{{ kind === 'text' ? '文本' : '远端' }}来源</legend>
         <p v-if="conflict" class="warning-note">
@@ -445,19 +447,14 @@ const statusLabel = (value: Source['refresh']) =>
         >
           {{ d.nodeIndex < 0 ? '输入' : '节点 ' + (d.nodeIndex + 1) }}：{{ d.message }}
         </div>
-        <div class="toolbar">
-          <button type="button" class="primary" @click="save">
-            {{ kind === 'text' ? '解析并保存来源' : '保存远端来源' }}
-          </button>
+        <div v-if="saved?.kind === 'remote'" class="toolbar">
           <button
-            v-if="saved?.kind === 'remote'"
             type="button"
             :disabled="!saved.enabled || published?.refresh !== 'idle'"
             @click="fetchSource(saved)"
           >
             刷新远端来源
           </button>
-          <button type="button" @click="clearEditor">关闭来源编辑</button>
         </div>
         <template v-if="published">
           <h2>已保存的只读节点</h2>
@@ -522,6 +519,12 @@ const statusLabel = (value: Source['refresh']) =>
           </div>
         </template>
       </fieldset>
+      <template #footer>
+        <button type="button" class="primary" :disabled="busy" @click="save">
+          {{ kind === 'text' ? '解析并保存来源' : '保存远端来源' }}
+        </button>
+        <button type="button" :disabled="busy" @click="clearEditor">关闭来源编辑</button>
+      </template>
     </ModalDialog>
   </section>
 </template>

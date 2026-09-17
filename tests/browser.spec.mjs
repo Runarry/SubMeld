@@ -14,6 +14,18 @@ async function login(page, next = 'subscriptions') {
     await expect(page.getByRole('heading', { name: '转换工作台', exact: true })).toBeVisible();
   }
 }
+async function showPlanSettings(page) {
+  const name = page.getByLabel('方案名称', { exact: true });
+  if (await name.isVisible()) return;
+  await page.getByRole('button', { name: '方案设置', exact: true }).click();
+  await expect(name).toBeVisible();
+}
+async function showPlanPublish(page) {
+  const reset = page.getByRole('button', { name: '重置私人地址', exact: true });
+  if (await reset.isVisible()) return;
+  await page.getByRole('button', { name: '发布与地址', exact: true }).click();
+  await expect(reset).toBeVisible();
+}
 test('login, YAML upload, editing, URI/Base64 copy/download, exclusion and logout', async ({
   page,
 }, testInfo) => {
@@ -648,11 +660,13 @@ test('P3 source copy, ordered target filters, address updates, export, reset and
   const downloading = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载订阅内容', exact: true }).click();
   expect(await readFile(await (await downloading).path(), 'utf8')).toBe(output);
+  await showPlanSettings(page);
   await page.getByLabel('名称前缀', { exact: true }).fill('更新-');
   await page.getByRole('button', { name: '保存订阅方案', exact: true }).click();
   await expect
     .poll(async () => decodeURIComponent(await (await request.get(oldUrl)).text()))
     .toContain('更新-');
+  await showPlanPublish(page);
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: '重置私人地址', exact: true }).click();
   await expect(uriField).not.toHaveValue(oldUrl);
@@ -670,6 +684,7 @@ test('P3 source copy, ordered target filters, address updates, export, reset and
   await page.getByRole('button', { name: '订阅方案', exact: true }).click();
   const row = page.locator('.library-list > li').filter({ hasText: subName });
   await row.getByRole('button', { name: '编辑方案', exact: true }).click();
+  await showPlanSettings(page);
   await expect(page.getByLabel('方案名称', { exact: true })).toHaveValue(subName);
   await expect(uriField).toHaveCount(0);
   await page.getByRole('button', { name: '关闭方案编辑', exact: true }).click();
@@ -694,6 +709,7 @@ test('P3 two pages retain source and subscription edits on revision conflicts', 
       .filter({ hasText: name })
       .getByRole('button', { name: '编辑方案', exact: true })
       .click();
+    await showPlanSettings(p);
   }
   await page.getByLabel('名称前缀', { exact: true }).fill('first-');
   await other.getByLabel('名称前缀', { exact: true }).fill('unsaved-');

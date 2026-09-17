@@ -222,8 +222,8 @@ onMounted(() => void act(refresh));
         还没有本地节点。可直接导入、手动新建，或从工作台选择后另存。
       </p>
       <ul v-else class="library-list">
-        <li v-for="node in rows" :key="node.id">
-          <label class="check-label"
+        <li v-for="node in rows" :key="node.id" @click="edit(node.id)">
+          <label class="check-label" @click.stop
             ><input
               v-model="selected"
               type="checkbox"
@@ -240,11 +240,11 @@ onMounted(() => void act(refresh));
                   :label="node.enabled ? '启用' : '禁用'" /></small
             ></span>
           </label>
-          <div class="toolbar">
+          <div class="toolbar" @click.stop>
             <button type="button" :disabled="locked" @click="edit(node.id)">编辑</button
             ><button type="button" :disabled="locked" @click="toggle(node)">
               {{ node.enabled ? '禁用' : '启用' }}</button
-            ><button type="button" class="danger" :disabled="locked" @click="remove(node)">
+            ><button type="button" class="danger linkish" :disabled="locked" @click="remove(node)">
               删除
             </button>
           </div>
@@ -270,19 +270,20 @@ onMounted(() => void act(refresh));
           重新载入服务器版本
         </button>
         <NodeEditor v-model="draft" :persisted="!!baseline" @clear-secret="cleared.add($event)" />
-        <div class="toolbar">
-          <button type="button" class="primary" @click="save">保存本地节点</button
-          ><button
-            type="button"
-            @click="
-              draft = null;
-              baseline = null;
-            "
-          >
-            关闭编辑
-          </button>
-        </div>
       </fieldset>
+      <template #footer>
+        <button type="button" class="primary" :disabled="locked" @click="save">保存本地节点</button>
+        <button
+          type="button"
+          :disabled="locked"
+          @click="
+            draft = null;
+            baseline = null;
+          "
+        >
+          关闭编辑
+        </button>
+      </template>
     </ModalDialog>
     <ModalDialog
       v-if="importing"
