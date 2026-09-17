@@ -1,7 +1,8 @@
 /* global window, document */
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { UUID } from './fixtures.mjs';
+import { UUID, node } from './fixtures.mjs';
+import { parse } from 'yaml';
 import { newSubscription } from '../dist/server/shared/subscriptions.js';
 const password = 'SubMeld-UI-Test-Only-2026';
 async function login(page, next = 'subscriptions') {
@@ -560,7 +561,15 @@ async function p3Fixture(page, name) {
 async function selectP3Input(page, kind, id) {
   if ((await page.getByLabel('输入类型', { exact: true }).inputValue()) !== kind) {
     const loading = page.waitForResponse((r) =>
-      r.url().includes(kind === 'node' ? '/api/nodes?page=' : '/api/sources?page='),
+      r
+        .url()
+        .includes(
+          kind === 'node'
+            ? '/api/nodes?page='
+            : kind === 'chain'
+              ? '/api/chains?page='
+              : '/api/sources?page=',
+        ),
     );
     await page.getByLabel('输入类型', { exact: true }).selectOption(kind);
     await loading;
@@ -571,7 +580,15 @@ async function selectP3Input(page, kind, id) {
     const next = page.getByRole('button', { name: '下一页输入', exact: true });
     await expect(next).toBeEnabled();
     const loading = page.waitForResponse((r) =>
-      r.url().includes(kind === 'node' ? '/api/nodes?page=' : '/api/sources?page='),
+      r
+        .url()
+        .includes(
+          kind === 'node'
+            ? '/api/nodes?page='
+            : kind === 'chain'
+              ? '/api/chains?page='
+              : '/api/sources?page=',
+        ),
     );
     await next.click();
     await loading;
@@ -1000,3 +1017,174 @@ test('P4 late remote details cannot restore URL or authorization after leaving t
   await expect(page.getByLabel('来源 URL', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Authorization', { exact: true })).toHaveValue('');
 });
+
+test('two-hop chains save, swap, publish mixed subscriptions and protect referenced local nodes', async ({
+  page,
+}, testInfo) => {
+  await login(page);
+  const name = '链式流程-' + testInfo.project.name;
+  const padding = await p3Api(page, '/api/nodes', {
+    drafts: Array.from({ length: 26 }, (_, i) => ({ ...node('ss'), name: name + '-分页-' + i })),
+  });
+  const created = await p3Api(page, '/api/nodes', {
+    drafts: [
+      { ...node('ss'), name: name + '-前置' },
+      { ...node('ss'), name: name + '-出口' },
+    ],
+  });
+  const [entry, exit] = created.nodes;
+  let chain, subscription;
+  try {
+    await page.getByRole('button', { name: '本地节点', exact: true }).click();
+    await page.getByRole('button', { name: '新建链式代理', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '新建链式代理', exact: true });
+    await dialog.getByLabel('链名称', { exact: true }).fill(name);
+    await expect(page.getByRole('button', { name: '刷新候选节点', exact: true })).toBeEnabled();
+    for (const [label, id] of [
+      ['前置代理', entry.id],
+      ['出口代理', exit.id],
+    ]) {
+      const previous = page.getByRole('button', { name: '上一页候选节点', exact: true });
+      while (await previous.isEnabled()) {
+        await previous.click();
+        await expect(page.getByRole('button', { name: '刷新候选节点', exact: true })).toBeEnabled();
+      }
+      const option = page.getByLabel(label, { exact: true }).locator('option[value="' + id + '"]');
+      while (!(await option.count())) {
+        await page.getByRole('button', { name: '下一页候选节点', exact: true }).click();
+        await expect(page.getByRole('button', { name: '刷新候选节点', exact: true })).toBeEnabled();
+      }
+      await page.getByLabel(label, { exact: true }).selectOption(id);
+    }
+    await page.getByRole('button', { name: '交换两跳顺序', exact: true }).click();
+    await expect(page.getByLabel('前置代理', { exact: true })).toHaveValue(exit.id);
+    await page.getByRole('button', { name: '交换两跳顺序', exact: true }).click();
+    const saved = page.waitForResponse(
+      (r) => r.url().endsWith('/api/chains') && r.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '保存链式代理', exact: true }).click();
+    chain = await (await saved).json();
+    await expect(page.getByRole('status')).toContainText('链式代理已保存');
+    await expect(page.locator('.chain-path')).toHaveText(
+      '本机 → ' + entry.name + ' → ' + exit.name + ' → 目标',
+    );
+    await page.getByRole('button', { name: '关闭链编辑', exact: true }).click();
+    await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+    await page.getByRole('button', { name: '新建订阅方案', exact: true }).click();
+    await page.getByLabel('方案名称', { exact: true }).fill(name);
+    await selectP3Input(page, 'chain', chain.id);
+    await selectP3Input(page, 'node', entry.id);
+    await expect(page.getByText('URI／Base64 仅发布普通节点', { exact: false })).toBeVisible();
+    await page.getByLabel('Mihomo 完整配置', { exact: true }).check();
+    const issued = page.waitForResponse(
+      (r) => r.url().endsWith('/api/subscriptions') && r.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '保存订阅方案', exact: true }).click();
+    const result = await (await issued).json();
+    subscription = result.subscription;
+    await expect(
+      page.getByRole('button', { name: '预览 Mihomo 完整配置', exact: true }),
+    ).toBeEnabled();
+    await page.getByRole('button', { name: '预览 Mihomo 完整配置', exact: true }).click();
+    const content = await page.getByLabel('已发布订阅内容', { exact: true }).inputValue();
+    const full = parse(content);
+    expect(full['proxy-groups'][0].proxies).toEqual([name, entry.name]);
+    expect(full.proxies[0]['dialer-proxy']).toBe(full.proxies[1].name);
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: '下载订阅内容', exact: true }).click();
+    expect(await readFile(await (await download).path(), 'utf8')).toBe(content);
+    await page.getByRole('button', { name: '预览 URI', exact: true }).click();
+    await expect(page.getByLabel('已发布订阅内容', { exact: true })).toHaveValue(
+      /^ss:\/\/[^\r\n]+$/,
+    );
+    await p3Api(
+      page,
+      '/api/nodes/' + entry.id,
+      { revision: entry.revision, changes: { server: 'updated.example.com' } },
+      'PATCH',
+    );
+    await expect
+      .poll(async () => await (await page.request.get(result.urls.mihomo)).text())
+      .toContain('updated.example.com');
+    await page.getByRole('button', { name: '关闭方案编辑', exact: true }).click();
+    await page.getByRole('button', { name: '本地节点', exact: true }).click();
+    await expect(page.getByRole('button', { name: '刷新列表', exact: true })).toBeEnabled();
+    const row = page.locator('.library-main .library-list > li').filter({ hasText: entry.name });
+    while (!(await row.count())) {
+      await page.getByRole('button', { name: '下一页', exact: true }).click();
+      await expect(page.getByRole('button', { name: '刷新列表', exact: true })).toBeEnabled();
+    }
+    page.once('dialog', (d) => d.accept());
+    await row.getByRole('button', { name: '删除', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('节点正被链式代理引用');
+    await page.screenshot({ path: testInfo.outputPath('chains.png'), fullPage: true });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+  } finally {
+    testInfo.setTimeout(testInfo.timeout + 10000);
+    if (subscription) await removeChainTestRecord(page, '/api/subscriptions/' + subscription.id);
+    if (chain) await removeChainTestRecord(page, '/api/chains/' + chain.id);
+    for (const saved of [...created.nodes, ...padding.nodes])
+      await removeChainTestRecord(page, '/api/nodes/' + saved.id);
+  }
+});
+
+test('two-hop chain conflict keeps edits, member status refreshes, and deleting a chain preserves nodes', async ({
+  page,
+}, testInfo) => {
+  await login(page);
+  const name = '链式冲突-' + testInfo.project.name;
+  const created = await p3Api(page, '/api/nodes', {
+    drafts: [
+      { ...node('ss'), name: name + '-A' },
+      { ...node('ss'), name: name + '-B' },
+    ],
+  });
+  const [entry, exit] = created.nodes;
+  const chain = await p3Api(page, '/api/chains', {
+    name,
+    entryNodeId: entry.id,
+    exitNodeId: exit.id,
+  });
+  try {
+    await page.getByRole('button', { name: '本地节点', exact: true }).click();
+    const region = page.getByRole('region', { name: '链式代理管理', exact: true });
+    const row = region.locator('.library-list > li').filter({ hasText: name });
+    await row.getByRole('button', { name: '编辑链', exact: true }).click();
+    await page.getByLabel('链名称', { exact: true }).fill('未保存链名称');
+    await p3Api(
+      page,
+      '/api/chains/' + chain.id,
+      { revision: 1, name: name + '-服务器版本' },
+      'PATCH',
+    );
+    await page.getByRole('button', { name: '保存链式代理', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('链式代理已修改');
+    await expect(page.getByLabel('链名称', { exact: true })).toHaveValue('未保存链名称');
+    await page.getByRole('button', { name: '重新载入链版本', exact: true }).click();
+    await expect(page.getByLabel('链名称', { exact: true })).toHaveValue(name + '-服务器版本');
+    await page.getByRole('button', { name: '关闭链编辑', exact: true }).click();
+    await p3Api(page, '/api/nodes/' + exit.id, { revision: 1, enabled: false }, 'PATCH');
+    await region.getByRole('button', { name: '刷新链式代理', exact: true }).click();
+    await expect(region.getByText('成员已停用', { exact: true })).toBeVisible();
+    await row.getByRole('button', { name: '禁用链', exact: true }).click();
+    await expect(row.getByText('禁用', { exact: true })).toBeVisible();
+    page.once('dialog', (d) => d.accept());
+    await row.getByRole('button', { name: '删除链', exact: true }).click();
+    await expect(row).toHaveCount(0);
+    expect((await page.request.get('/api/nodes/' + entry.id)).ok()).toBe(true);
+    expect((await page.request.get('/api/nodes/' + exit.id)).ok()).toBe(true);
+  } finally {
+    await removeChainTestRecord(page, '/api/chains/' + chain.id);
+    for (const saved of created.nodes) await removeChainTestRecord(page, '/api/nodes/' + saved.id);
+  }
+});
+
+async function removeChainTestRecord(page, path) {
+  const response = await page.request.get(path);
+  if (response.status() === 404) return;
+  expect(response.ok()).toBe(true);
+  const current = await response.json();
+  await p3Api(page, path, { revision: current.revision }, 'DELETE');
+}

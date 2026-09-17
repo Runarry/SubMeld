@@ -137,6 +137,7 @@ test('real HTTP node CRUD and render enforce auth, revision, same origin and sec
         auth,
         converter,
         nodes: db.nodes,
+        chains: db.chains,
         sources: db.sources,
         subscriptions: db.subscriptions,
         publisher: new Publisher(db.subscriptions, db.nodes, db.sources, converter),

@@ -141,6 +141,22 @@ export function createNodeStore(db: Database.Database, publications: InputChange
     delete(id: string, revision: number) {
       const affected = db.transaction(() => {
         current(id, revision);
+        const chains = z
+          .array(z.object({ name: z.string() }))
+          .parse(
+            db
+              .prepare(
+                'SELECT name FROM chains WHERE entry_node_id=? OR exit_node_id=? ORDER BY created_at,id',
+              )
+              .all(id, id),
+          );
+        if (chains.length)
+          throw new AppError(
+            'NODE_IN_USE',
+            '节点正被链式代理引用，请先替换引用或删除链：' +
+              chains.map((chain) => chain.name).join('、'),
+            422,
+          );
         const ids = publications.invalidateInput('node', id);
         db.prepare('DELETE FROM nodes WHERE id=? AND revision=?').run(id, revision);
         return ids;

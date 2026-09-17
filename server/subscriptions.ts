@@ -1,8 +1,15 @@
 import type Database from 'better-sqlite3';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import { diagnosticSchema, MAX_BYTES, MAX_NODES, type WorkbenchItem } from './shared/contracts.js';
+import {
+  diagnosticSchema,
+  MAX_BYTES,
+  MAX_NODES,
+  isChain,
+  type RenderItem,
+} from './shared/contracts.js';
+import { readChain } from './chains.js';
 import {
   artifactErrorSchema,
   artifactSchema,
@@ -21,8 +28,17 @@ import type { NodeStore } from './nodes.js';
 import type { SourceStore } from './sources.js';
 
 // Bump when conversion, composition or template semantics change.
-export const ENGINE_VERSION = 'p4-1';
+export const ENGINE_VERSION = 'p4-2';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+const SECRET = /^[A-Za-z0-9_-]{43}$/;
+function newSecret() {
+  return randomBytes(32).toString('base64url');
+}
+function sameDigest(left: string, right: string) {
+  const a = Buffer.from(left, 'hex'),
+    b = Buffer.from(right, 'hex');
+  return a.length === 32 && a.length === b.length && timingSafeEqual(a, b);
+}
 const rowSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -32,7 +48,11 @@ const rowSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
 });
-const refRowSchema = z.object({ node_id: z.string().nullable(), source_id: z.string().nullable() });
+const refRowSchema = z.object({
+  node_id: z.string().nullable(),
+  source_id: z.string().nullable(),
+  chain_id: z.string().nullable(),
+});
 const artifactRowSchema = z.object({
   format: outputFormatSchema,
   body: z.string().nullable(),
@@ -44,7 +64,7 @@ const artifactRowSchema = z.object({
   error_json: z.string().nullable(),
 });
 export type InputChanges = {
-  invalidateInput(kind: 'node' | 'source', id: string): string[];
+  invalidateInput(kind: 'node' | 'source' | 'chain', id: string): string[];
   updateInput(kind: 'node' | 'source', id: string): string[];
   notify(ids: string[]): void;
 };
@@ -68,7 +88,7 @@ export function createSubscriptionStore(db: Database.Database) {
       .parse(
         db
           .prepare(
-            'SELECT node_id,source_id FROM subscription_inputs WHERE subscription_id=? ORDER BY position',
+            'SELECT node_id,source_id,chain_id FROM subscription_inputs WHERE subscription_id=? ORDER BY position',
           )
           .all(id),
       );
@@ -85,7 +105,11 @@ export function createSubscriptionStore(db: Database.Database) {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       inputs: refs.map((r) =>
-        r.node_id ? { kind: 'node', id: r.node_id } : { kind: 'source', id: r.source_id },
+        r.node_id
+          ? { kind: 'node', id: r.node_id }
+          : r.source_id
+            ? { kind: 'source', id: r.source_id }
+            : { kind: 'chain', id: r.chain_id },
       ),
     });
   }
@@ -107,15 +131,17 @@ export function createSubscriptionStore(db: Database.Database) {
       if (clearArtifacts) db.prepare('DELETE FROM artifacts WHERE subscription_id=?').run(id);
     }
   }
-  function invalidateInput(kind: 'node' | 'source', id: string, clearArtifacts = true) {
+  function invalidateInput(kind: 'node' | 'source' | 'chain', id: string, clearArtifacts = true) {
     const rows = z
       .array(z.object({ subscription_id: z.string() }))
       .parse(
         db
           .prepare(
-            `SELECT DISTINCT subscription_id FROM subscription_inputs WHERE ${kind === 'node' ? 'node_id' : 'source_id'}=?`,
+            kind === 'node'
+              ? 'SELECT DISTINCT subscription_id FROM subscription_inputs WHERE node_id=@id OR chain_id IN (SELECT id FROM chains WHERE entry_node_id=@id OR exit_node_id=@id)'
+              : `SELECT DISTINCT subscription_id FROM subscription_inputs WHERE ${kind === 'chain' ? 'chain_id' : 'source_id'}=@id`,
           )
-          .all(id),
+          .all({ id }),
       );
     const ids = rows.map((r) => r.subscription_id);
     invalidate(ids, clearArtifacts);
@@ -126,12 +152,14 @@ export function createSubscriptionStore(db: Database.Database) {
     for (const input of inputs) {
       if (
         !db
-          .prepare(`SELECT id FROM ${input.kind === 'node' ? 'nodes' : 'sources'} WHERE id=?`)
+          .prepare(
+            `SELECT id FROM ${input.kind === 'node' ? 'nodes' : input.kind === 'chain' ? 'chains' : 'sources'} WHERE id=?`,
+          )
           .get(input.id)
       )
         throw new AppError(
           'INVALID_INPUT_REFERENCE',
-          '所选来源或节点已删除，请刷新后重新选择。',
+          '所选来源、节点或链式代理已删除，请刷新后重新选择。',
           422,
         );
       if (
@@ -153,7 +181,7 @@ export function createSubscriptionStore(db: Database.Database) {
     ).run(name, Number(enabled), JSON.stringify(settings), new Date().toISOString(), id);
     db.prepare('DELETE FROM subscription_inputs WHERE subscription_id=?').run(id);
     const insert = db.prepare(
-      'INSERT INTO subscription_inputs(subscription_id,position,node_id,source_id) VALUES (?,?,?,?)',
+      'INSERT INTO subscription_inputs(subscription_id,position,node_id,source_id,chain_id) VALUES (?,?,?,?,?)',
     );
     inputs.forEach((input, position) =>
       insert.run(
@@ -161,6 +189,7 @@ export function createSubscriptionStore(db: Database.Database) {
         position,
         input.kind === 'node' ? input.id : null,
         input.kind === 'source' ? input.id : null,
+        input.kind === 'chain' ? input.id : null,
       ),
     );
   }
@@ -262,7 +291,8 @@ export function createSubscriptionStore(db: Database.Database) {
     },
     create(input: unknown) {
       const config = checkedConfig(input),
-        token = randomBytes(32).toString('base64url'),
+        token = newSecret(),
+        key = newSecret(),
         id = randomUUID();
       db.transaction(() => {
         const { n } = z
@@ -272,12 +302,12 @@ export function createSubscriptionStore(db: Database.Database) {
           throw new AppError('OBJECT_LIMIT_EXCEEDED', '最多保存 100 个订阅方案。', 413);
         const now = new Date().toISOString();
         db.prepare(
-          'INSERT INTO subscriptions(id,name,enabled,revision,config_json,token_hash,created_at,updated_at) VALUES (?,?,1,1,?,?,?,?)',
-        ).run(id, config.name, '{}', digest(token), now, now);
+          'INSERT INTO subscriptions(id,name,enabled,revision,config_json,token_hash,created_at,updated_at,key_hash) VALUES (?,?,1,1,?,?,?,?,?)',
+        ).run(id, config.name, '{}', digest(token), now, now, digest(key));
         saveConfig(id, config);
       })();
       notify([id]);
-      return { id, token };
+      return { id, token, key };
     },
     update(id: string, input: unknown) {
       const parsed = subscriptionUpdateSchema.safeParse(input);
@@ -299,14 +329,15 @@ export function createSubscriptionStore(db: Database.Database) {
       notify([id]);
     },
     resetToken(id: string, revision: number) {
-      const token = randomBytes(32).toString('base64url');
+      const token = newSecret(),
+        key = newSecret();
       db.transaction(() => {
         current(id, revision);
         db.prepare(
-          'UPDATE subscriptions SET token_hash=?,revision=revision+1,updated_at=? WHERE id=?',
-        ).run(digest(token), new Date().toISOString(), id);
+          'UPDATE subscriptions SET token_hash=?,key_hash=?,revision=revision+1,updated_at=? WHERE id=?',
+        ).run(digest(token), digest(key), new Date().toISOString(), id);
       })();
-      return { id, token };
+      return { id, token, key };
     },
     detail(id: string, engine: string, generation: 'idle' | 'queued' | 'running') {
       const sub = get(id);
@@ -318,7 +349,11 @@ export function createSubscriptionStore(db: Database.Database) {
                   "SELECT json_extract(draft_json,'$.name') name,enabled FROM nodes WHERE id=?",
                 )
                 .get(input.id)
-            : db.prepare('SELECT name,enabled FROM sources WHERE id=?').get(input.id);
+            : db
+                .prepare(
+                  `SELECT name,enabled FROM ${input.kind === 'chain' ? 'chains' : 'sources'} WHERE id=?`,
+                )
+                .get(input.id);
         const row = z.object({ name: z.string(), enabled: z.number() }).parse(raw);
         return { ...input, name: row.name, enabled: row.enabled === 1 };
       });
@@ -333,25 +368,31 @@ export function createSubscriptionStore(db: Database.Database) {
       };
     },
     artifact,
-    read(token: string, rawFormat: string, engine: string) {
+    read(token: string, rawFormat: string, engine: string, key?: string) {
       const format = outputFormatSchema.safeParse(rawFormat);
-      if (!/^[A-Za-z0-9_-]{43}$/.test(token) || !format.success)
+      if (!SECRET.test(token) || !format.success)
         throw new AppError('NOT_FOUND', '请求的资源不存在。', 404);
       return db.transaction(() => {
         const row: unknown = db
-          .prepare('SELECT id FROM subscriptions WHERE token_hash=? AND enabled=1')
+          .prepare('SELECT id,key_hash FROM subscriptions WHERE token_hash=? AND enabled=1')
           .get(digest(token));
-        if (!row) throw new AppError('NOT_FOUND', '请求的资源不存在。', 404);
-        return artifact(z.object({ id: z.string() }).parse(row).id, format.data, engine);
+        const found = z.object({ id: z.string(), key_hash: z.string().nullable() }).safeParse(row);
+        if (!found.success) throw new AppError('NOT_FOUND', '请求的资源不存在。', 404);
+        if (found.data.key_hash) {
+          if (!key || !SECRET.test(key) || !sameDigest(found.data.key_hash, digest(key)))
+            throw new AppError('NOT_FOUND', '请求的资源不存在。', 404);
+        }
+        return artifact(found.data.id, format.data, engine);
       })();
     },
     snapshot(id: string, nodes: NodeStore, sources: SourceStore) {
       return db.transaction(() => {
         const sub = get(id);
         if (!sub.enabled) return null;
-        const items: WorkbenchItem[] = [];
-        let bytes = 12;
-        const append = (item: WorkbenchItem) => {
+        const items: RenderItem[] = [];
+        let bytes = 12,
+          expanded = 0;
+        const append = (item: RenderItem) => {
           const next = {
             ...item,
             nodeIndex: items.length,
@@ -361,7 +402,8 @@ export function createSubscriptionStore(db: Database.Database) {
             })),
           };
           bytes += Buffer.byteLength(JSON.stringify(next)) + 1;
-          if (items.length >= MAX_NODES || bytes > MAX_BYTES)
+          expanded += isChain(item) ? 2 : 1;
+          if (expanded > MAX_NODES || bytes > MAX_BYTES)
             throw new AppError('INPUT_LIMIT_EXCEEDED', '组合输入超过 2,000 节点或 4 MiB。', 413);
           items.push(next);
         };
@@ -370,6 +412,19 @@ export function createSubscriptionStore(db: Database.Database) {
             const node = nodes.get(input.id);
             if (node.enabled)
               append({ draft: node.draft, nodeIndex: 0, excluded: false, diagnostics: [] });
+          } else if (input.kind === 'chain') {
+            const chain = readChain(db, nodes, input.id);
+            if (chain.enabled)
+              append({
+                kind: 'chain',
+                nodeIndex: 0,
+                excluded: false,
+                diagnostics: [],
+                name: chain.name,
+                entry: nodes.get(chain.entryNodeId).draft,
+                exit: nodes.get(chain.exitNodeId).draft,
+                available: chain.available,
+              });
           } else {
             const source = sources.get(input.id);
             if (source.enabled && source.savedAt === null)

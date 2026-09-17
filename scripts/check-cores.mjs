@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { renderInput } from '../dist/server/converter/render.js';
 import { items } from '../tests/fixtures.mjs';
 import { renderFixtures } from '../tests/render-fixtures.mjs';
+import { chainFixtures } from '../tests/chain-fixtures.mjs';
+import { checkChainConnections } from '../tests/chain-connections.mjs';
 const locks = JSON.parse(
   await readFile(new URL('../tests/kernels.lock.json', import.meta.url), 'utf8'),
 );
@@ -27,6 +29,7 @@ function execute(binary, args) {
     );
   return result.stdout + result.stderr;
 }
+const binaries = {};
 for (const [target, lock] of Object.entries(locks)) {
   const asset = lock.platforms[platform];
   if (!asset)
@@ -66,9 +69,11 @@ for (const [target, lock] of Object.entries(locks)) {
   if (process.platform !== 'win32') await chmod(binary, 0o700);
   const version = execute(binary, target === 'mihomo' ? ['-v'] : ['version']);
   assert.ok(version.includes(lock.version), target + ' version mismatch');
+  binaries[target] = binary;
+  const ordinary = items(...renderFixtures(target));
   const generated = renderInput({
     target,
-    items: items(...renderFixtures(target)),
+    items: [...ordinary, ...chainFixtures(target, ordinary.length)],
     listenPort: 1080,
   });
   const config = join(results, target + (target === 'mihomo' ? '.yaml' : '.json'));
@@ -90,3 +95,5 @@ for (const [target, lock] of Object.entries(locks)) {
       ' nodes, complete configuration',
   );
 }
+
+await checkChainConnections(binaries, results);

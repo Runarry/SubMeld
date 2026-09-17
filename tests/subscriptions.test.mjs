@@ -379,27 +379,35 @@ test('P3 schema 2 migration, restart, engine changes and stopped restore preserv
   publisher = new Publisher(settings.subscriptions, settings.nodes, settings.sources, converter);
   const sub = settings.subscriptions.create(config([{ kind: 'node', id: nodeId }]));
   await publisher.idle();
-  const original = settings.subscriptions.read(sub.token, 'uri', ENGINE_VERSION).content;
+  const original = settings.subscriptions.read(sub.token, 'uri', ENGINE_VERSION, sub.key).content;
   await publisher.close();
   settings.close();
   publisher = undefined;
   settings = undefined;
   const db = new Database(join(temp.dir, 'submeld.sqlite'));
-  assert.equal(db.pragma('user_version', { simple: true }), 4);
+  assert.equal(db.pragma('user_version', { simple: true }), 6);
   assert.equal(
     db.prepare('SELECT token_hash FROM subscriptions').get().token_hash,
     createHash('sha256').update(sub.token).digest('hex'),
   );
   assert.throws(
     () =>
-      db.prepare('INSERT INTO subscription_inputs VALUES (?,99,?,NULL)').run(sub.id, randomUUID()),
+      db
+        .prepare(
+          'INSERT INTO subscription_inputs(subscription_id,position,node_id,source_id) VALUES (?,99,?,NULL)',
+        )
+        .run(sub.id, randomUUID()),
     /FOREIGN KEY/,
   );
   assert.ok(!JSON.stringify(db.prepare('SELECT * FROM subscriptions').all()).includes(sub.token));
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM subscriptions').all()).includes(sub.key));
   db.close();
   cpSync(temp.dir, backup.dir, { recursive: true });
   settings = openSettings(temp.dir, true);
-  assert.equal(settings.subscriptions.read(sub.token, 'uri', ENGINE_VERSION).content, original);
+  assert.equal(
+    settings.subscriptions.read(sub.token, 'uri', ENGINE_VERSION, sub.key).content,
+    original,
+  );
   publisher = new Publisher(
     settings.subscriptions,
     settings.nodes,
@@ -407,31 +415,45 @@ test('P3 schema 2 migration, restart, engine changes and stopped restore preserv
     converter,
     'p3-test-new-engine',
   );
-  missing(() => settings.subscriptions.read(sub.token, 'uri', publisher.engineVersion));
+  missing(() => settings.subscriptions.read(sub.token, 'uri', publisher.engineVersion, sub.key));
   publisher.start();
   await publisher.idle();
   assert.equal(
-    settings.subscriptions.read(sub.token, 'uri', publisher.engineVersion).content,
+    settings.subscriptions.read(sub.token, 'uri', publisher.engineVersion, sub.key).content,
     original,
   );
   const beforeCalls = converter.calls.length;
   const reset = settings.subscriptions.resetToken(sub.id, 1);
-  assert.throws(() => settings.subscriptions.read(sub.token, 'uri', publisher.engineVersion), {
+  assert.throws(
+    () => settings.subscriptions.read(sub.token, 'uri', publisher.engineVersion, sub.key),
+    {
+      status: 404,
+    },
+  );
+  assert.throws(() => settings.subscriptions.read(reset.token, 'uri', publisher.engineVersion), {
     status: 404,
   });
   assert.equal(
-    settings.subscriptions.read(reset.token, 'uri', publisher.engineVersion).content,
+    settings.subscriptions.read(reset.token, 'uri', publisher.engineVersion, reset.key).content,
     original,
   );
   assert.equal(converter.calls.length, beforeCalls);
   const restored = openSettings(backup.dir, true);
-  assert.equal(restored.subscriptions.read(sub.token, 'uri', ENGINE_VERSION).content, original);
+  assert.equal(
+    restored.subscriptions.read(sub.token, 'uri', ENGINE_VERSION, sub.key).content,
+    original,
+  );
   const resetAfterRestore = restored.subscriptions.resetToken(sub.id, 1);
-  assert.throws(() => restored.subscriptions.read(sub.token, 'uri', ENGINE_VERSION), {
+  assert.throws(() => restored.subscriptions.read(sub.token, 'uri', ENGINE_VERSION, sub.key), {
     status: 404,
   });
   assert.equal(
-    restored.subscriptions.read(resetAfterRestore.token, 'uri', ENGINE_VERSION).content,
+    restored.subscriptions.read(
+      resetAfterRestore.token,
+      'uri',
+      ENGINE_VERSION,
+      resetAfterRestore.key,
+    ).content,
     original,
   );
   restored.close();
@@ -448,6 +470,7 @@ test('P3 real HTTP management, private GET/HEAD, token reset, no-store and log r
     auth,
     converter: f.converter,
     nodes: f.settings.nodes,
+    chains: f.settings.chains,
     sources: f.settings.sources,
     subscriptions: f.store,
     publisher: f.publisher,
@@ -503,6 +526,7 @@ test('P3 real HTTP management, private GET/HEAD, token reset, no-store and log r
   assert.equal(created.status, 201);
   const value = await created.json(),
     id = value.subscription.id;
+  assert.match(value.urls.uri, /\/s\/[A-Za-z0-9_-]{43}\/uri\?key=[A-Za-z0-9_-]{43}$/);
   await f.publisher.idle();
   const detail = await (await call('/api/subscriptions/' + id)).json();
   assert.ok(!('urls' in detail));
@@ -531,11 +555,16 @@ test('P3 real HTTP management, private GET/HEAD, token reset, no-store and log r
     assert.equal(result.headers.get('content-length'), String(Buffer.byteLength(text)));
   }
   assert.equal(readCalls, 0);
+  assert.equal((await fetch(origin + new URL(value.urls.uri).pathname)).status, 404);
   const reset = await (
     await call('/api/subscriptions/' + id + '/reset-token', 'POST', { revision: detail.revision })
   ).json();
   assert.equal((await fetch(value.urls.uri)).status, 404);
   assert.equal(await (await fetch(reset.urls.uri)).text(), text);
+  assert.equal((await fetch(origin + new URL(reset.urls.uri).pathname)).status, 404);
+  const swapped = new URL(reset.urls.uri);
+  swapped.searchParams.set('key', new URL(value.urls.uri).pathname.split('/')[2] ?? '');
+  assert.equal((await fetch(swapped)).status, 404);
   assert.equal(readCalls, 0);
   assert.equal(
     (await call('/api/subscriptions/' + id, 'PATCH', { revision: detail.revision, prefix: 'old' }))
@@ -575,9 +604,15 @@ test('P3 real HTTP management, private GET/HEAD, token reset, no-store and log r
   });
   assert.equal(stopped.status, 200);
   assert.equal((await fetch(reset.urls.uri)).status, 404);
-  const token = new URL(value.urls.uri).pathname.split('/')[2],
-    newToken = new URL(reset.urls.uri).pathname.split('/')[2];
+  const issued = new URL(value.urls.uri),
+    resetUrl = new URL(reset.urls.uri),
+    token = issued.pathname.split('/')[2],
+    newToken = resetUrl.pathname.split('/')[2],
+    key = issued.searchParams.get('key') ?? '',
+    newKey = resetUrl.searchParams.get('key') ?? '';
   assert.ok(!logs.join('\n').includes(token));
   assert.ok(!logs.join('\n').includes(newToken));
+  assert.ok(!logs.join('\n').includes(key));
+  assert.ok(!logs.join('\n').includes(newKey));
   assert.ok(!logs.join('\n').includes(TEST_PASSWORD));
 });

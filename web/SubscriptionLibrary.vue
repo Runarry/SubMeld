@@ -5,6 +5,7 @@ import { formatTime } from './format';
 import ListPagination from './ui/ListPagination.vue';
 import ModalDialog from './ui/ModalDialog.vue';
 import StatusBadge from './ui/StatusBadge.vue';
+import { chainListSchema } from '../server/shared/chains';
 import { nodeListSchema, protocols } from '../server/shared/contracts';
 import {
   sourceListSchema,
@@ -54,7 +55,7 @@ const urlEntries = computed(() =>
     .filter((format) => urls.value[format])
     .map((format) => [format, urls.value[format] ?? ''] as const),
 );
-const inputKind = ref<'source' | 'node'>('source'),
+const inputKind = ref<'source' | 'node' | 'chain'>('source'),
   inputPage = ref(0),
   inputTotal = ref(0),
   candidateId = ref('');
@@ -159,10 +160,20 @@ async function loadCandidates() {
   const ticket = ++inputTicket,
     kind = inputKind.value,
     p = inputPage.value;
-  const raw = await props.api((kind === 'source' ? '/api/sources' : '/api/nodes') + '?page=' + p);
-  const result = kind === 'source' ? sourceListSchema.parse(raw) : nodeListSchema.parse(raw);
+  const raw = await props.api(
+    (kind === 'source' ? '/api/sources' : kind === 'chain' ? '/api/chains' : '/api/nodes') +
+      '?page=' +
+      p,
+  );
+  const result =
+    kind === 'source'
+      ? sourceListSchema.parse(raw)
+      : kind === 'chain'
+        ? chainListSchema.parse(raw)
+        : nodeListSchema.parse(raw);
   if (!alive || ticket !== inputTicket) return;
-  const list = 'sources' in result ? result.sources : result.nodes;
+  const list =
+    'sources' in result ? result.sources : 'chains' in result ? result.chains : result.nodes;
   candidates.value = list.map((item) => ({
     ...item,
     available: !('savedAt' in item) || item.savedAt !== null,
@@ -449,7 +460,13 @@ onMounted(() => void act(refresh));
             </p>
             <div v-for="[f, url] in urlEntries" :key="f" class="address-row">
               <span>{{ outputLabels[f] }}</span>
-              <input :value="url" readonly :aria-label="outputLabels[f] + ' 订阅地址'" />
+              <textarea
+                :value="url"
+                readonly
+                rows="2"
+                :aria-label="outputLabels[f] + ' 订阅地址'"
+                spellcheck="false"
+              ></textarea>
               <button type="button" :disabled="busy" @click="copy(url)">
                 复制 {{ outputLabels[f] }} 地址
               </button>
@@ -557,6 +574,7 @@ onMounted(() => void act(refresh));
               >输入类型<select v-model="inputKind" aria-label="输入类型">
                 <option value="source">来源</option>
                 <option value="node">本地节点</option>
+                <option value="chain">链式代理</option>
               </select></label
             ><label
               >可选输入<select v-model="candidateId" aria-label="可选输入">
@@ -610,8 +628,11 @@ onMounted(() => void act(refresh));
           <ol class="subscription-inputs">
             <li v-for="(input, i) in form.inputs" :key="input.kind + input.id">
               <span
-                >{{ i + 1 }}. {{ input.kind === 'source' ? '来源' : '节点' }} ·
-                {{ inputName(input) }}</span
+                >{{ i + 1 }}.
+                {{
+                  input.kind === 'source' ? '来源' : input.kind === 'chain' ? '链式代理' : '节点'
+                }}
+                · {{ inputName(input) }}</span
               >
               <div class="toolbar">
                 <button type="button" :disabled="i === 0" @click="move(i, -1)">上移输入</button
@@ -632,6 +653,10 @@ onMounted(() => void act(refresh));
             ><label>名称后缀<input v-model="form.suffix" maxlength="512" /></label>
           </div>
           <h2>输出格式</h2>
+          <p v-if="form.inputs.some((input) => input.kind === 'chain')" class="warning-note">
+            URI／Base64 仅发布普通节点，明确排除链式代理；只有链时这两种格式会报无可输出节点。
+            内核配置中的链需两跳协议都被选中；名称筛选和前后缀作用于链名称。
+          </p>
           <div class="toolbar">
             <label v-for="f in outputFormats" :key="f" class="check-label"
               ><input v-model="form.formats" type="checkbox" :value="f" />{{

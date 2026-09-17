@@ -865,10 +865,13 @@ summary {
   font-size: 13px;
   font-weight: 600;
 }
-.address-row input {
+.address-row input,
+.address-row textarea {
   font-family: var(--mono);
   font-size: 12px;
   padding: 6px 8px;
+  overflow-wrap: anywhere;
+  resize: none;
 }
 .row-error {
   margin: 6px 0 0;
@@ -988,4 +991,13 @@ summary {
   .address-row {
     grid-template-columns: 1fr;
   }
+}
+
+.chain-library {
+  margin-top: 2rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1.5rem;
+}
+.chain-path {
+  overflow-wrap: anywhere;
 }

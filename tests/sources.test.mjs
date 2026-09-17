@@ -127,7 +127,8 @@ async function setup(t, converter = new ControlledConverter()) {
         },
         converter,
       ),
-    read: (sub, format = 'uri') => settings.subscriptions.read(sub.token, format, ENGINE_VERSION),
+    read: (sub, format = 'uri') =>
+      settings.subscriptions.read(sub.token, format, ENGINE_VERSION, sub.key),
     async settle() {
       await refresher.idle();
       await publisher.idle();
@@ -397,6 +398,7 @@ test('P4 real HTTP refresh requires same-origin login and revision; subscription
     auth,
     converter: f.converter,
     nodes: f.settings.nodes,
+    chains: f.settings.chains,
     sources: f.settings.sources,
     subscriptions: f.settings.subscriptions,
     publisher: f.publisher,
@@ -451,7 +453,7 @@ test('P4 real HTTP refresh requires same-origin login and revision; subscription
   await f.settle();
   const count = f.fetcher.calls.length;
   for (const method of ['GET', 'HEAD']) {
-    const result = await call('/s/' + sub.token + '/uri', method);
+    const result = await call('/s/' + sub.token + '/uri?key=' + sub.key, method);
     assert.equal(result.status, 200);
     assert.match(result.headers.get('cache-control'), /private, no-store/);
     if (method === 'HEAD') assert.equal(await result.text(), '');
@@ -482,8 +484,17 @@ test('P4 schema 3 migration preserves source IDs, references, password, snapshot
   await f.publisher.close();
   f.settings.close();
   const db = new Database(join(f.directory, 'submeld.sqlite'));
-  // Rebuild the sources table in the exact P3 shape and mark schema 3 before upgrading.
+  // Rebuild the changed tables in their P3 shape before exercising the upgrade.
   db.pragma('foreign_keys = OFF');
+  db.exec(`DROP TABLE subscription_inputs; DROP TABLE chains;
+    CREATE TABLE subscription_inputs (
+      subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL CHECK(position>=0),
+      node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+      source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+      PRIMARY KEY(subscription_id,position), CHECK((node_id IS NULL)!=(source_id IS NULL)));
+    CREATE INDEX subscription_node ON subscription_inputs(node_id);
+    CREATE INDEX subscription_source ON subscription_inputs(source_id);`);
   db.exec(
     'DROP TABLE sources; CREATE TABLE sources(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,revision INTEGER NOT NULL,model_version INTEGER NOT NULL,format TEXT NOT NULL,text TEXT NOT NULL,snapshot_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,saved_at TEXT NOT NULL); PRAGMA user_version=3;',
   );
@@ -504,7 +515,9 @@ test('P4 schema 3 migration preserves source IDs, references, password, snapshot
   );
   const hash = await hashPassword('p4-migration-password-fixture');
   db.prepare('INSERT INTO settings VALUES (?,?)').run('admin_password_hash', hash);
-  db.prepare('INSERT INTO subscriptions VALUES (?,?,1,1,?,?,?,?)').run(
+  db.prepare(
+    'INSERT INTO subscriptions(id,name,enabled,revision,config_json,token_hash,created_at,updated_at) VALUES (?,?,1,1,?,?,?,?)',
+  ).run(
     subId,
     'old subscription',
     JSON.stringify(
@@ -544,7 +557,7 @@ test('P4 schema 3 migration preserves source IDs, references, password, snapshot
   assert.equal(restarted.subscriptions.read(token, 'uri', ENGINE_VERSION).content, text);
   restarted.close();
   const check = new Database(join(f.directory, 'submeld.sqlite'));
-  assert.equal(check.pragma('user_version', { simple: true }), 4);
+  assert.equal(check.pragma('user_version', { simple: true }), 6);
   assert.deepEqual(check.pragma('foreign_key_check'), []);
   check.close();
   cpSync(backup, join(f.directory, 'submeld.sqlite'));
@@ -552,6 +565,12 @@ test('P4 schema 3 migration preserves source IDs, references, password, snapshot
   assert.equal(restored.subscriptions.read(token, 'uri', ENGINE_VERSION).content, text);
   const reset = restored.subscriptions.resetToken(subId, 1);
   assert.throws(() => restored.subscriptions.read(token, 'uri', ENGINE_VERSION), { status: 404 });
-  assert.equal(restored.subscriptions.read(reset.token, 'uri', ENGINE_VERSION).content, text);
+  assert.throws(() => restored.subscriptions.read(reset.token, 'uri', ENGINE_VERSION), {
+    status: 404,
+  });
+  assert.equal(
+    restored.subscriptions.read(reset.token, 'uri', ENGINE_VERSION, reset.key).content,
+    text,
+  );
   restored.close();
 });

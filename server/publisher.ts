@@ -3,7 +3,14 @@ import type { Converter } from './converter/pool.js';
 import type { NodeStore } from './nodes.js';
 import type { SourceStore } from './sources.js';
 import { ENGINE_VERSION, type SubscriptionStore, type ArtifactWrite } from './subscriptions.js';
-import { produceResultSchema, renderResultSchema, type WorkbenchItem } from './shared/contracts.js';
+import {
+  produceResultSchema,
+  renderResultSchema,
+  isChain,
+  diagnostic,
+  type RenderItem,
+  type WorkbenchItem,
+} from './shared/contracts.js';
 import {
   MAX_SUBSCRIPTIONS,
   outputGroup,
@@ -14,20 +21,44 @@ import {
 
 export function composeItems(
   subscription: Subscription,
-  input: WorkbenchItem[],
+  input: RenderItem[],
   group: TargetGroup,
-): WorkbenchItem[] {
+): RenderItem[] {
   return input.map((item) => {
+    if (isChain(item)) {
+      const chain = structuredClone(item);
+      chain.excluded =
+        item.excluded ||
+        group === 'uri' ||
+        !subscription.protocols[group].includes(chain.entry.protocol) ||
+        !subscription.protocols[group].includes(chain.exit.protocol) ||
+        (!!subscription.includeName && !chain.name.includes(subscription.includeName)) ||
+        (!!subscription.excludeName && chain.name.includes(subscription.excludeName));
+      if (group === 'uri')
+        chain.diagnostics.push(
+          diagnostic(
+            chain.nodeIndex,
+            'CHAIN_URI_EXCLUDED',
+            'URI／Base64 不支持链式代理，已明确排除此链。',
+            undefined,
+            'warning',
+          ),
+        );
+      if (!chain.excluded) chain.name = subscription.prefix + chain.name + subscription.suffix;
+      return chain;
+    }
     const draft = item.draft ? structuredClone(item.draft) : null;
     const excluded =
-      !!draft &&
-      (!subscription.protocols[group].includes(draft.protocol) ||
-        (!!subscription.includeName && !draft.name.includes(subscription.includeName)) ||
-        (!!subscription.excludeName && draft.name.includes(subscription.excludeName)));
+      item.excluded ||
+      (!!draft &&
+        (!subscription.protocols[group].includes(draft.protocol) ||
+          (!!subscription.includeName && !draft.name.includes(subscription.includeName)) ||
+          (!!subscription.excludeName && draft.name.includes(subscription.excludeName))));
     if (draft && !excluded) draft.name = subscription.prefix + draft.name + subscription.suffix;
     return { ...item, draft, excluded };
   });
 }
+
 type PublishingConverter = Pick<Converter, 'run' | 'ready' | 'isAvailable' | 'onAvailable'>;
 export class Publisher {
   private pending = new Set<string>();
@@ -118,8 +149,24 @@ export class Publisher {
           .flatMap((i) => i.diagnostics.filter((d) => d.level === 'warning'));
         let writes: ArtifactWrite[];
         if (group === 'uri') {
+          const ordinary = items.filter((item): item is WorkbenchItem => !isChain(item));
+          warnings.push(
+            ...items
+              .filter(isChain)
+              .flatMap((item) => item.diagnostics.filter((d) => d.code === 'CHAIN_URI_EXCLUDED')),
+          );
+          if (!ordinary.some((item) => !item.excluded))
+            throw new AppError(
+              'EMPTY_OUTPUT',
+              'URI／Base64 没有可输出的普通节点；链式代理仅提供内核配置。',
+              422,
+              warnings,
+            );
           const result = produceResultSchema.parse(
-            await this.converter.run({ kind: 'produce', input: { items } }, this.abort.signal),
+            await this.converter.run(
+              { kind: 'produce', input: { items: ordinary } },
+              this.abort.signal,
+            ),
           );
           if (formats.includes('base64') && result.base64 === null)
             throw new AppError(
@@ -131,7 +178,11 @@ export class Publisher {
           writes = formats.map((format) => ({
             format,
             content: format === 'uri' ? result.uri : (result.base64 ?? ''),
-            counts: result.counts,
+            counts: {
+              ...result.counts,
+              input: items.length,
+              filtered: result.counts.filtered + items.length - ordinary.length,
+            },
             diagnostics: [
               ...warnings,
               ...result.diagnostics.filter((d) => d.code !== 'BASE64_OUTPUT_LIMIT'),

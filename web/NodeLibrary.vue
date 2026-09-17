@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue';
 import NodeEditor from './NodeEditor.vue';
+import ChainLibrary from './ChainLibrary.vue';
 import NodeImport from './NodeImport.vue';
 import ListPagination from './ui/ListPagination.vue';
 import ModalDialog from './ui/ModalDialog.vue';
@@ -33,6 +34,7 @@ const busy = ref(false),
 const draft = ref<NodeDraft | null>(null),
   baseline = ref<StoredNode | null>(null),
   newProtocol = ref<Protocol>('vless');
+const chainRefresh = ref(0);
 const importing = ref(false),
   importSaving = ref(false);
 const locked = computed(() => busy.value || importSaving.value);
@@ -56,6 +58,7 @@ async function refresh() {
   const result = nodeListSchema.parse(await props.api('/api/nodes?page=' + page.value));
   rows.value = result.nodes;
   total.value = result.total;
+  chainRefresh.value++;
   selected.value = selected.value.filter((id) => rows.value.some((n) => n.id === id && n.enabled));
 }
 async function act(action: () => Promise<void>) {
@@ -151,7 +154,7 @@ async function toggle(node: NodeSummary) {
 async function remove(node: NodeSummary) {
   if (
     !window.confirm(
-      '删除这个本地节点？关联方案会移除此输入并重新生成；工作台中的独立副本不受影响。',
+      '删除这个本地节点？被链式代理引用的节点须先解除引用；关联方案会移除此输入并重新生成。',
     )
   )
     return;
@@ -252,6 +255,7 @@ onMounted(() => void act(refresh));
       </ul>
       <ListPagination :page="page" :total="total" :disabled="locked" @turn="turnPage" />
     </div>
+    <ChainLibrary :api="api" :refresh-key="chainRefresh" :disabled="locked" />
     <ModalDialog
       v-if="draft"
       :label="baseline ? '编辑本地节点' : '新建本地节点'"

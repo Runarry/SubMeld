@@ -113,7 +113,7 @@ export const sourceListSchema = z.strictObject({
   total: z.number().int().nonnegative(),
 });
 export const inputRefSchema = z.strictObject({
-  kind: z.enum(['node', 'source']),
+  kind: z.enum(['node', 'source', 'chain']),
   id: z.string().uuid(),
 });
 export type InputRef = z.infer<typeof inputRefSchema>;

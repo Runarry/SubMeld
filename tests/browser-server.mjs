@@ -48,6 +48,7 @@ const app = createApp({
   auth,
   converter,
   nodes: settings.nodes,
+  chains: settings.chains,
   sources: settings.sources,
   subscriptions: settings.subscriptions,
   publisher,

@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { createNodeStore } from './nodes.js';
+import { createChainStore } from './chains.js';
 import { createSourceStore } from './sources.js';
 import { createSubscriptionStore } from './subscriptions.js';
 import { chmodSync, lstatSync, mkdirSync, readdirSync } from 'node:fs';
@@ -39,7 +40,15 @@ export function openSettings(dataDir: string, development: boolean) {
     db.pragma('journal_mode = WAL');
     db.pragma('busy_timeout = 3000');
     const version = db.pragma('user_version', { simple: true });
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4)
+    if (
+      version !== 0 &&
+      version !== 1 &&
+      version !== 2 &&
+      version !== 3 &&
+      version !== 4 &&
+      version !== 5 &&
+      version !== 6
+    )
       throw new Error('数据库版本不受支持，停止启动。');
     if (version === 0)
       db.transaction(() => {
@@ -84,7 +93,7 @@ export function openSettings(dataDir: string, development: boolean) {
           PRIMARY KEY(subscription_id,format)
         ); PRAGMA user_version=3;`);
       })();
-    if (version !== 4) {
+    if (version === 0 || version === 1 || version === 2 || version === 3) {
       // Rebuild with foreign keys disabled outside the transaction, preserving child references.
       db.pragma('foreign_keys = OFF');
       try {
@@ -110,6 +119,54 @@ export function openSettings(dataDir: string, development: boolean) {
         db.pragma('foreign_keys = ON');
       }
     }
+    if (version !== 5 && version !== 6) {
+      db.transaction(() => {
+        if (
+          !db
+            ?.prepare("SELECT 1 FROM pragma_table_info('subscriptions') WHERE name='key_hash'")
+            .get()
+        )
+          db?.exec('ALTER TABLE subscriptions ADD COLUMN key_hash TEXT');
+        db?.exec(
+          'CREATE UNIQUE INDEX IF NOT EXISTS subscription_key_hash ON subscriptions(key_hash) WHERE key_hash IS NOT NULL',
+        );
+        db?.pragma('user_version = 5');
+      })();
+    }
+    if (version !== 6) {
+      db.transaction(() => {
+        db?.exec(`CREATE TABLE chains (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL,
+          enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+          revision INTEGER NOT NULL CHECK(revision>0),
+          entry_node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE RESTRICT,
+          exit_node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE RESTRICT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          CHECK(entry_node_id != exit_node_id)
+        );
+        CREATE INDEX chain_entry ON chains(entry_node_id);
+        CREATE INDEX chain_exit ON chains(exit_node_id);
+        CREATE TABLE subscription_inputs_v6 (
+          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK(position>=0),
+          node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+          source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+          chain_id TEXT REFERENCES chains(id) ON DELETE CASCADE,
+          PRIMARY KEY(subscription_id,position),
+          CHECK((node_id IS NOT NULL)+(source_id IS NOT NULL)+(chain_id IS NOT NULL)=1)
+        );
+        INSERT INTO subscription_inputs_v6(subscription_id,position,node_id,source_id)
+          SELECT subscription_id,position,node_id,source_id FROM subscription_inputs;
+        DROP TABLE subscription_inputs;
+        ALTER TABLE subscription_inputs_v6 RENAME TO subscription_inputs;
+        CREATE INDEX subscription_node ON subscription_inputs(node_id);
+        CREATE INDEX subscription_source ON subscription_inputs(source_id);
+        CREATE INDEX subscription_chain ON subscription_inputs(chain_id);`);
+        if (db?.prepare('PRAGMA foreign_key_check').all().length)
+          throw new Error('Migration foreign key check failed');
+        db?.pragma('user_version = 6');
+      })();
+    }
     if (process.platform !== 'win32') {
       for (const file of readdirSync(dataDir))
         if (file.startsWith('submeld.sqlite') || file.startsWith('instance.lock.sqlite'))
@@ -117,8 +174,10 @@ export function openSettings(dataDir: string, development: boolean) {
     }
     const database = db;
     const subscriptions = createSubscriptionStore(database);
+    const nodes = createNodeStore(database, subscriptions);
     return {
-      nodes: createNodeStore(database, subscriptions),
+      nodes,
+      chains: createChainStore(database, nodes, subscriptions),
       sources: createSourceStore(database, subscriptions),
       subscriptions,
       getPasswordHash(): string | undefined {

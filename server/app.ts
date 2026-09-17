@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import type { Auth } from './auth.js';
 import type { NodeStore } from './nodes.js';
+import type { ChainStore } from './chains.js';
 import type { SourceStore } from './sources.js';
 import type { SubscriptionStore } from './subscriptions.js';
 import type { Publisher } from './publisher.js';
@@ -26,6 +27,7 @@ import {
 export type AppOptions = {
   webRoot?: string;
   nodes: NodeStore;
+  chains: ChainStore;
   sources: SourceStore;
   subscriptions: SubscriptionStore;
   publisher: Publisher;
@@ -39,6 +41,7 @@ export function createApp({
   auth,
   converter,
   nodes,
+  chains,
   sources,
   subscriptions,
   publisher,
@@ -52,6 +55,7 @@ export function createApp({
     '/api/convert/produce',
     '/api/convert/render',
     '/api/nodes',
+    '/api/chains',
     '/api/sources',
     '/api/subscriptions',
   ]);
@@ -71,7 +75,7 @@ export function createApp({
   app.use('/api/*', async (context, next) => {
     const managed =
       writes.has(context.req.path) ||
-      ['/api/nodes/', '/api/sources/', '/api/subscriptions/'].some((prefix) =>
+      ['/api/nodes/', '/api/chains/', '/api/sources/', '/api/subscriptions/'].some((prefix) =>
         context.req.path.startsWith(prefix),
       );
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
@@ -211,18 +215,30 @@ export function createApp({
   }
   const detail = (id: string) =>
     subscriptions.detail(id, publisher.engineVersion, publisher.status(id));
-  function issued(id: string, token: string) {
+  function issued(id: string, token: string, key: string) {
     const subscription = detail(id);
     return {
       subscription,
       urls: Object.fromEntries(
         subscription.formats.map((format) => [
           format,
-          config.publicOrigin + '/s/' + token + '/' + format,
+          config.publicOrigin + '/s/' + token + '/' + format + '?key=' + key,
         ]),
       ),
     };
   }
+  app.get('/api/chains', (c) => c.json(chains.list(listPage(c.req.query('page')))));
+  app.post('/api/chains', async (c) =>
+    c.json(chains.create(await readJson(c.req.raw, 16 * 1024)), 201),
+  );
+  app.get('/api/chains/:id', (c) => c.json(chains.get(c.req.param('id'))));
+  app.patch('/api/chains/:id', async (c) =>
+    c.json(chains.update(c.req.param('id'), await readJson(c.req.raw, 16 * 1024))),
+  );
+  app.delete('/api/chains/:id', async (c) => {
+    chains.delete(c.req.param('id'), await requestRevision(c.req.raw));
+    return c.json({ deleted: true });
+  });
   app.get('/api/sources', (c) => c.json(sources.list(listPage(c.req.query('page')))));
   app.post('/api/sources', async (c) =>
     c.json(
@@ -254,8 +270,8 @@ export function createApp({
   });
   app.get('/api/subscriptions', (c) => c.json(subscriptions.list(listPage(c.req.query('page')))));
   app.post('/api/subscriptions', async (c) => {
-    const { id, token } = subscriptions.create(await readJson(c.req.raw, 26 * 1024 * 1024));
-    return c.json(issued(id, token), 201);
+    const { id, token, key } = subscriptions.create(await readJson(c.req.raw, 26 * 1024 * 1024));
+    return c.json(issued(id, token, key), 201);
   });
   app.get('/api/subscriptions/:id', (c) => c.json(detail(c.req.param('id'))));
   app.patch('/api/subscriptions/:id', async (c) => {
@@ -273,11 +289,11 @@ export function createApp({
     return c.json(detail(sub.id), 202);
   });
   app.post('/api/subscriptions/:id/reset-token', async (c) => {
-    const { id, token } = subscriptions.resetToken(
+    const { id, token, key } = subscriptions.resetToken(
       c.req.param('id'),
       await requestRevision(c.req.raw),
     );
-    return c.json(issued(id, token));
+    return c.json(issued(id, token, key));
   });
   app.get('/api/subscriptions/:id/artifacts/:format', (c) => {
     const format = outputFormatSchema.safeParse(c.req.param('format'));
@@ -297,6 +313,7 @@ export function createApp({
       c.req.param('token'),
       c.req.param('format'),
       publisher.engineVersion,
+      c.req.query('key'),
     );
     const type = artifact.format.startsWith('mihomo')
       ? 'application/yaml'
