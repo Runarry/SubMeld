@@ -7,10 +7,12 @@ services:
       DATA_DIR: /data
       SUB_STORE_URL: http://sub-store:3000/gateway
       KOIPY_BOT_USERNAME: ${KOIPY_BOT_USERNAME:-}
+      KOIPY_CONFIG_PATH: /integrations/koipy/config.yaml
     ports:
       - '127.0.0.1:3000:3000'
     volumes:
       - submeld-v2-data:/data
+      - ./runtime-v2/koipy:/integrations/koipy
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m,mode=1777
@@ -46,9 +48,6 @@ services:
     restart: unless-stopped
   koipy:
     image: koipy/koipy@sha256:af5a79268fc348ebe3e1fc5b022c1bece24371e3da80f15e1c29e813a3dccc39
-    environment:
-      KOIPY_LICENSE: ${KOIPY_LICENSE:?Set KOIPY_LICENSE}
-      KOIPY_BOT_TOKEN: ${KOIPY_BOT_TOKEN:?Set KOIPY_BOT_TOKEN}
     volumes:
       - ./runtime-v2/koipy/config.yaml:/app/config.yaml
     depends_on: [miaospeed]

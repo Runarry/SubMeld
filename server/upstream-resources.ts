@@ -143,10 +143,11 @@ export class UpstreamResources {
         const fingerprint = hash(entry.record);
         const draft = draftUpdates.get(id);
         const name =
-          draft?.name ??
-          (typeof entry.record.displayName === 'string'
-            ? entry.record.displayName
-            : entry.record.name);
+          (draft?.name ??
+            (typeof entry.record.displayName === 'string'
+              ? entry.record.displayName.trim()
+              : '')) ||
+          entry.record.name;
         const now = new Date().toISOString();
         if (!old) {
           this.db
@@ -163,7 +164,7 @@ export class UpstreamResources {
               now,
               now,
             );
-        } else if (old.fingerprint !== fingerprint || !old.present) {
+        } else if (old.fingerprint !== fingerprint || !old.present || old.name !== name) {
           this.db
             .prepare(
               `UPDATE ${table} SET name=?,upstream_name=?,upstream_type=?,enabled=?,revision=revision+1,fingerprint=?,present=1,updated_at=? WHERE id=?`,

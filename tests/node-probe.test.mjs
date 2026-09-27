@@ -8,6 +8,7 @@ import { probeHttps, probeUrl, testConfig } from '../dist/server/node-probe.js';
 import { renderInput } from '../dist/server/converter/render.js';
 import { testCertificate, testKey } from './source-tls-fixture.mjs';
 import { node, items } from './fixtures.mjs';
+import { AppError } from '../dist/server/errors.js';
 
 async function fixture(
   t,
@@ -145,6 +146,28 @@ test('request deadlines and explicit cancellation destroy the HTTPS tunnel', asy
   await requestReceived;
   abort.abort();
   await assert.rejects(request, { code: 'TEST_CANCELLED' });
+});
+
+test('Fake-IP and resolver failures are reported before opening the node tunnel', async (t) => {
+  const f = await fixture(t);
+  for (const address of ['198.18.0.1', '198.19.193.255'])
+    await assert.rejects(
+      probeHttps(f.port, 'https://source.test', new AbortController().signal, {
+        ...f.options,
+        resolve: async () => [{ address, family: 4 }],
+      }),
+      { code: 'TEST_DNS_FAKE_IP' },
+    );
+  await assert.rejects(
+    probeHttps(f.port, 'https://source.test', new AbortController().signal, {
+      ...f.options,
+      resolve: async () => {
+        throw new AppError('SOURCE_DNS_FAILED', 'fixture');
+      },
+    }),
+    { code: 'TEST_DNS_FAILED' },
+  );
+  assert.deepEqual(f.tunnels, []);
 });
 test('Xray test-only HTTP inbound preserves the exported SOCKS template and all outbound data', async () => {
   const draft = node('ss');

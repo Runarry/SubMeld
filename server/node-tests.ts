@@ -129,6 +129,12 @@ export class NodeTester {
                     .join(' ');
                 } else if (error.code === 'REVISION_CONFLICT' || error.code === 'NOT_FOUND')
                   result.status = 'stale';
+                else if (
+                  ['TEST_DNS_FAKE_IP', 'TEST_DNS_FAILED', 'TEST_ADDRESS_REJECTED'].includes(
+                    error.code,
+                  )
+                )
+                  result.status = 'target_error';
                 else if (error.code === 'TEST_CORE_MISSING') result.status = 'core_unavailable';
                 else if (
                   error.code === 'TEST_TIMEOUT' ||

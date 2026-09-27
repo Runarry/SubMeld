@@ -126,6 +126,20 @@ const resultFor = (subject, core = 'mihomo') => ({
   message: 'passed',
   stale: false,
 });
+
+test('target DNS failures remain distinct from node connection failures in saved results', async () => {
+  const f = await fixture(async () => {
+    throw new AppError('TEST_DNS_FAKE_IP', '测试目标 Fake-IP');
+  });
+  try {
+    f.tester.start({ subjects: [f.subject(f.entry)] });
+    const batch = await finished(f.tester);
+    assert.ok(batch.results.every((result) => result.status === 'target_error'));
+    assert.equal(batch.results.length, 3);
+  } finally {
+    await f.close();
+  }
+});
 test('tests disabled nodes and complete chains sequentially without changing publication revisions', async () => {
   const f = await fixture();
   try {

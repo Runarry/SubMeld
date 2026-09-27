@@ -75,6 +75,30 @@ test('credentials belong to native Sub-Store, validation is atomic and identitie
   }
 });
 
+test('native blank display names fall back to stable names and repair already indexed sources', async (t) => {
+  const f = await fixture(t, { publish: false });
+  await f.client.api('/api/subs', {
+    name: 'default',
+    displayName: '',
+    source: 'local',
+    content: JSON.stringify(toUpstream(node('vless'))),
+    process: [],
+  });
+  const response = await f.request('/api/sources');
+  assert.equal(response.status, 200);
+  const saved = (await response.json()).sources[0];
+  assert.equal(saved.name, 'default');
+  f.resources.db.prepare("UPDATE sources SET name='' WHERE id=?").run(saved.id);
+  await f.resources.sync();
+  assert.equal(f.sources.get(saved.id).name, 'default');
+  const preview = await f.request('/api/sources/' + saved.id);
+  assert.equal(preview.status, 200);
+  assert.equal((await preview.json()).items.length, 1);
+  await f.client.api('/api/sub/default', { displayName: '   ' }, 'PATCH');
+  await f.resources.sync();
+  assert.equal(f.sources.list(0).sources[0].name, 'default');
+});
+
 test('native rename keeps identity and disable suppresses native output without deleting the node', async (t) => {
   const f = await fixture(t, { publish: false });
   const {

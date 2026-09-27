@@ -74,6 +74,12 @@ async function load() {
   if (alive && epoch === ticket) {
     rows.value = result.sources;
     total.value = result.total;
+    const current = rows.value.find((row) => row.id === source.value?.id) ?? rows.value[0];
+    if (current) await open(current.id);
+    else {
+      source.value = null;
+      selected.value = [];
+    }
   }
 }
 async function open(id: string, refresh = false) {
@@ -94,6 +100,7 @@ async function open(id: string, refresh = false) {
     nodePage.value = 0;
   }
   source.value = result;
+  rows.value = rows.value.map((row) => (row.id === id ? { ...row, ...result } : row));
 }
 async function copy() {
   const drafts =
@@ -130,6 +137,9 @@ onMounted(() => {
       </li>
     </ul>
     <button type="button" :disabled="busy" @click="act(load)">刷新列表</button>
+    <p v-if="!busy && !rows.length" class="empty-state">
+      还没有上游订阅。请先在 Sub-Store 保存订阅，再刷新这里的列表。
+    </p>
     <div class="table-wrap">
       <table>
         <thead>
@@ -143,7 +153,7 @@ onMounted(() => {
         <tbody>
           <tr v-for="row in rows" :key="row.id">
             <td>{{ row.name }}</td>
-            <td>{{ row.nodeCount }}</td>
+            <td>{{ row.savedAt ? row.nodeCount : '尚未读取' }}</td>
             <td>{{ formatTime(row.savedAt) }}</td>
             <td>
               <button type="button" :disabled="busy" @click="act(() => open(row.id))">

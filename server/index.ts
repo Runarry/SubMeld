@@ -22,7 +22,7 @@ async function main() {
       throw new Error('数据目录不能位于网页目录内。');
   }
   const client = new SubStoreClient(config.subStoreUrl);
-  const settings = openSettings(config.dataDir, config.development, client);
+  const settings = openSettings(config.dataDir, config.development, client, config.koipyConfigPath);
   const passwordHash = settings.getPasswordHash();
   if (!passwordHash) {
     settings.close();
@@ -50,6 +50,7 @@ async function main() {
   try {
     await kernels.initialize();
     app = createApp({
+      koipy: settings.koipy,
       webRoot,
       resources: settings.resources,
       tester,

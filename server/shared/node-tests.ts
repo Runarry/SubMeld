@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { MAX_NODES, renderTargetSchema } from './contracts.js';
 
-export const DEFAULT_PROBE_URL = 'https://www.gstatic.com/generate_204';
+export const DEFAULT_PROBE_URL = 'https://cp.cloudflare.com/generate_204';
 export const coreTargets = ['mihomo', 'singbox', 'xray'] as const;
 export const coreLabels = { mihomo: 'Mihomo', singbox: 'sing-box', xray: 'Xray' };
 const identity = { id: z.string().uuid(), revision: z.number().int().positive() };
@@ -55,6 +55,7 @@ export const testStatuses = {
   timeout: '超时',
   config_error: '配置错误',
   network_error: '连接失败',
+  target_error: '测试目标异常',
   tls_error: 'TLS 错误',
   http_error: 'HTTP 状态异常',
   core_unavailable: '内核不可用',
@@ -74,6 +75,7 @@ export const testResultSchema = z.strictObject({
     'timeout',
     'config_error',
     'network_error',
+    'target_error',
     'tls_error',
     'http_error',
     'core_unavailable',

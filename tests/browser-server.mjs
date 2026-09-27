@@ -60,6 +60,7 @@ const tester = new NodeTester(
   },
 );
 const app = createApp({
+  koipy: settings.koipy,
   resources: settings.resources,
   tester,
   config: {

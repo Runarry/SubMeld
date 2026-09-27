@@ -45,7 +45,14 @@ export async function probeHttps(
       ? [{ address: hostname, family: isIP(hostname) === 4 ? 4 : 6 }]
       : await (options.resolve ?? resolveSource)(hostname, signal);
     if (!addresses.length) throw new Error('No address');
-    for (const item of addresses) (options.validateAddress ?? publicAddress)(item.address);
+    for (const item of addresses) {
+      if (!options.validateAddress && /^198\.(18|19)\./.test(item.address))
+        throw new AppError(
+          'TEST_DNS_FAKE_IP',
+          '本机 DNS 为测试目标返回了 Fake-IP。请更换测试地址，或将测试域名加入本机代理的 fake-ip-filter 后重试；尚未测试节点连接。',
+        );
+      (options.validateAddress ?? publicAddress)(item.address);
+    }
     const address = addresses[0].address;
     const destination =
       (isIP(address) === 6 ? '[' + address + ']' : address) + ':' + (url.port || '443');
@@ -126,8 +133,16 @@ export async function probeHttps(
     if (external.aborted) throw new AppError('TEST_CANCELLED', '测试已取消。');
     if (signal.aborted) throw new AppError('TEST_TIMEOUT', 'HTTPS 请求超过 10 秒，连接已关闭。');
     if (error instanceof AppError) {
+      if (error.code === 'SOURCE_DNS_FAILED')
+        throw new AppError(
+          'TEST_DNS_FAILED',
+          '本机无法解析测试目标，请检查 DNS 或更换测试地址；尚未测试节点连接。',
+        );
       if (error.code.startsWith('SOURCE_'))
-        throw new AppError('TEST_ADDRESS_REJECTED', '测试目标没有可用的公网地址。');
+        throw new AppError(
+          'TEST_ADDRESS_REJECTED',
+          '测试目标解析到了非公网地址，请更换测试地址；尚未测试节点连接。',
+        );
       throw error;
     }
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';

@@ -1,6 +1,7 @@
 import { UpstreamResources } from './upstream-resources.js';
 import { SubStoreClient } from './sub-store.js';
 import { frontendWorkerBoundary } from './frontend-worker.js';
+import type { KoipySettingsStore } from './koipy.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +32,7 @@ import {
 } from './shared/contracts.js';
 
 export type AppOptions = {
+  koipy: KoipySettingsStore;
   resources: UpstreamResources;
   webRoot?: string;
   tester?: NodeTester;
@@ -44,6 +46,7 @@ export type AppOptions = {
   converter: Pick<Converter, 'run'>;
 };
 export function createApp({
+  koipy,
   resources,
   webRoot,
   tester,
@@ -70,6 +73,7 @@ export function createApp({
     '/api/subscriptions',
     '/api/node-tests',
     '/api/kernels',
+    '/api/integrations',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -95,6 +99,7 @@ export function createApp({
         '/api/subscriptions/',
         '/api/node-tests/',
         '/api/kernels/',
+        '/api/integrations/',
       ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
@@ -136,11 +141,16 @@ export function createApp({
   app.get('/api/integrations', (c) => {
     if (!auth.valid(getCookie(c, cookieName)))
       throw new AppError('UNAUTHENTICATED', '请先登录。', 401);
+    const username = koipy.username(config.telegramBot);
     return c.json({
       subStore: '/?api=' + encodeURIComponent(config.publicOrigin + '/upstream/sub-store'),
-      telegram: config.telegramBot ? 'https://t.me/' + config.telegramBot : null,
+      telegram: username ? 'https://t.me/' + username : null,
     });
   });
+  app.get('/api/integrations/koipy', (c) => c.json(koipy.get(config.telegramBot)));
+  app.patch('/api/integrations/koipy', async (c) =>
+    c.json(koipy.update(await readJson(c.req.raw, 32 * 1024))),
+  );
   const frontend = new SubStoreClient(new URL(resources.client.origin).origin);
   app.get('/sw.js', async (c) => {
     const response = await frontend.request('/sw.js', { signal: c.req.raw.signal });

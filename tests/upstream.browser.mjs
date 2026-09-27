@@ -78,6 +78,66 @@ test('an already installed native worker upgrades without clearing saved browser
     'preserved',
   );
 });
+
+test('home opens upstream nodes with empty display names and editable Koipy and enhancement settings', async ({
+  page,
+}, info) => {
+  await login(page);
+  const name = 'blank-name-' + info.project.name;
+  await native(page, '/api/subs', {
+    name,
+    displayName: '',
+    source: 'local',
+    content: 'vless://' + UUID + '@example.com:443?security=tls#visible-node',
+    process: [],
+  });
+  await page.getByRole('button', { name: '查看 Sub-Store 节点', exact: true }).click();
+  const row = page.getByRole('row').filter({ hasText: name });
+  await row.getByRole('button', { name: '查看节点' }).click();
+  await expect(
+    page.getByRole('checkbox', { name: '选择 visible-node', exact: true }),
+  ).toBeVisible();
+  await expect(row).toContainText('1');
+  await page.getByRole('button', { name: '服务入口', exact: true }).click();
+  await page.getByRole('button', { name: '配置 Koipy', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Koipy 管理', exact: true })).toBeVisible();
+  await page.getByLabel('机器人用户名', { exact: true }).fill('ExampleKoipyBot');
+  await page.getByLabel('管理员 Telegram ID', { exact: true }).fill('123456789');
+  await page.getByLabel('Koipy 激活码', { exact: true }).fill('test-only-koipy-license');
+  await page.getByLabel('Bot Token', { exact: true }).fill('123456:browser_fixture_token');
+  await page.getByLabel('miaospeed Token', { exact: true }).fill('test-only-miaospeed-token');
+  await page.getByRole('button', { name: '保存 Koipy 配置', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('已写入 Koipy 配置文件');
+  await expect(page.getByLabel('Bot Token', { exact: true })).toHaveValue('');
+  await page.reload();
+  await expect(page.getByLabel('Bot Token', { exact: true })).toHaveAttribute(
+    'placeholder',
+    '已配置，留空保留',
+  );
+  await expect(page.getByLabel('管理员 Telegram ID', { exact: true })).toHaveValue('123456789');
+  await page.screenshot({ path: info.outputPath('koipy-settings.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole('button', { name: '服务入口', exact: true }).click();
+  await expect(
+    page.getByRole('link', { name: '打开 Telegram 机器人', exact: true }),
+  ).toHaveAttribute('href', 'https://t.me/ExampleKoipyBot');
+  await page.getByRole('button', { name: '管理增强工具', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '增强工具', exact: true })).toBeVisible();
+  await page.getByLabel('HTTPS 测试地址', { exact: true }).fill('https://example.com/health');
+  await page.getByRole('button', { name: '保存测试地址', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('已保存测试地址');
+  await expect(page.getByRole('region', { name: '内核管理', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '使用默认测试地址', exact: true }).click();
+  await page.getByRole('button', { name: '保存测试地址', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('已保存测试地址');
+  await page.screenshot({ path: info.outputPath('enhancement-settings.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await native(page, '/api/sub/' + name, undefined, 'DELETE');
+});
 test('native Sub-Store edits and renames resources without losing enhanced identity', async ({
   page,
 }, info) => {

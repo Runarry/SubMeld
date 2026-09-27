@@ -10,6 +10,8 @@ const config = JSON.parse(
   readFileSync(new URL('./koipy.config.example.json', import.meta.url), 'utf8'),
 );
 config.admin = [Number(uid)];
+if (process.env.KOIPY_LICENSE) config.license = process.env.KOIPY_LICENSE;
+if (process.env.KOIPY_BOT_TOKEN) config.bot = { 'bot-token': process.env.KOIPY_BOT_TOKEN };
 config.slaveConfig.slaves[0].token = token;
 // Exclusive creation avoids overwriting native bot settings.
 writeFileSync(resolve(dir, 'config.yaml'), JSON.stringify(config, null, 2) + '\n', {

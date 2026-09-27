@@ -14,10 +14,12 @@ import {
   type TestResult,
   type TestBatch,
   type KernelStatus,
+  DEFAULT_PROBE_URL,
 } from '../server/shared/node-tests';
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
   subjects: TestSubject[];
+  settingsOnly?: boolean;
 }>();
 const batch = ref<TestBatch | null>(null),
   kernels = ref<KernelStatus[]>([]),
@@ -129,7 +131,8 @@ onBeforeUnmount(() => {
   <section class="library node-tests-page" aria-label="节点测试">
     <div class="page-header">
       <div>
-        <h1>节点测试</h1>
+        <h2 v-if="settingsOnly">测试与内核设置</h2>
+        <h1 v-else>节点测试</h1>
         <p class="muted">
           从部署 SubMeld 的主机，经真实内核访问 HTTPS
           地址。请在本地节点、来源节点或链列表中选择测试对象。
@@ -142,6 +145,13 @@ onBeforeUnmount(() => {
         >HTTPS 测试地址<input v-model="url" type="url" maxlength="2048" :disabled="busy" required
       /></label>
       <button type="submit" :disabled="busy || url === savedUrl">保存测试地址</button>
+      <button
+        type="button"
+        :disabled="busy || url === DEFAULT_PROBE_URL"
+        @click="url = DEFAULT_PROBE_URL"
+      >
+        使用默认测试地址
+      </button>
       <p class="muted">
         每个内核请求一次；HTTPS 耗时包含代理连接、TLS 握手和响应头，不包含内核启动。不跟随重定向。
       </p>
@@ -177,7 +187,7 @@ onBeforeUnmount(() => {
         </article>
       </div>
     </section>
-    <section aria-label="测试进度">
+    <section v-if="!settingsOnly" aria-label="测试进度">
       <div class="page-header">
         <h2>测试结果</h2>
         <div class="toolbar">

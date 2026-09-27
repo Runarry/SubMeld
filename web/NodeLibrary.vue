@@ -26,7 +26,7 @@ import {
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
 }>();
-const emit = defineEmits<{ load: [items: WorkbenchItem[]] }>();
+const emit = defineEmits<{ load: [items: WorkbenchItem[]]; 'open-sources': [] }>();
 const rows = ref<NodeSummary[]>([]),
   total = ref(0),
   page = ref(0),
@@ -205,10 +205,14 @@ onMounted(() => void act(refresh));
     <div class="page-header">
       <div>
         <h1>本地节点</h1>
-        <p class="muted">明确保存的节点会在重启后保留。载入工作台后作为独立副本编辑。</p>
+        <p class="muted">这里管理供独立编辑和两跳链引用的单节点订阅，数据仍保存在 Sub-Store。</p>
       </div>
       <button type="button" :disabled="locked" @click="act(refresh)">刷新列表</button>
     </div>
+    <p class="notice">
+      在 Sub-Store 添加的普通订阅节点显示在上游预览中。
+      <button type="button" @click="emit('open-sources')">查看 Sub-Store 节点</button>
+    </p>
     <p v-if="message" role="status" class="notice">{{ message }}</p>
     <p v-if="testing.error" class="error-note">{{ testing.error }}</p>
     <div class="toolbar">

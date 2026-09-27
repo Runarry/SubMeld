@@ -5,6 +5,7 @@ export type Config = {
   development: boolean;
   subStoreUrl: string;
   telegramBot: string;
+  koipyConfigPath: string;
 };
 export function loadConfig(development = false, env: NodeJS.ProcessEnv = process.env): Config {
   if (!env.PUBLIC_ORIGIN || !env.DATA_DIR)
@@ -27,6 +28,7 @@ export function loadConfig(development = false, env: NodeJS.ProcessEnv = process
     dataDir: isAbsolute(env.DATA_DIR) ? env.DATA_DIR : resolve(env.DATA_DIR),
     development,
     subStoreUrl: env.SUB_STORE_URL ?? 'http://127.0.0.1:39091/gateway',
+    koipyConfigPath: resolve(env.KOIPY_CONFIG_PATH ?? 'runtime-v2/koipy/config.yaml'),
     telegramBot: /^\w{5,32}$/.test(env.KOIPY_BOT_USERNAME ?? '')
       ? (env.KOIPY_BOT_USERNAME ?? '')
       : '',

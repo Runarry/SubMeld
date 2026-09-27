@@ -9,8 +9,14 @@ import { chmodSync, lstatSync, mkdirSync, readdirSync, existsSync } from 'node:f
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createNodeTestStore } from './node-test-store.js';
+import { KoipySettingsStore } from './koipy.js';
 
-export function openSettings(dataDir: string, development: boolean, client = new SubStoreClient()) {
+export function openSettings(
+  dataDir: string,
+  development: boolean,
+  client = new SubStoreClient(),
+  koipyConfigPath = join(dataDir, 'koipy/config.yaml'),
+) {
   if (process.platform === 'win32' && !development)
     throw new Error('生产数据权限需要 Linux 容器；Windows 仅支持显式开发模式。');
   if (process.platform !== 'win32') process.umask(0o077);
@@ -108,6 +114,7 @@ export function openSettings(dataDir: string, development: boolean, client = new
     const chains = createChainStore(database, nodes, subscriptions);
     const sources = createSourceStore(database, resources);
     return {
+      koipy: new KoipySettingsStore(database, koipyConfigPath),
       resources,
       nodes,
       chains,

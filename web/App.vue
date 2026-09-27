@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onBeforeUnmount, ref, provide } from 'vue';
 import HomePage from './HomePage.vue';
+import KoipyPage from './KoipyPage.vue';
+import EnhancementTools from './EnhancementTools.vue';
 import LoginView from './LoginView.vue';
 import NodeLibrary from './NodeLibrary.vue';
 import NodeTestsPage from './NodeTestsPage.vue';
@@ -12,9 +14,12 @@ import WorkbenchPage from './WorkbenchPage.vue';
 import { ApiError, request } from './api';
 import type { WorkbenchItem } from '../server/shared/contracts';
 
-type View = 'home' | 'workbench' | 'library' | 'sources' | 'subscriptions' | 'tests';
+type View =
+  'home' | 'workbench' | 'library' | 'sources' | 'subscriptions' | 'tests' | 'koipy' | 'tools';
 const nav = [
   { view: 'home' as const, hash: 'home', label: '服务入口' },
+  { view: 'koipy' as const, hash: 'koipy', label: 'Koipy 管理' },
+  { view: 'tools' as const, hash: 'tools', label: '增强工具' },
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '增强订阅' },
   { view: 'sources' as const, hash: 'sources', label: '上游节点预览' },
   { view: 'library' as const, hash: 'nodes', label: '本地节点' },
@@ -50,6 +55,7 @@ const workbench = ref<{ appendNodes: (items: WorkbenchItem[]) => void } | null>(
 
 function parseHash(): View {
   const key = location.hash.replace(/^#\/?/, '');
+  if (key === 'koipy' || key === 'tools') return key;
   if (key === 'tests') return 'tests';
   if (key === 'sources') return 'sources';
   if (key === 'nodes' || key === 'library') return 'library';
@@ -196,10 +202,17 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
           查看测试进度
         </button>
       </p>
-      <HomePage v-if="view === 'home'" :api="api" />
+      <HomePage v-if="view === 'home'" :api="api" @navigate="setView" />
+      <KoipyPage v-if="view === 'koipy'" :api="api" />
+      <EnhancementTools v-if="view === 'tools'" :api="api" @navigate="setView" />
       <NodeTestsPage v-if="view === 'tests'" :api="api" :subjects="testSubjects" />
       <WorkbenchPage v-show="view === 'workbench'" ref="workbench" :api="api" />
-      <NodeLibrary v-if="view === 'library'" :api="api" @load="openWorkbench" />
+      <NodeLibrary
+        v-if="view === 'library'"
+        :api="api"
+        @load="openWorkbench"
+        @open-sources="setView('sources')"
+      />
       <SourceLibrary v-if="view === 'sources'" :api="api" @open-nodes="setView('library')" />
       <SubscriptionLibrary v-if="view === 'subscriptions'" :api="api" />
     </main>

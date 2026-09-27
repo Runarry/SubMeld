@@ -51,6 +51,8 @@ Node.js 24.6.0、pnpm 10.33.2；一个根包，Vue + TypeScript、Node.js + Hono
 
 **来源预览：** “上游节点预览”列出普通上游订阅和组合订阅。可读取、手动更新快照、复制所选节点为独立本地节点，或单项/批量测试。复制后的节点不跟随原来源变化。增强编辑与测试继续限定原有 SS、VMess、VLESS、Trojan、Hysteria2、TUIC 范围；不能完整表达的节点明确报错，不在增强输出中默默丢失。
 
+服务入口的“查看 Sub-Store 节点”直接打开上游预览并读取当前订阅。上游显示名称为空时使用订阅名称；“尚未读取”与实际零节点分开显示。“本地节点”仅列出独立增强节点，普通订阅无需复制就可以预览和测试。
+
 VLESS 增强输出保留上游默认 XUDP，其他 UDP 编码仍明确拒绝。Mihomo、sing-box 字段由上游输出并核对；Xray 用其原生 XUDP 配置表达。前台转换与后台发布顺序执行，等待期间可取消，整个请求最长两分钟。
 
 **两跳链：** 引用两个不同的独立本地节点，路径为本机 → 前置 → 出口 → 目标。提供 Mihomo、sing-box、Xray 完整配置及片段；URI/Base64 明确排除链。被链引用的节点不能通过正常管理删除或批量替换。导入或外部改写清除身份标记后，旧引用显示失效，需要重新选择，不能靠同名节点自动接续。
@@ -61,20 +63,24 @@ VLESS 增强输出保留上游默认 XUDP，其他 UDP 编码仍明确拒绝。M
 
 **三内核测试：** 保留单批次、单项/批量、进度、取消、最近结果和网页官方内核更新。测试不改变发布内容。来源节点使用 `snapshotHash + nodeIndex`，刷新重排后不能串用结果。测试对象允许保存的内网/回环地址；目标仍限定公网 HTTPS，无重定向、无直连回退。真实内核版本由批次固定，更新失败保留当前版本。
 
+“增强工具”页提供各增强管理入口，并直接配置测试地址和管理内核。默认目标为 `https://cp.cloudflare.com/generate_204`；本机 DNS 失败、返回 Fake-IP（198.18.0.0/15）或非公网地址时标为“测试目标异常”，此时尚未验证节点连接。可更换测试地址，或调整本机代理的 fake-ip-filter；不会将 Fake-IP 作为真实公网地址放行。
+
 **Telegram：** 给自己的 Koipy 机器人发送普通节点的 Mihomo 分享链接，使用其原生测试指令。机器人必须能够访问该链接；测试结果保留在 Koipy，不与网页同步。本轮没有增加 Telegram 整链测试；两跳链在网页三内核测试。Koipy 本身不替代 sing-box/Xray 实测。
+
+“Koipy 管理”页可填写机器人用户名、激活码、Bot Token、管理员 ID、机器人代理及 `local` miaospeed 后端连接参数。配置直接写入原生 `config.yaml`；其他后端和自定义字段保留，密码字段留空表示保留，勾选清除才删除。读取接口仅返回是否已配置，不回传已保存的凭据。用户名入口立即生效，Koipy 配置按页面提示重启后生效；保存成功并不表示机器人已连接 Telegram。
 
 ## Linux 容器部署
 
 四服务见 [compose.yaml](compose.yaml)。仅 SubMeld 的 3000 端口发布到宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。不要公开其他服务端口。代理不缓存私人订阅，不记录带令牌的完整 URL。
 
 1. 准备新的 `.env`，将 PUBLIC_ORIGIN 改为真实 HTTPS origin。
-2. 配置 Koipy 激活码、Bot Token、机器人用户名、管理员 Telegram 数字 ID，以及至少 16 字符随机 `MIAOSPEED_TOKEN`。这些值不提交 Git。
-3. `node --env-file=.env deploy/configure-koipy.mjs`。它从 [Koipy 配置模板](deploy/koipy.config.example.json) 填入管理员 ID 和 miaospeed token，仅在文件不存在时生成 `runtime-v2/koipy/config.yaml`，避免覆盖通过 Koipy 原生指令修改的配置。JSON 是合法 YAML，生成器只需 Node.js。
+2. 配置至少 16 字符随机 `MIAOSPEED_TOKEN`，以及需要从文件预填的 Koipy 激活码、Bot Token、机器人用户名和管理员 Telegram 数字 ID。这些值不提交 Git。
+3. `node --env-file=.env deploy/configure-koipy.mjs`。它从 [Koipy 配置模板](deploy/koipy.config.example.json) 填入管理员、miaospeed token 和已提供的激活码、Bot Token，仅在文件不存在时生成 `runtime-v2/koipy/config.yaml`。JSON 是合法 YAML，生成器只需 Node.js。也可先创建空配置目录，通过网页完成填写。Linux 下让容器用户 UID 1000 可写此共享目录，例如 `sudo chown -R 1000:1000 runtime-v2/koipy`。
 4. `docker compose build submeld`。
 5. `docker compose run --rm --no-deps submeld node dist/server/cli.js init`，通过隐藏终端输入密码。
-6. `docker compose up -d`。登录 `/submeld/` 后，从入口进入 Sub-Store 或 Telegram。
+6. `docker compose up -d sub-store submeld`。登录 `/submeld/` 后，在“Koipy 管理”检查或填写配置，Token 与步骤 2 保持一致，再运行 `docker compose up -d miaospeed koipy`。之后网页保存配置，执行 `docker compose restart koipy` 生效。
 
-Koipy 激活码与 Bot Token 通过其支持的环境变量读取，后端地址在本地配置文件中。若主机访问 Telegram 需要代理，按 Koipy 官方配置设置 bot 代理。本项目不提供 Docker socket、网页容器更新或自动部署。
+Koipy 激活码、Bot Token 和后端地址由原生配置文件读取，Compose 不再用环境变量覆盖网页保存的值。`KOIPY_CONFIG_PATH` 指定 SubMeld 写入位置；Compose 把相同目录共享到两个容器。若主机访问 Telegram 需要代理，可在管理页填写机器人代理。本项目不提供 Docker socket、网页容器更新或自动部署。
 
 Sub-Store 与 SubMeld 使用独立新卷；Koipy 的配置文件单独持久保存。备份时停止服务，保存两个卷、Koipy 配置和私有环境配置。SQLite 不保存第二份可编辑节点凭据库，但生成产物仍包含节点秘密，应按私人配置保管。
 
@@ -102,7 +108,11 @@ Sub-Store 与 SubMeld 使用独立新卷；Koipy 的配置文件单独持久保�
 - Linux 最终运行镜像构建、非 root 只读运行、普通分享与增强发布通过。两个容器重启后节点、引用、产物和上游令牌保留，登录会话失效；撤销分享与上游暂停时读取最近产物通过。使用 Docker Desktop 隔离网络和新临时卷，没有切换现有部署。
 - Compose 配置校验、Koipy 模板生成及防覆盖检查通过；固定 miaospeed 镜像按 Compose 参数启动通过。
 
-**尚未验收：** 真实 Koipy 激活及 Telegram 测速、个人公网节点、v2rayN 实际导入/更新/连接，以及新架构的正式 HTTPS 反代和公网部署。缺少相应凭据或实际环境，未用模拟结果代替。
+**尚未验收：** 真实 Koipy 激活及 Telegram 测速、更多公网节点和协议组合、v2rayN 实际导入/更新/连接，以及新架构的正式 HTTPS 反代和公网部署。缺少相应凭据或实际环境，未用模拟结果代替。
+
+后续手动测试修复：补齐空显示名称的来源展示、Koipy 配置页和增强工具管理页；新增 Fake-IP 诊断及测试目标异常分类。36 项桌面/窄屏浏览器回归和 84 项工程/上游集成测试通过；Koipy 配置写入与保留凭据已验证，真实 Telegram 激活状态仍需用户提供授权配置后确认。
+
+同次手动测试已使用用户提供的一个 VLESS 节点，经 Mihomo、sing-box、Xray 分别访问 Cloudflare 测试目标，三个结果均为 HTTP 204；不代表所有协议或客户端均已验收。
 
 ## 源码
 
