@@ -26,3 +26,6 @@ tmp/
 Thumbs.db
 .idea/
 .vscode/
+
+data-v2/
+runtime-v2/

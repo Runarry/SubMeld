@@ -165,7 +165,10 @@ export function fromUpstream(value: unknown, index: number): NodeDraft {
       break;
     case 'vless':
       auth = { uuid: string(value.uuid) };
-      protocolOptions = { flow: value.flow ?? '' };
+      protocolOptions = {
+        flow: value.flow ?? '',
+        packetEncoding: value['packet-encoding'] ?? 'xudp',
+      };
       break;
     case 'trojan':
       auth = { password: string(value.password) };
@@ -202,8 +205,10 @@ export function toUpstream(draft: NodeDraft): Record<string, unknown> {
     proxy.cipher = draft.protocolOptions.security;
     proxy.alterId = 0;
   }
-  if (draft.protocol === 'vless' && draft.protocolOptions.flow)
-    proxy.flow = draft.protocolOptions.flow;
+  if (draft.protocol === 'vless') {
+    if (draft.protocolOptions.flow) proxy.flow = draft.protocolOptions.flow;
+    proxy['packet-encoding'] = draft.protocolOptions.packetEncoding;
+  }
   if (draft.protocol === 'hysteria2' && draft.protocolOptions.obfs) {
     proxy.obfs = draft.protocolOptions.obfs;
     proxy['obfs-password'] = draft.protocolOptions.obfsPassword;

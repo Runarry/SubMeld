@@ -17,10 +17,10 @@ async function api(page, path, body, method = 'POST') {
   return response.json();
 }
 async function login(page) {
-  await page.goto('/');
+  await page.goto('/submeld/');
   await page.getByLabel('管理员密码', { exact: true }).fill('SubMeld-UI-Test-Only-2026');
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '订阅方案', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
 }
 async function rowOnPages(page, name) {
   const row = page.locator('.library-main > .library-list > li').filter({ hasText: name });
@@ -93,7 +93,7 @@ test('node tests support disabled nodes, batch progress, saved results and manua
     await page.getByRole('button', { name: '测试所选本地节点', exact: true }).click();
     await page.getByRole('button', { name: '查看测试进度', exact: true }).click();
     await expect(page.getByRole('progressbar', { name: '测试进度' })).toBeVisible();
-    await page.getByRole('button', { name: '订阅方案', exact: true }).click();
+    await page.getByRole('button', { name: '增强订阅', exact: true }).click();
     await completed(page);
     await page.getByRole('button', { name: '节点测试', exact: true }).click();
     await expect(page.locator('.test-results li')).toHaveCount(6);
@@ -124,81 +124,5 @@ test('node tests support disabled nodes, batch progress, saved results and manua
       page,
       nodes.map((node) => '/api/nodes/' + node.id),
     );
-  }
-});
-
-test('source and chain testing keep saved inputs independent and cancellation preserves completed results', async ({
-  page,
-}, testInfo) => {
-  test.setTimeout(45000);
-  await login(page);
-  const name = '来源链测试-' + testInfo.project.name;
-  const { nodes } = await api(page, '/api/nodes', {
-    drafts: [
-      { ...node('ss'), name: name + '-entry' },
-      { ...node('ss'), name: name + '-exit' },
-    ],
-  });
-  const chain = await api(page, '/api/chains', {
-    name,
-    enabled: false,
-    entryNodeId: nodes[0].id,
-    exitNodeId: nodes[1].id,
-  });
-  const text =
-    'ss://' +
-    Buffer.from('aes-128-gcm:test-only-password').toString('base64') +
-    '@example.com:8388#' +
-    encodeURIComponent(name);
-  const source = await api(page, '/api/sources', { name, enabled: false, format: 'uri', text });
-  try {
-    await page.getByRole('button', { name: '来源管理', exact: true }).click();
-    const sourceRow = await rowOnPages(page, name);
-    await sourceRow.getByRole('button', { name: '编辑来源', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '编辑文本来源', exact: true });
-    await dialog.getByLabel('来源名称', { exact: true }).fill('未保存的来源名称');
-    await dialog.getByRole('button', { name: '测试来源节点', exact: true }).click();
-    await completed(page);
-    await expect(dialog.getByLabel('来源名称', { exact: true })).toHaveValue('未保存的来源名称');
-    await expect(dialog.locator('.node-test-summary')).toContainText('Xray：通过');
-    await dialog.getByRole('checkbox', { name: '选择来源节点 ' + name, exact: true }).check();
-    await dialog.getByRole('button', { name: '测试所选来源节点', exact: true }).click();
-    await completed(page);
-    await dialog.getByRole('button', { name: '关闭来源编辑', exact: true }).click();
-    await page.getByRole('button', { name: '本地节点', exact: true }).click();
-    const row = page
-      .getByRole('region', { name: '链式代理管理', exact: true })
-      .locator('.library-list > li')
-      .filter({ hasText: name });
-    await row.getByRole('button', { name: '测试整条链', exact: true }).click();
-    await completed(page);
-    await expect(row.locator('.node-test-summary')).toContainText('Xray：通过');
-    await row.getByRole('checkbox', { name: '选择测试链 ' + name, exact: true }).check();
-    await page.getByRole('button', { name: '测试所选链', exact: true }).click();
-    await page.getByRole('button', { name: '查看测试进度', exact: true }).click();
-    await page.getByRole('button', { name: '取消测试', exact: true }).click();
-    await expect(page.getByRole('region', { name: '测试进度', exact: true })).toContainText(
-      '测试已取消',
-    );
-    expect((await (await page.request.get('/api/chains/' + chain.id)).json()).enabled).toBe(false);
-    const latest = await api(page, '/api/node-tests/results/query', {
-      subjects: [
-        {
-          kind: 'chain',
-          id: chain.id,
-          revision: chain.revision,
-          entryRevision: 1,
-          exitRevision: 1,
-        },
-      ],
-    });
-    expect(latest.results).toHaveLength(3);
-    expect(latest.results.every((result) => result.status === 'passed')).toBe(true);
-  } finally {
-    await cleanup(page, [
-      '/api/sources/' + source.id,
-      '/api/chains/' + chain.id,
-      ...nodes.map((node) => '/api/nodes/' + node.id),
-    ]);
   }
 });

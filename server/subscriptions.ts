@@ -28,7 +28,7 @@ import type { NodeStore } from './nodes.js';
 import type { SourceStore } from './sources.js';
 
 // Bump when conversion, composition or template semantics change.
-export const ENGINE_VERSION = 'p4-2';
+export const ENGINE_VERSION = 'upstream-1';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const SECRET = /^[A-Za-z0-9_-]{43}$/;
 function newSecret() {
@@ -161,19 +161,6 @@ export function createSubscriptionStore(db: Database.Database) {
           'INVALID_INPUT_REFERENCE',
           '所选来源、节点或链式代理已删除，请刷新后重新选择。',
           422,
-        );
-      if (
-        input.kind === 'source' &&
-        db
-          .prepare("SELECT id FROM sources WHERE id=? AND kind='remote' AND snapshot_json IS NULL")
-          .get(input.id) &&
-        !db
-          .prepare('SELECT 1 FROM subscription_inputs WHERE subscription_id=? AND source_id=?')
-          .get(id, input.id)
-      )
-        throw new AppError(
-          'SOURCE_SNAPSHOT_MISSING',
-          '远端来源尚无成功快照，请先刷新成功后再加入方案。',
         );
     }
     db.prepare(
@@ -344,11 +331,7 @@ export function createSubscriptionStore(db: Database.Database) {
       const inputLabels = sub.inputs.map((input) => {
         const raw: unknown =
           input.kind === 'node'
-            ? db
-                .prepare(
-                  "SELECT json_extract(draft_json,'$.name') name,enabled FROM nodes WHERE id=?",
-                )
-                .get(input.id)
+            ? db.prepare('SELECT name,enabled FROM nodes WHERE id=?').get(input.id)
             : db
                 .prepare(
                   `SELECT name,enabled FROM ${input.kind === 'chain' ? 'chains' : 'sources'} WHERE id=?`,
@@ -483,6 +466,12 @@ export function createSubscriptionStore(db: Database.Database) {
           ).run(id, format, encoded);
         return true;
       })();
+    },
+    enabledIds() {
+      return z
+        .array(z.object({ id: z.string() }))
+        .parse(db.prepare('SELECT id FROM subscriptions WHERE enabled=1').all())
+        .map((r) => r.id);
     },
     needsBuild(engine: string) {
       const rows = z

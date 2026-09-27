@@ -14,14 +14,21 @@ export function guardStructure(value: unknown) {
     }
   }
 }
-export async function readJson(request: Request, limit: number): Promise<unknown> {
+export async function readJson(
+  request: Request,
+  limit: number,
+  allowEmpty = false,
+): Promise<unknown> {
   if (
     request.headers.get('content-encoding') &&
     request.headers.get('content-encoding') !== 'identity'
   )
     throw new AppError('ENCODING_UNSUPPORTED', '请发送未压缩的 JSON 请求。', 415);
   const reader = request.body?.getReader();
-  if (!reader) throw new AppError('INVALID_JSON', '需要 JSON 请求正文。', 400);
+  if (!reader) {
+    if (allowEmpty) return undefined;
+    throw new AppError('INVALID_JSON', '需要 JSON 请求正文。', 400);
+  }
   const chunks: Uint8Array[] = [];
   let bytes = 0;
   let timedOut = false;
@@ -38,6 +45,7 @@ export async function readJson(request: Request, limit: number): Promise<unknown
       if (bytes > limit) throw new AppError('INPUT_LIMIT_EXCEEDED', '请求正文超过限制。', 413);
       chunks.push(value);
     }
+    if (allowEmpty && bytes === 0) return undefined;
     let result: unknown;
     try {
       result = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));

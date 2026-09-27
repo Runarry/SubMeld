@@ -1,5 +1,6 @@
+import { resetUpstream } from './upstream-fixture.mjs';
 import assert from 'node:assert/strict';
-import { test, mock } from 'node:test';
+import { test } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -13,8 +14,8 @@ import { newSubscription } from '../dist/server/shared/subscriptions.js';
 import { coreTargets, DEFAULT_PROBE_URL } from '../dist/server/shared/node-tests.js';
 import { node } from './fixtures.mjs';
 import { ControlledConverter, deferred } from './publication-fixtures.mjs';
-
-function fixture(probe = async () => ({ latencyMs: 12, httpStatus: 204 })) {
+async function fixture(probe = async () => ({ latencyMs: 12, httpStatus: 204 })) {
+  await resetUpstream();
   const directory = mkdtempSync(join(tmpdir(), 'submeld-node-tests-'));
   const settings = openSettings(directory, true),
     converter = new ControlledConverter();
@@ -69,7 +70,7 @@ function fixture(probe = async () => ({ latencyMs: 12, httpStatus: 204 })) {
   const drafts = [node('ss'), node('ss')];
   drafts[0].name = 'entry';
   drafts[1].name = 'exit';
-  const [entry, exit] = settings.nodes.create({ drafts }).nodes;
+  const [entry, exit] = (await settings.nodes.create({ drafts })).nodes;
   const subject = (value) => ({ kind: 'node', id: value.id, revision: value.revision });
   return {
     directory,
@@ -125,11 +126,10 @@ const resultFor = (subject, core = 'mihomo') => ({
   message: 'passed',
   stale: false,
 });
-
 test('tests disabled nodes and complete chains sequentially without changing publication revisions', async () => {
-  const f = fixture();
+  const f = await fixture();
   try {
-    const entry = f.settings.nodes.update(f.entry.id, { revision: 1, enabled: false });
+    const entry = await f.settings.nodes.update(f.entry.id, { revision: 1, enabled: false });
     const chain = f.settings.chains.create({
       name: 'disabled chain',
       enabled: false,
@@ -181,11 +181,10 @@ test('tests disabled nodes and complete chains sequentially without changing pub
     await f.close();
   }
 });
-
 test('late node and chain results cannot commit after a member changes; new references mark old results stale', async () => {
   const entered = deferred(),
     released = deferred();
-  const f = fixture(async () => {
+  const f = await fixture(async () => {
     entered.resolve();
     await released.promise;
     return { latencyMs: 1, httpStatus: 204 };
@@ -206,7 +205,7 @@ test('late node and chain results cannot commit after a member changes; new refe
     f.settings.nodeTests.save(resultFor(f.subject(f.entry)));
     f.tester.start({ subjects: [ref, f.subject(f.entry)] });
     await entered.promise;
-    const updated = f.settings.nodes.update(f.entry.id, {
+    const updated = await f.settings.nodes.update(f.entry.id, {
       revision: 1,
       changes: { name: 'changed' },
     });
@@ -223,79 +222,11 @@ test('late node and chain results cannot commit after a member changes; new refe
     await f.close();
   }
 });
-
-test('source snapshot replacement increments a separate version and never reassigns old indexed results', async () => {
-  const entered = deferred(),
-    released = deferred();
-  const f = fixture(async () => {
-    entered.resolve();
-    await released.promise;
-    return { latencyMs: 1, httpStatus: 204 };
-  });
-  try {
-    const source = await f.settings.sources.create(
-      { kind: 'remote', name: 'remote', url: 'https://example.com/sub', format: 'uri' },
-      f.converter,
-    );
-    const snapshot = {
-      items: [{ nodeIndex: 0, draft: node('ss'), excluded: false, diagnostics: [] }],
-      counts: { input: 1, output: 1, filtered: 0 },
-      diagnostics: [],
-    };
-    f.settings.sources.accept(
-      source.id,
-      source.revision,
-      'fixture',
-      snapshot,
-      new Date().toISOString(),
-    );
-    const saved = f.settings.sources.get(source.id);
-    const subject = {
-      kind: 'source',
-      id: source.id,
-      revision: source.revision,
-      snapshotVersion: saved.snapshotVersion,
-      nodeIndex: 0,
-    };
-    f.settings.nodeTests.save(resultFor(subject));
-    f.tester.start({ subjects: [subject] });
-    await entered.promise;
-    snapshot.items[0].draft.name = 'different node';
-    f.settings.sources.accept(
-      source.id,
-      source.revision,
-      'replacement',
-      snapshot,
-      new Date().toISOString(),
-    );
-    const replacement = f.settings.sources.get(source.id);
-    assert.equal(replacement.revision, saved.revision);
-    assert.equal(replacement.snapshotVersion, saved.snapshotVersion + 1);
-    released.resolve();
-    const batch = await finished(f.tester);
-    assert.ok(batch.results.every((result) => result.status === 'stale'));
-    assert.equal(
-      f.settings.nodeTests.results(
-        [{ ...subject, snapshotVersion: replacement.snapshotVersion }],
-        f.kernels.versions(),
-      ).results.length,
-      0,
-    );
-    assert.throws(
-      () => f.tester.start({ subjects: [subject] }),
-      (e) => e.code === 'REVISION_CONFLICT',
-    );
-  } finally {
-    released.resolve();
-    await f.close();
-  }
-});
-
 test('one batch pins its versions while updates and settings changes flag saved results for retesting', async () => {
   const entered = deferred(),
     released = deferred(),
     versions = [];
-  const f = fixture(async (binary) => {
+  const f = await fixture(async (binary) => {
     versions.push(binary.version);
     entered.resolve();
     await released.promise;
@@ -332,11 +263,10 @@ test('one batch pins its versions while updates and settings changes flag saved 
     await f.close();
   }
 });
-
 test('cancel and shutdown abort active requests, release kernels, and preserve prior complete results', async () => {
   for (const shutdown of [false, true]) {
     const entered = deferred();
-    const f = fixture(async (_binary, _config, _port, _url, _dir, signal) => {
+    const f = await fixture(async (_binary, _config, _port, _url, _dir, signal) => {
       entered.resolve();
       return new Promise((_resolve, reject) =>
         signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
@@ -360,11 +290,10 @@ test('cancel and shutdown abort active requests, release kernels, and preserve p
     }
   }
 });
-
-test('unsupported output and abnormal HTTP are distinct; Worker waiting is cancellable', async () => {
-  const f = fixture(async () => ({ latencyMs: 8, httpStatus: 302 }));
+test('unsupported output and abnormal HTTP are distinct; Converter waiting is cancellable', async () => {
+  const f = await fixture(async () => ({ latencyMs: 8, httpStatus: 302 }));
   try {
-    const [hy2] = f.settings.nodes.create({ drafts: [node('hysteria2')] }).nodes;
+    const [hy2] = (await f.settings.nodes.create({ drafts: [node('hysteria2')] })).nodes;
     f.tester.start({ subjects: [f.subject(hy2)] });
     const batch = await finished(f.tester);
     assert.deepEqual(
@@ -381,9 +310,8 @@ test('unsupported output and abnormal HTTP are distinct; Worker waiting is cance
     await f.close();
   }
 });
-
 test('test and kernel endpoints enforce login, Origin, structured references and saved settings', async () => {
-  const f = fixture();
+  const f = await fixture();
   const auth = new Auth(await hashPassword('test-admin-password-2026'));
   try {
     const origin = 'http://127.0.0.1:3333';
@@ -396,6 +324,7 @@ test('test and kernel endpoints enforce login, Origin, structured references and
       chains: f.settings.chains,
       subscriptions: f.settings.subscriptions,
       publisher: {},
+      resources: f.settings.resources,
       tester: f.tester,
     });
     let cookie = '';
@@ -475,50 +404,6 @@ test('test and kernel endpoints enforce login, Origin, structured references and
     );
   } finally {
     auth.close();
-    await f.close();
-  }
-});
-
-test('a 2,000-node source selection reads its snapshot once and result queries only read versions', async () => {
-  const f = fixture();
-  try {
-    const source = await f.settings.sources.create(
-      { kind: 'remote', name: 'large', url: 'https://example.com/sub', format: 'uri' },
-      f.converter,
-    );
-    const draft = node('ss');
-    const snapshot = {
-      items: Array.from({ length: 2000 }, (_, nodeIndex) => ({
-        nodeIndex,
-        draft,
-        excluded: false,
-        diagnostics: [],
-      })),
-      counts: { input: 2000, output: 2000, filtered: 0 },
-      diagnostics: [],
-    };
-    f.settings.sources.accept(
-      source.id,
-      source.revision,
-      'fixture',
-      snapshot,
-      new Date().toISOString(),
-    );
-    const saved = f.settings.sources.get(source.id);
-    const subjects = snapshot.items.map(({ nodeIndex }) => ({
-      kind: 'source',
-      id: source.id,
-      revision: source.revision,
-      snapshotVersion: saved.snapshotVersion,
-      nodeIndex,
-    }));
-    const get = mock.method(f.settings.sources, 'get');
-    assert.equal(f.settings.nodeTests.selection(subjects).length, 2000);
-    assert.equal(get.mock.callCount(), 1);
-    assert.equal(f.settings.nodeTests.results(subjects, f.kernels.versions()).results.length, 0);
-    assert.equal(get.mock.callCount(), 1);
-    get.mock.restore();
-  } finally {
     await f.close();
   }
 });

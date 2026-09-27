@@ -1,7 +1,9 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { InputChanges } from './subscriptions.js';
+import { UpstreamResources, withEnabled } from './upstream-resources.js';
+import { identityKey } from './sub-store.js';
+import { toUpstream } from './converter/model.js';
 import { AppError } from './errors.js';
 import { validateDraft } from './converter/model.js';
 import {
@@ -10,20 +12,10 @@ import {
   draftSchema,
   nodeIdsSchema,
   nodeSummarySchema,
-  storedNodeSchema,
   updateNodeSchema,
   type NodeDraft,
   type StoredNode,
 } from './shared/contracts.js';
-const rowSchema = z.strictObject({
-  id: z.string(),
-  enabled: z.union([z.literal(0), z.literal(1)]),
-  revision: z.number().int().positive(),
-  model_version: z.literal(1),
-  draft_json: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
-});
 function limit(value: unknown) {
   if (Buffer.byteLength(JSON.stringify(value)) > MAX_BYTES)
     throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数据超过 4 MiB。', 413);
@@ -47,25 +39,11 @@ function summary(node: StoredNode) {
     updatedAt: node.updatedAt,
   });
 }
-export function createNodeStore(db: Database.Database, publications: InputChanges) {
+export function createNodeStore(db: Database.Database, resources: UpstreamResources) {
   function get(id: string): StoredNode {
-    const raw: unknown = db.prepare('SELECT * FROM nodes WHERE id = ?').get(id);
-    if (raw === undefined) throw new AppError('NOT_FOUND', '节点不存在。', 404);
-    const row = rowSchema.parse(raw);
-    const value: unknown = JSON.parse(row.draft_json);
-    const draft = validDraft(value);
-    return storedNodeSchema.parse({
-      id: row.id,
-      enabled: row.enabled === 1,
-      revision: row.revision,
-      modelVersion: row.model_version,
-      draft,
-      name: draft.name,
-      protocol: draft.protocol,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    });
+    return resources.node(id);
   }
+
   function current(id: string, revision: number) {
     const node = get(id);
     if (node.revision !== revision)
@@ -74,94 +52,96 @@ export function createNodeStore(db: Database.Database, publications: InputChange
   }
   return {
     get,
+    summary: (id: string) => resources.nodeSummary(id),
     list(page: number) {
       const rows: unknown = db
-        .prepare('SELECT id FROM nodes ORDER BY created_at, id LIMIT 25 OFFSET ?')
+        .prepare('SELECT id FROM nodes WHERE present=1 ORDER BY created_at, id LIMIT 25 OFFSET ?')
         .all(page * 25);
       const ids = z.array(z.object({ id: z.string() })).parse(rows);
       const total = z
         .object({ count: z.number() })
-        .parse(db.prepare('SELECT COUNT(*) AS count FROM nodes').get()).count;
-      return { nodes: ids.map((row) => summary(get(row.id))), total };
+        .parse(db.prepare('SELECT COUNT(*) AS count FROM nodes WHERE present=1').get()).count;
+      return { nodes: ids.map((row) => resources.nodeSummary(row.id)), total };
     },
-    create(input: unknown) {
+    async create(input: unknown) {
       limit(input);
       const parsed = createNodesSchema.safeParse(input);
       if (!parsed.success) throw new AppError('INVALID_REQUEST', '保存请求格式无效。', 400);
       const drafts = parsed.data.drafts.map((d, i) => validDraft(d, i));
-      return db.transaction(() => {
-        const now = new Date().toISOString();
-        const insert = db.prepare('INSERT INTO nodes VALUES (?,1,1,1,?,?,?)');
-        return {
-          nodes: drafts.map((draft) => {
-            const id = randomUUID();
-            insert.run(id, JSON.stringify(draft), now, now);
-            return summary(get(id));
-          }),
-        };
-      })();
+      const ids = drafts.map(() => randomUUID());
+      await resources.write(async () => {
+        const existing = await resources.client.records('sub');
+        const added = drafts.map((draft, i) => ({
+          name: 'sm-node-' + ids[i],
+          displayName: draft.name,
+          source: 'local',
+          content: JSON.stringify(toUpstream(draft)),
+          process: [],
+          [identityKey]: { id: ids[i], kind: 'node' },
+        }));
+        await resources.client.api('/api/subs', [...existing, ...added], 'PUT');
+      });
+      return { nodes: ids.map((id) => summary(get(id))) };
     },
-    update(id: string, input: unknown) {
+    async update(id: string, input: unknown) {
       limit(input);
       const parsed = updateNodeSchema.safeParse(input);
       if (!parsed.success) throw new AppError('INVALID_REQUEST', '节点更新请求格式无效。', 400);
-      const result = db.transaction(() => {
-        const node = current(id, parsed.data.revision);
-        const changes = parsed.data.changes ?? {};
-        const clearSecrets = (values: Record<string, unknown>) =>
-          Object.fromEntries(
-            Object.entries(values).map(([key, value]) => [key, value === null ? '' : value]),
-          );
-        const draft = validDraft({
-          ...node.draft,
-          ...changes,
-          tls: { ...node.draft.tls, ...changes.tls },
-          transport: { ...node.draft.transport, ...changes.transport },
-          auth: { ...node.draft.auth, ...clearSecrets(changes.auth ?? {}) },
-          protocolOptions: {
-            ...node.draft.protocolOptions,
-            ...clearSecrets(changes.protocolOptions ?? {}),
-          },
-        });
-        limit(draft);
-        db.prepare(
-          'UPDATE nodes SET draft_json=?, enabled=?, revision=revision+1, updated_at=? WHERE id=? AND revision=?',
-        ).run(
-          JSON.stringify(draft),
-          Number(parsed.data.enabled ?? node.enabled),
-          new Date().toISOString(),
-          id,
-          node.revision,
+      const node = current(id, parsed.data.revision);
+      const changes = parsed.data.changes ?? {};
+      const clearSecrets = (values: Record<string, unknown>) =>
+        Object.fromEntries(
+          Object.entries(values).map(([key, value]) => [key, value === null ? '' : value]),
         );
-        return { node: get(id), affected: publications.invalidateInput('node', id) };
-      })();
-      publications.notify(result.affected);
-      return result.node;
+      const draft = validDraft({
+        ...node.draft,
+        ...changes,
+        tls: { ...node.draft.tls, ...changes.tls },
+        transport: { ...node.draft.transport, ...changes.transport },
+        auth: { ...node.draft.auth, ...clearSecrets(changes.auth ?? {}) },
+        protocolOptions: {
+          ...node.draft.protocolOptions,
+          ...clearSecrets(changes.protocolOptions ?? {}),
+        },
+      });
+      limit(draft);
+      await resources.write(
+        async () => {
+          const { record } = resources.record(id);
+          const update = withEnabled(
+            { ...record, displayName: draft.name, content: JSON.stringify(toUpstream(draft)) },
+            parsed.data.enabled ?? node.enabled,
+          );
+          await resources.client.api(
+            '/api/sub/' + encodeURIComponent(record.name),
+            update,
+            'PATCH',
+          );
+        },
+        [],
+        () => {
+          current(id, parsed.data.revision);
+        },
+      );
+      return get(id);
     },
-    delete(id: string, revision: number) {
-      const affected = db.transaction(() => {
-        current(id, revision);
-        const chains = z
-          .array(z.object({ name: z.string() }))
-          .parse(
-            db
-              .prepare(
-                'SELECT name FROM chains WHERE entry_node_id=? OR exit_node_id=? ORDER BY created_at,id',
-              )
-              .all(id, id),
+    async delete(id: string, revision: number) {
+      await resources.write(
+        async () => {
+          const { record } = resources.record(id);
+          await resources.client.api(
+            '/api/sub/' + encodeURIComponent(record.name),
+            undefined,
+            'DELETE',
           );
-        if (chains.length)
-          throw new AppError(
-            'NODE_IN_USE',
-            '节点正被链式代理引用，请先替换引用或删除链：' +
-              chains.map((chain) => chain.name).join('、'),
-            422,
-          );
-        const ids = publications.invalidateInput('node', id);
-        db.prepare('DELETE FROM nodes WHERE id=? AND revision=?').run(id, revision);
-        return ids;
-      })();
-      publications.notify(affected);
+        },
+        [id],
+        () => {
+          resources.record(id);
+          if (resources.nodeSummary(id).revision !== revision)
+            throw new AppError('REVISION_CONFLICT', '节点已修改，请重新载入。', 409);
+        },
+      );
     },
     load(input: unknown) {
       const parsed = nodeIdsSchema.safeParse(input);

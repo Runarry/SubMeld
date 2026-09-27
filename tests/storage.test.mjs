@@ -21,7 +21,7 @@ function temporary() {
     },
   };
 }
-test('settings migrate once, preserve password hashes and enforce single instance', async () => {
+test('new settings initialize once, preserve password hashes and enforce single instance', async () => {
   const dir = temporary();
   let settings;
   try {
@@ -35,8 +35,8 @@ test('settings migrate once, preserve password hashes and enforce single instanc
     const reopened = openSettings(dir.path, true);
     assert.equal(reopened.getPasswordHash(), hash);
     reopened.close();
-    const db = new Database(join(dir.path, 'submeld.sqlite'));
-    assert.equal(db.pragma('user_version', { simple: true }), 7);
+    const db = new Database(join(dir.path, 'submeld-v2.sqlite'));
+    assert.equal(db.pragma('user_version', { simple: true }), 1);
     assert.deepEqual(
       db
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
@@ -56,7 +56,9 @@ test('settings migrate once, preserve password hashes and enforce single instanc
     );
     db.close();
     assert.equal(
-      readFileSync(join(dir.path, 'submeld.sqlite')).includes(Buffer.from('only-a-test-password')),
+      readFileSync(join(dir.path, 'submeld-v2.sqlite')).includes(
+        Buffer.from('only-a-test-password'),
+      ),
       false,
     );
   } finally {
@@ -69,7 +71,7 @@ test('unsupported migration version stops and releases directory lock', () => {
   try {
     const settings = openSettings(dir.path, true);
     settings.close();
-    const db = new Database(join(dir.path, 'submeld.sqlite'));
+    const db = new Database(join(dir.path, 'submeld-v2.sqlite'));
     db.pragma('user_version=99');
     db.close();
     assert.throws(() => openSettings(dir.path, true), /版本/);

@@ -72,7 +72,7 @@ for (const [target, lock] of Object.entries(locks)) {
   assert.ok(version.includes(lock.version), target + ' version mismatch');
   binaries[target] = binary;
   const ordinary = items(...renderFixtures(target));
-  const generated = renderInput({
+  const generated = await renderInput({
     target,
     items: [...ordinary, ...chainFixtures(target, ordinary.length)],
     listenPort: 1080,

@@ -7,7 +7,7 @@ import { openSettings } from './database.js';
 import { Auth } from './auth.js';
 import { Converter } from './converter/pool.js';
 import { Publisher } from './publisher.js';
-import { SourceRefresher } from './source-refresher.js';
+import { SubStoreClient } from './sub-store.js';
 import { KernelManager } from './kernels.js';
 import { NodeTester } from './node-tests.js';
 
@@ -21,14 +21,15 @@ async function main() {
     if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)))
       throw new Error('数据目录不能位于网页目录内。');
   }
-  const settings = openSettings(config.dataDir, config.development);
+  const client = new SubStoreClient(config.subStoreUrl);
+  const settings = openSettings(config.dataDir, config.development, client);
   const passwordHash = settings.getPasswordHash();
   if (!passwordHash) {
     settings.close();
     throw new Error('请先通过本地 admin:init 命令初始化管理员。');
   }
   const auth = new Auth(passwordHash);
-  const converter = new Converter();
+  const converter = new Converter(client);
   try {
     await converter.ready;
   } catch (error) {
@@ -42,7 +43,7 @@ async function main() {
     settings.sources,
     converter,
   );
-  const refresher = new SourceRefresher(settings.sources, converter);
+
   const kernels = new KernelManager(config.dataDir);
   const tester = new NodeTester(settings.nodeTests, kernels, converter, config.dataDir);
   let app: ReturnType<typeof createApp>;
@@ -50,6 +51,7 @@ async function main() {
     await kernels.initialize();
     app = createApp({
       webRoot,
+      resources: settings.resources,
       tester,
       config,
       auth,
@@ -61,11 +63,10 @@ async function main() {
       publisher,
     });
     publisher.start();
-    refresher.start();
   } catch (error) {
     await tester.close();
     await kernels.close();
-    await refresher.close();
+
     await publisher.close();
     await converter.close();
     auth.close();
@@ -84,7 +85,7 @@ async function main() {
     if ('closeAllConnections' in server) server.closeAllConnections();
     await tester.close();
     await kernels.close();
-    await refresher.close();
+
     await publisher.close();
     await converter.close();
     auth.close();

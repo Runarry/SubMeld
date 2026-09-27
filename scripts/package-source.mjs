@@ -18,6 +18,7 @@ const sources = [
   '.dockerignore',
   'Dockerfile',
   'compose.yaml',
+  'compose.dev.yaml',
   'eslint.config.js',
   'vite.config.ts',
   'playwright.config.ts',
@@ -29,7 +30,8 @@ const sources = [
   'web',
   'scripts',
   'tests',
-  'vendor',
+  'deploy',
+  'upstreams.lock.json',
   'docs',
 ];
 if (existsSync('dist/kernel-sources/manifest.json'))

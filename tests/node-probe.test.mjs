@@ -146,9 +146,9 @@ test('request deadlines and explicit cancellation destroy the HTTPS tunnel', asy
   abort.abort();
   await assert.rejects(request, { code: 'TEST_CANCELLED' });
 });
-test('Xray test-only HTTP inbound preserves the exported SOCKS template and all outbound data', () => {
+test('Xray test-only HTTP inbound preserves the exported SOCKS template and all outbound data', async () => {
   const draft = node('ss');
-  const rendered = renderInput({ target: 'xray', listenPort: 19090, items: items(draft) });
+  const rendered = await renderInput({ target: 'xray', listenPort: 19090, items: items(draft) });
   const original = JSON.parse(rendered.full),
     test = JSON.parse(testConfig('xray', rendered.full));
   assert.equal(original.inbounds[0].protocol, 'socks');

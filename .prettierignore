@@ -10,4 +10,6 @@ data/
 backups/
 logs/
 tmp/
-vendor/sub-store/
+
+data-v2/
+runtime-v2/

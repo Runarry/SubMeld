@@ -324,6 +324,7 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
           if (seen.has(key))
             diagnostics.push(diagnostic(i, 'DUPLICATE_PARAMETER', 'URI 含重复参数。'));
           seen.add(key);
+          if (scheme === 'vless' && key === 'packetEncoding' && val === 'xudp') continue;
           if (unsupportedFields.has(key)) fail();
           else if (queryFields.has(key) && !queryByProtocol[scheme]?.has(key)) fail();
           else if (!queryFields.has(key)) warning();
@@ -362,6 +363,7 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
     for (const key of Object.keys(entry))
       if (
         unsupportedFields.has(key) &&
+        !(key === 'packet-encoding' && entry.type === 'vless' && entry[key] === 'xudp') &&
         entry[key] !== undefined &&
         entry[key] !== false &&
         entry[key] !== ''
@@ -377,6 +379,7 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
       'client-fingerprint',
       'cipher',
       'flow',
+      'packet-encoding',
       'obfs',
       'obfs-password',
     ]) {

@@ -1,5 +1,11 @@
 import { resolve, isAbsolute } from 'node:path';
-export type Config = { publicOrigin: string; dataDir: string; development: boolean };
+export type Config = {
+  publicOrigin: string;
+  dataDir: string;
+  development: boolean;
+  subStoreUrl: string;
+  telegramBot: string;
+};
 export function loadConfig(development = false, env: NodeJS.ProcessEnv = process.env): Config {
   if (!env.PUBLIC_ORIGIN || !env.DATA_DIR)
     throw new Error('请显式配置 PUBLIC_ORIGIN 和 DATA_DIR。');
@@ -20,5 +26,9 @@ export function loadConfig(development = false, env: NodeJS.ProcessEnv = process
     publicOrigin: url.origin,
     dataDir: isAbsolute(env.DATA_DIR) ? env.DATA_DIR : resolve(env.DATA_DIR),
     development,
+    subStoreUrl: env.SUB_STORE_URL ?? 'http://127.0.0.1:39091/gateway',
+    telegramBot: /^\w{5,32}$/.test(env.KOIPY_BOT_USERNAME ?? '')
+      ? (env.KOIPY_BOT_USERNAME ?? '')
+      : '',
   };
 }

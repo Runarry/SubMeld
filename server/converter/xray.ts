@@ -74,5 +74,9 @@ export function xrayOutbound(node: NodeDraft): Record<string, unknown> {
     protocol: node.protocol === 'ss' ? 'shadowsocks' : node.protocol,
     settings,
     streamSettings: stream,
+    // Xray exposes XUDP through mux; keep TCP connections independent.
+    ...(node.protocol === 'vless'
+      ? { mux: { enabled: true, concurrency: -1, xudpConcurrency: 16, xudpProxyUDP443: 'allow' } }
+      : {}),
   };
 }

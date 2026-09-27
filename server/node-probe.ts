@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import { sourceUrl, publicAddress, resolveSource, type SourceAddress } from './source-fetcher.js';
+import { sourceUrl, publicAddress, resolveSource, type SourceAddress } from './probe-address.js';
 import { startProcess } from './kernel-process.js';
 import type { RenderTarget } from './shared/contracts.js';
 import type { KernelBinary } from './kernels.js';

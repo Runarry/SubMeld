@@ -89,6 +89,7 @@ export class NodeTester {
               stale: false,
             };
             try {
+              await this.store.refresh([subject]);
               const { item } = this.store.capture(subject);
               const port = await freeProbePort();
               const rendered = await this.render(item, core, port, signal);
@@ -142,6 +143,15 @@ export class NodeTester {
               } else {
                 result.status = 'network_error';
                 result.message = '测试无法完成，临时进程已关闭。';
+              }
+            }
+            if (!['cancelled', 'stale'].includes(result.status)) {
+              try {
+                await this.store.refresh([subject]);
+              } catch {
+                result.status = 'stale';
+                result.stale = true;
+                result.message = '无法确认上游对象仍有效，结果未保存。';
               }
             }
             if (!['cancelled', 'stale'].includes(result.status) && !this.store.save(result)) {

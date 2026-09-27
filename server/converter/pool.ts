@@ -1,206 +1,68 @@
-import { Worker } from 'node:worker_threads';
-import { z } from 'zod';
 import { AppError } from '../errors.js';
-import {
-  errorSchema,
-  parseResultSchema,
-  produceResultSchema,
-  renderResultSchema,
-  type RenderResult,
-  type WorkerRequest,
-  type ParseResult,
-  type ProduceResult,
-} from '../shared/contracts.js';
-const replySchema = z.discriminatedUnion('ok', [
-  z.object({ id: z.number(), ok: z.literal(true), result: z.unknown() }),
-  z.object({
-    id: z.number(),
-    ok: z.literal(false),
-    status: z.union([z.literal(400), z.literal(413), z.literal(422)]),
-    error: errorSchema,
-  }),
-]);
-type Result = ParseResult | ProduceResult | RenderResult;
+import { SubStoreClient } from '../sub-store.js';
+import type { ConversionRequest } from '../shared/contracts.js';
+import { parseInput, produceInput } from './engine.js';
+import { renderInput } from './render.js';
+
+/** One bounded enhancement operation; conversion itself runs in Sub-Store. */
 export class Converter {
-  private worker: Worker | undefined;
-  private running:
-    | {
-        id: number;
-        kind: WorkerRequest['kind'];
-        resolve: (value: Result) => void;
-        reject: (error: Error) => void;
-        cleanup: () => void;
-      }
-    | undefined;
-  private counter = 0;
-  private available = false;
+  readonly ready = Promise.resolve();
+  private requests = new Set<AbortController>();
+  private tail = Promise.resolve();
   private closed = false;
-  private idleListeners = new Set<() => void>();
+  private listeners = new Set<() => void>();
+  constructor(readonly client = new SubStoreClient()) {}
   isAvailable() {
-    return this.available && !!this.worker && !this.running && !this.closed;
+    return !this.closed && this.requests.size === 0;
   }
   onAvailable(listener: () => void) {
-    this.idleListeners.add(listener);
+    this.listeners.add(listener);
     return () => {
-      this.idleListeners.delete(listener);
+      this.listeners.delete(listener);
     };
   }
-  private notifyAvailable() {
-    queueMicrotask(() => {
-      if (this.isAvailable()) for (const listener of this.idleListeners) listener();
+  async run(request: ConversionRequest, signal?: AbortSignal) {
+    if (this.closed) throw new AppError('CONVERTER_CLOSED', '增强转换已停止。', 503);
+    const controller = new AbortController();
+    this.requests.add(controller);
+    const previous = this.tail;
+    let release!: () => void;
+    const slot = new Promise<void>((resolve) => {
+      release = resolve;
     });
-  }
-  ready: Promise<void>;
-  constructor(
-    private workerUrl = new URL(
-      import.meta.url.endsWith('.ts') ? '../../dist/server/converter/worker.js' : './worker.js',
-      import.meta.url,
-    ),
-    private timeoutMs = 5000,
-  ) {
-    this.ready = this.spawn();
-  }
-  private spawn(): Promise<void> {
-    this.available = false;
-    const worker = new Worker(this.workerUrl, {
-      resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32 },
-      stdout: true,
-      stderr: true,
-    });
-    // Upstream stdout/stderr never reach application logs.
-    worker.stdout.resume();
-    worker.stderr.resume();
-    this.worker = worker;
-    return new Promise((resolve, reject) => {
-      let started = false;
-      const stopStartup = (message: string) => {
-        clearTimeout(startup);
-        if (this.worker === worker) {
-          this.worker = undefined;
-          this.available = false;
-        }
-        reject(new Error(message));
-        void worker.terminate();
-      };
-      const startup = setTimeout(() => stopStartup('Converter startup timeout'), 10000);
-      worker.on('message', (message: unknown) => {
-        if (this.worker !== worker || this.closed) return;
-        if (
-          typeof message === 'object' &&
-          message !== null &&
-          'type' in message &&
-          message.type === 'ready'
-        ) {
-          clearTimeout(startup);
-          started = true;
-          this.available = true;
+    this.tail = previous.then(() => slot);
+    const abort = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(120_000),
+      ...(signal ? [signal] : []),
+    ]);
+    try {
+      abort.throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        const cancel = () => reject(abort.reason);
+        abort.addEventListener('abort', cancel, { once: true });
+        void previous.then(() => {
+          abort.removeEventListener('abort', cancel);
           resolve();
-          this.notifyAvailable();
-          return;
-        }
-        const response = replySchema.safeParse(message);
-        const current = this.running;
-        if (!response.success || !current || response.data.id !== current.id) {
-          if (!started) {
-            stopStartup('Invalid converter startup response');
-            return;
-          }
-          void this.recover(worker);
-          return;
-        }
-        this.running = undefined;
-        current.cleanup();
-        if (response.data.ok) {
-          const result = (
-            current.kind === 'parse'
-              ? parseResultSchema
-              : current.kind === 'render'
-                ? renderResultSchema
-                : produceResultSchema
-          ).safeParse(response.data.result);
-          if (result.success) current.resolve(result.data);
-          else {
-            current.reject(new AppError('CONVERTER_RESPONSE_INVALID', '转换结果无效。'));
-            void this.recover(worker);
-          }
-        } else
-          current.reject(
-            new AppError(
-              response.data.error.code,
-              response.data.error.message,
-              response.data.status,
-              response.data.error.diagnostics,
-            ),
-          );
-        this.notifyAvailable();
+        });
       });
-      worker.on('error', () => {
-        if (!started) stopStartup('Converter failed to start');
-        else void this.recover(worker);
-      });
-      worker.on('exit', () => {
-        clearTimeout(startup);
-        if (!started) stopStartup('Converter exited');
-        else if (this.worker === worker && !this.closed) void this.recover(worker);
-      });
-    });
-  }
-  private async recover(worker: Worker) {
-    if (this.worker !== worker) return;
-    this.worker = undefined;
-    this.available = false;
-    const current = this.running;
-    this.running = undefined;
-    current?.cleanup();
-    current?.reject(new AppError('CONVERTER_UNAVAILABLE', '转换进程已重建，请重试。', 503));
-    this.ready = (async () => {
-      await worker.terminate();
-      if (!this.closed) await this.spawn();
-    })();
-    void this.ready.catch(() => {});
-  }
-  run(request: WorkerRequest, signal?: AbortSignal): Promise<Result> {
-    const worker = this.worker;
-    if (!worker || !this.available || this.running || this.closed)
-      return Promise.reject(new AppError('CONVERTER_BUSY', '转换器繁忙，请稍后重试。', 503));
-    if (signal?.aborted) return Promise.reject(new AppError('REQUEST_CANCELLED', '转换已取消。'));
-    return new Promise((resolve, reject) => {
-      const id = ++this.counter;
-      const stop = (code: string, message: string) => {
-        if (this.running?.id !== id) return;
-        const current = this.running;
-        this.running = undefined;
-        current.cleanup();
-        reject(new AppError(code, message));
-        void this.recover(worker);
-      };
-      const abort = () => stop('REQUEST_CANCELLED', '转换已取消。');
-      const timer = setTimeout(
-        () => stop('WORKER_TIMEOUT', '转换超过 5 秒，转换进程已终止并重建。'),
-        this.timeoutMs,
-      );
-      this.running = {
-        id,
-        kind: request.kind,
-        resolve,
-        reject,
-        cleanup: () => {
-          clearTimeout(timer);
-          signal?.removeEventListener('abort', abort);
-        },
-      };
-      signal?.addEventListener('abort', abort, { once: true });
-      worker.postMessage({ id, ...request });
-    });
+      abort.throwIfAborted();
+      if (request.kind === 'parse') return await parseInput(request.input, this.client, abort);
+      if (request.kind === 'produce') return await produceInput(request.input, this.client, abort);
+      return await renderInput(request.input, this.client, abort);
+    } finally {
+      this.requests.delete(controller);
+      release();
+      if (this.isAvailable())
+        queueMicrotask(() => {
+          for (const listener of this.listeners) listener();
+        });
+    }
   }
   async close() {
     this.closed = true;
-    this.available = false;
-    this.running?.cleanup();
-    this.running?.reject(new AppError('CONVERTER_UNAVAILABLE', '应用正在停止。', 503));
-    this.running = undefined;
-    const worker = this.worker;
-    this.worker = undefined;
-    await worker?.terminate();
+    for (const request of this.requests) request.abort();
+    this.listeners.clear();
+    await this.tail;
   }
 }

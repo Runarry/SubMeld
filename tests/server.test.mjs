@@ -28,6 +28,7 @@ before(async () => {
   server = serve({
     fetch: createApp({
       webRoot,
+      resources: settings.resources,
       config,
       auth,
       converter,
@@ -74,13 +75,13 @@ function post(path, body, headers = {}) {
   });
 }
 test('built homepage and its JavaScript/CSS are served with same-origin CSP', async () => {
-  const response = await fetch(origin + '/');
+  const response = await fetch(origin + '/submeld/');
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.doesNotMatch(response.headers.get('content-security-policy'), /unsafe-|https:/);
   const html = await response.text();
   assert.match(html, /<title>SubMeld · 订融<\/title>/);
-  const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]);
+  const assets = [...html.matchAll(/(?:src|href)="(\/submeld\/assets\/[^"]+)"/g)].map((m) => m[1]);
   assert.ok(assets.some((a) => a.endsWith('.js')));
   assert.ok(assets.some((a) => a.endsWith('.css')));
   for (const asset of assets) {
@@ -101,7 +102,7 @@ test('health GET/HEAD is public; unknown API and subscription paths remain JSON 
     '/api/v1/missing',
     '/s',
     '/s/test-token/uri',
-    '/assets/missing.js',
+    '/submeld/assets/missing.js',
     '/server/app.ts',
     '/data/submeld.sqlite',
   ]) {
@@ -160,6 +161,7 @@ test('login creates an HttpOnly Strict cookie and production adds Secure and __H
   const me = await fetch(origin + '/api/auth/me', { headers: { Cookie: cookie } });
   assert.deepEqual(await me.json(), { authenticated: true });
   const production = createApp({
+    resources: settings.resources,
     config: { ...config, development: false, publicOrigin: 'https://submeld.example' },
     auth: new Auth(hash),
     converter,

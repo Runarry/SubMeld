@@ -10,7 +10,7 @@ export const testSubjectSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('source'),
     ...identity,
-    snapshotVersion: z.number().int().nonnegative(),
+    snapshotHash: z.string(),
     nodeIndex: z
       .number()
       .int()
@@ -34,7 +34,7 @@ export function sameSubject(a: TestSubject, b: TestSubject) {
   return (
     subjectKey(a) === subjectKey(b) &&
     a.revision === b.revision &&
-    (a.kind !== 'source' || (b.kind === 'source' && a.snapshotVersion === b.snapshotVersion)) &&
+    (a.kind !== 'source' || (b.kind === 'source' && a.snapshotHash === b.snapshotHash)) &&
     (a.kind !== 'chain' ||
       (b.kind === 'chain' &&
         a.entryRevision === b.entryRevision &&

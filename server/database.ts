@@ -1,17 +1,21 @@
+import { SubStoreClient } from './sub-store.js';
+import { UpstreamResources } from './upstream-resources.js';
 import Database from 'better-sqlite3';
 import { createNodeStore } from './nodes.js';
 import { createChainStore } from './chains.js';
 import { createSourceStore } from './sources.js';
 import { createSubscriptionStore } from './subscriptions.js';
-import { chmodSync, lstatSync, mkdirSync, readdirSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createNodeTestStore } from './node-test-store.js';
 
-export function openSettings(dataDir: string, development: boolean) {
+export function openSettings(dataDir: string, development: boolean, client = new SubStoreClient()) {
   if (process.platform === 'win32' && !development)
     throw new Error('生产数据权限需要 Linux 容器；Windows 仅支持显式开发模式。');
   if (process.platform !== 'win32') process.umask(0o077);
+  if (existsSync(join(dataDir, 'submeld.sqlite')))
+    throw new Error('旧版数据目录不会自动迁移，请为上游版本配置新目录。');
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   if (!lstatSync(dataDir).isDirectory()) throw new Error('数据路径必须为独立目录。');
   if (process.platform !== 'win32') chmodSync(dataDir, 0o700);
@@ -36,170 +40,75 @@ export function openSettings(dataDir: string, development: boolean) {
     }
   };
   try {
-    db = new Database(join(dataDir, 'submeld.sqlite'));
+    db = new Database(join(dataDir, 'submeld-v2.sqlite'));
     db.pragma('foreign_keys = ON');
     db.pragma('journal_mode = WAL');
     db.pragma('busy_timeout = 3000');
     const version = db.pragma('user_version', { simple: true });
-    if (
-      version !== 0 &&
-      version !== 1 &&
-      version !== 2 &&
-      version !== 3 &&
-      version !== 4 &&
-      version !== 5 &&
-      version !== 6 &&
-      version !== 7
-    )
-      throw new Error('数据库版本不受支持，停止启动。');
+    if (version !== 0 && version !== 1) throw new Error('增强数据库版本不受支持。');
     if (version === 0)
       db.transaction(() => {
-        db?.exec(
-          'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); PRAGMA user_version = 1;',
+        db?.exec(`
+        CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        CREATE TABLE nodes (
+          id TEXT PRIMARY KEY,name TEXT NOT NULL,upstream_name TEXT NOT NULL,upstream_type TEXT NOT NULL,
+          enabled INTEGER NOT NULL,revision INTEGER NOT NULL,fingerprint TEXT NOT NULL,present INTEGER NOT NULL,
+          created_at TEXT NOT NULL,updated_at TEXT NOT NULL,protocol TEXT
         );
-      })();
-    if (version === 0 || version === 1)
-      db.transaction(() => {
-        db?.exec(`CREATE TABLE nodes (
-          id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
-          revision INTEGER NOT NULL CHECK(revision > 0), model_version INTEGER NOT NULL,
-          draft_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        ); PRAGMA user_version = 2;`);
-      })();
-    if (version === 0 || version === 1 || version === 2)
-      db.transaction(() => {
-        db?.exec(`CREATE TABLE sources (
-          id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
-          revision INTEGER NOT NULL CHECK(revision>0), model_version INTEGER NOT NULL,
-          format TEXT NOT NULL, text TEXT NOT NULL, snapshot_json TEXT NOT NULL,
-          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, saved_at TEXT NOT NULL
+        CREATE TABLE sources (
+          id TEXT PRIMARY KEY,name TEXT NOT NULL,upstream_name TEXT NOT NULL,upstream_type TEXT NOT NULL,
+          enabled INTEGER NOT NULL,revision INTEGER NOT NULL,fingerprint TEXT NOT NULL,present INTEGER NOT NULL,
+          created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+          snapshot_hash TEXT NOT NULL DEFAULT '',saved_at TEXT,node_count INTEGER NOT NULL DEFAULT 0,last_attempt_at TEXT,error_json TEXT
         );
-        CREATE TABLE subscriptions (
-          id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
-          revision INTEGER NOT NULL CHECK(revision>0), config_json TEXT NOT NULL,
-          token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        );
-        CREATE TABLE subscription_inputs (
-          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
-          position INTEGER NOT NULL CHECK(position>=0),
-          node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
-          source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
-          PRIMARY KEY(subscription_id,position), CHECK((node_id IS NULL) != (source_id IS NULL))
-        );
-        CREATE INDEX subscription_node ON subscription_inputs(node_id);
-        CREATE INDEX subscription_source ON subscription_inputs(source_id);
-        CREATE TABLE artifacts (
-          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
-          format TEXT NOT NULL, body TEXT, built_revision INTEGER, engine_version TEXT,
-          generated_at TEXT, counts_json TEXT, diagnostics_json TEXT, error_json TEXT,
-          PRIMARY KEY(subscription_id,format)
-        ); PRAGMA user_version=3;`);
-      })();
-    if (version === 0 || version === 1 || version === 2 || version === 3) {
-      // Rebuild with foreign keys disabled outside the transaction, preserving child references.
-      db.pragma('foreign_keys = OFF');
-      try {
-        db.transaction(() => {
-          db?.exec(`CREATE TABLE sources_p4 (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
-            revision INTEGER NOT NULL CHECK(revision>0), model_version INTEGER NOT NULL,
-            kind TEXT NOT NULL CHECK(kind IN ('text','remote')),
-            format TEXT NOT NULL, text TEXT NOT NULL, snapshot_json TEXT,
-            url TEXT, headers_json TEXT,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, saved_at TEXT,
-            last_attempt_at TEXT, error_json TEXT
-          );
-          INSERT INTO sources_p4(id,name,enabled,revision,model_version,kind,format,text,snapshot_json,created_at,updated_at,saved_at)
-            SELECT id,name,enabled,revision,model_version,'text',format,text,snapshot_json,created_at,updated_at,saved_at FROM sources;
-          DROP TABLE sources;
-          ALTER TABLE sources_p4 RENAME TO sources;`);
-          if (db?.prepare('PRAGMA foreign_key_check').all().length)
-            throw new Error('Migration foreign key check failed');
-          db?.pragma('user_version = 4');
-        })();
-      } finally {
-        db.pragma('foreign_keys = ON');
-      }
-    }
-    if (version !== 5 && version !== 6 && version !== 7) {
-      db.transaction(() => {
-        if (
-          !db
-            ?.prepare("SELECT 1 FROM pragma_table_info('subscriptions') WHERE name='key_hash'")
-            .get()
-        )
-          db?.exec('ALTER TABLE subscriptions ADD COLUMN key_hash TEXT');
-        db?.exec(
-          'CREATE UNIQUE INDEX IF NOT EXISTS subscription_key_hash ON subscriptions(key_hash) WHERE key_hash IS NOT NULL',
-        );
-        db?.pragma('user_version = 5');
-      })();
-    }
-    if (version !== 6 && version !== 7) {
-      db.transaction(() => {
-        db?.exec(`CREATE TABLE chains (
-          id TEXT PRIMARY KEY, name TEXT NOT NULL,
-          enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
-          revision INTEGER NOT NULL CHECK(revision>0),
+        CREATE TABLE chains (
+          id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,revision INTEGER NOT NULL,
           entry_node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE RESTRICT,
           exit_node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE RESTRICT,
-          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-          CHECK(entry_node_id != exit_node_id)
+          created_at TEXT NOT NULL,updated_at TEXT NOT NULL,CHECK(entry_node_id != exit_node_id)
         );
         CREATE INDEX chain_entry ON chains(entry_node_id);
         CREATE INDEX chain_exit ON chains(exit_node_id);
-        CREATE TABLE subscription_inputs_v6 (
-          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
-          position INTEGER NOT NULL CHECK(position>=0),
-          node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
-          source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
-          chain_id TEXT REFERENCES chains(id) ON DELETE CASCADE,
-          PRIMARY KEY(subscription_id,position),
+        CREATE TABLE subscriptions (
+          id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,revision INTEGER NOT NULL,
+          config_json TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,key_hash TEXT UNIQUE
+        );
+        CREATE TABLE subscription_inputs (
+          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,position INTEGER NOT NULL,
+          node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+          chain_id TEXT REFERENCES chains(id) ON DELETE CASCADE,PRIMARY KEY(subscription_id,position),
           CHECK((node_id IS NOT NULL)+(source_id IS NOT NULL)+(chain_id IS NOT NULL)=1)
         );
-        INSERT INTO subscription_inputs_v6(subscription_id,position,node_id,source_id)
-          SELECT subscription_id,position,node_id,source_id FROM subscription_inputs;
-        DROP TABLE subscription_inputs;
-        ALTER TABLE subscription_inputs_v6 RENAME TO subscription_inputs;
         CREATE INDEX subscription_node ON subscription_inputs(node_id);
         CREATE INDEX subscription_source ON subscription_inputs(source_id);
-        CREATE INDEX subscription_chain ON subscription_inputs(chain_id);`);
-        if (db?.prepare('PRAGMA foreign_key_check').all().length)
-          throw new Error('Migration foreign key check failed');
-        db?.pragma('user_version = 6');
-      })();
-    }
-    if (version !== 7)
-      db.transaction(() => {
-        if (
-          !db
-            ?.prepare("SELECT 1 FROM pragma_table_info('sources') WHERE name='snapshot_version'")
-            .get()
-        ) {
-          db?.exec(
-            'ALTER TABLE sources ADD COLUMN snapshot_version INTEGER NOT NULL DEFAULT 0; UPDATE sources SET snapshot_version=1 WHERE snapshot_json IS NOT NULL;',
-          );
-        }
-        db?.exec(`CREATE TABLE IF NOT EXISTS node_test_results (
-        key TEXT PRIMARY KEY,
-        node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
-        source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
-        chain_id TEXT REFERENCES chains(id) ON DELETE CASCADE,
-        result_json TEXT NOT NULL,
-        CHECK((node_id IS NOT NULL)+(source_id IS NOT NULL)+(chain_id IS NOT NULL)=1)
-      ); CREATE INDEX IF NOT EXISTS node_test_source ON node_test_results(source_id); PRAGMA user_version=7;`);
+        CREATE INDEX subscription_chain ON subscription_inputs(chain_id);
+        CREATE TABLE artifacts (
+          subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,format TEXT NOT NULL,
+          body TEXT,built_revision INTEGER,engine_version TEXT,generated_at TEXT,counts_json TEXT,diagnostics_json TEXT,error_json TEXT,
+          PRIMARY KEY(subscription_id,format)
+        );
+        CREATE TABLE node_test_results (
+          key TEXT PRIMARY KEY,node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,source_id TEXT REFERENCES sources(id) ON DELETE CASCADE,
+          chain_id TEXT REFERENCES chains(id) ON DELETE CASCADE,result_json TEXT NOT NULL,
+          CHECK((node_id IS NOT NULL)+(source_id IS NOT NULL)+(chain_id IS NOT NULL)=1)
+        );
+        CREATE INDEX node_test_source ON node_test_results(source_id);
+        PRAGMA user_version=1;
+      `);
       })();
     if (process.platform !== 'win32') {
       for (const file of readdirSync(dataDir))
-        if (file.startsWith('submeld.sqlite') || file.startsWith('instance.lock.sqlite'))
+        if (file.startsWith('submeld-v2.sqlite') || file.startsWith('instance.lock.sqlite'))
           chmodSync(join(dataDir, file), 0o600);
     }
     const database = db;
     const subscriptions = createSubscriptionStore(database);
-    const nodes = createNodeStore(database, subscriptions);
+    const resources = new UpstreamResources(database, client, subscriptions);
+    const nodes = createNodeStore(database, resources);
     const chains = createChainStore(database, nodes, subscriptions);
-    const sources = createSourceStore(database, subscriptions);
+    const sources = createSourceStore(database, resources);
     return {
+      resources,
       nodes,
       chains,
       sources,

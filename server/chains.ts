@@ -27,8 +27,8 @@ export function readChain(db: Database.Database, nodes: NodeStore, id: string) {
   const raw: unknown = db.prepare('SELECT * FROM chains WHERE id=?').get(id);
   if (!raw) throw new AppError('NOT_FOUND', '链式代理不存在。', 404);
   const row = rowSchema.parse(raw);
-  const entry = nodeSummarySchema.strip().parse(nodes.get(row.entry_node_id));
-  const exit = nodeSummarySchema.strip().parse(nodes.get(row.exit_node_id));
+  const entry = nodeSummarySchema.strip().parse(nodes.summary(row.entry_node_id));
+  const exit = nodeSummarySchema.strip().parse(nodes.summary(row.exit_node_id));
   return chainSchema.parse({
     id: row.id,
     name: row.name,

@@ -176,7 +176,7 @@ async function loadCandidates() {
     'sources' in result ? result.sources : 'chains' in result ? result.chains : result.nodes;
   candidates.value = list.map((item) => ({
     ...item,
-    available: !('savedAt' in item) || item.savedAt !== null,
+    available: true,
   }));
   inputTotal.value = result.total;
   candidateId.value = candidates.value.find((item) => item.available)?.id ?? '';

@@ -1,26 +1,26 @@
 services:
   submeld:
     build: .
-    image: submeld:1.0.0
+    image: submeld:2.0.0
     environment:
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to your HTTPS origin}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN}
       DATA_DIR: /data
+      SUB_STORE_URL: http://sub-store:3000/gateway
+      KOIPY_BOT_USERNAME: ${KOIPY_BOT_USERNAME:-}
     ports:
       - '127.0.0.1:3000:3000'
     volumes:
-      - submeld-data:/data
+      - submeld-v2-data:/data
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
     mem_limit: 768m
-    cpus: 1
     pids_limit: 64
     restart: unless-stopped
     init: true
+    depends_on: [sub-store]
     healthcheck:
       test:
         [
@@ -33,5 +33,39 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+  sub-store:
+    image: xream/sub-store@sha256:7b724d57b1ac60d608211b3f16210f870818648b62ab5a9fa0512617ea7e6fc5
+    environment:
+      SUB_STORE_BACKEND_API_HOST: 0.0.0.0
+      SUB_STORE_BACKEND_API_PORT: 3000
+      SUB_STORE_BACKEND_MERGE: 'true'
+      SUB_STORE_FRONTEND_BACKEND_PATH: /gateway
+      SUB_STORE_CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN}
+    volumes:
+      - sub-store-v2-data:/opt/app/data
+    restart: unless-stopped
+  koipy:
+    image: koipy/koipy@sha256:af5a79268fc348ebe3e1fc5b022c1bece24371e3da80f15e1c29e813a3dccc39
+    environment:
+      KOIPY_LICENSE: ${KOIPY_LICENSE:?Set KOIPY_LICENSE}
+      KOIPY_BOT_TOKEN: ${KOIPY_BOT_TOKEN:?Set KOIPY_BOT_TOKEN}
+    volumes:
+      - ./runtime-v2/koipy/config.yaml:/app/config.yaml
+    depends_on: [miaospeed]
+    restart: unless-stopped
+  miaospeed:
+    image: airportr/miaospeed@sha256:16c7181c35f2f43f55bfa2b14dc73b43feb5bf7eaea6cfa21a716a31a60b6659
+    command:
+      [
+        'server',
+        '-bind',
+        '0.0.0.0:8765',
+        '-path',
+        'miaospeed',
+        '-token',
+        '${MIAOSPEED_TOKEN:?Set MIAOSPEED_TOKEN}',
+      ]
+    restart: unless-stopped
 volumes:
-  submeld-data:
+  submeld-v2-data:
+  sub-store-v2-data:

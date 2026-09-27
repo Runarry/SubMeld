@@ -66,7 +66,7 @@ export function createNodeTestStore(
         kind: 'source',
         id: source.id,
         revision: source.revision,
-        snapshotVersion: source.snapshotVersion,
+        snapshotHash: source.snapshotHash,
         nodeIndex: subject.nodeIndex,
       },
       name: item.draft.name,
@@ -76,15 +76,15 @@ export function createNodeTestStore(
   function currentSubject(subject: TestSubject): TestSubject {
     let row: unknown;
     if (subject.kind === 'node') {
-      row = db.prepare('SELECT revision FROM nodes WHERE id=?').get(subject.id);
+      row = db.prepare('SELECT revision FROM nodes WHERE id=? AND present=1').get(subject.id);
     } else if (subject.kind === 'source') {
       row = db
-        .prepare('SELECT revision,snapshot_version snapshotVersion FROM sources WHERE id=?')
+        .prepare('SELECT revision,snapshot_hash snapshotHash FROM sources WHERE id=? AND present=1')
         .get(subject.id);
     } else {
       row = db
         .prepare(
-          'SELECT c.revision, e.revision entryRevision, x.revision exitRevision FROM chains c JOIN nodes e ON e.id=c.entry_node_id JOIN nodes x ON x.id=c.exit_node_id WHERE c.id=?',
+          'SELECT c.revision, e.revision entryRevision, x.revision exitRevision FROM chains c JOIN nodes e ON e.id=c.entry_node_id JOIN nodes x ON x.id=c.exit_node_id WHERE c.id=? AND e.present=1 AND x.present=1',
         )
         .get(subject.id);
     }
@@ -92,7 +92,7 @@ export function createNodeTestStore(
     const value = z
       .object({
         revision: z.number().int().positive(),
-        snapshotVersion: z.number().int().nonnegative().optional(),
+        snapshotHash: z.string().optional(),
         entryRevision: z.number().int().positive().optional(),
         exitRevision: z.number().int().positive().optional(),
       })
@@ -101,7 +101,7 @@ export function createNodeTestStore(
       return {
         ...subject,
         revision: value.revision,
-        snapshotVersion: z.number().int().nonnegative().parse(value.snapshotVersion),
+        snapshotHash: z.string().parse(value.snapshotHash),
       };
     if (subject.kind === 'chain')
       return {
@@ -127,6 +127,10 @@ export function createNodeTestStore(
       : { url: DEFAULT_PROBE_URL };
   }
   return {
+    async refresh(subjects: TestSubject[]) {
+      await sources.sync();
+      await sources.prepare(subjects.filter((s) => s.kind === 'source').map((s) => s.id));
+    },
     inspect,
     matches,
     settings,
@@ -236,7 +240,7 @@ export function createNodeTestStore(
           if (
             current.kind === 'source' &&
             (result.subject.kind !== 'source' ||
-              result.subject.snapshotVersion !== current.snapshotVersion)
+              result.subject.snapshotHash !== current.snapshotHash)
           )
             continue;
           results.push({

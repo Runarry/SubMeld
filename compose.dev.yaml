@@ -1,0 +1,13 @@
+services:
+  sub-store:
+    image: xream/sub-store@sha256:7b724d57b1ac60d608211b3f16210f870818648b62ab5a9fa0512617ea7e6fc5
+    ports: ['127.0.0.1:39091:3000']
+    environment:
+      SUB_STORE_BACKEND_API_HOST: 0.0.0.0
+      SUB_STORE_BACKEND_API_PORT: 3000
+      SUB_STORE_BACKEND_MERGE: 'true'
+      SUB_STORE_FRONTEND_BACKEND_PATH: /gateway
+      SUB_STORE_CORS_ALLOWED_ORIGINS: http://127.0.0.1:5173
+    volumes: ['sub-store-dev-v2-data:/opt/app/data']
+volumes:
+  sub-store-dev-v2-data:

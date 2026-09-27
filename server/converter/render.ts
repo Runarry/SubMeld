@@ -1,3 +1,4 @@
+import { SubStoreClient } from '../sub-store.js';
 import { stringify } from 'yaml';
 import { AppError } from '../errors.js';
 import {
@@ -55,7 +56,10 @@ function checkSingbox(value: Record<string, unknown>, node: NodeDraft) {
     check('security', node.protocolOptions.security);
     check('alter_id', 0);
   }
-  if (node.protocol === 'vless') check('flow', node.protocolOptions.flow, '');
+  if (node.protocol === 'vless') {
+    check('flow', node.protocolOptions.flow, '');
+    check('packet_encoding', node.protocolOptions.packetEncoding, 'xudp');
+  }
   if (node.protocol === 'hysteria2') {
     check('obfs.type', node.protocolOptions.obfs, '');
     if (node.protocolOptions.obfs) check('obfs.password', node.protocolOptions.obfsPassword);
@@ -88,7 +92,11 @@ function checkSingbox(value: Record<string, unknown>, node: NodeDraft) {
   if (node.transport.type === 'grpc')
     check('transport.service_name', node.transport.serviceName, '');
 }
-export function renderInput(input: unknown): RenderResult {
+export async function renderInput(
+  input: unknown,
+  client = new SubStoreClient(),
+  signal?: AbortSignal,
+): Promise<RenderResult> {
   if (Buffer.byteLength(JSON.stringify(input)) > MAX_BYTES)
     throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数据超过 4 MiB。', 413);
   const parsed = renderRequestSchema.safeParse(input);
@@ -145,7 +153,7 @@ export function renderInput(input: unknown): RenderResult {
       );
     return name;
   }
-  function convert(draft: NodeDraft, name: string, index: number, role?: 'entry' | 'exit') {
+  async function convert(draft: NodeDraft, name: string, index: number, role?: 'entry' | 'exit') {
     const node = structuredClone(draft);
     node.name = name;
     const report = (
@@ -195,10 +203,12 @@ export function renderInput(input: unknown): RenderResult {
     }
     try {
       if (target === 'xray') return xrayOutbound(node);
-      const raw: unknown = produceUpstream(
+      const raw: unknown = await produceUpstream(
         [structuredClone(toUpstream(node))],
         target === 'mihomo' ? 'Mihomo' : 'sing-box',
         'internal',
+        client,
+        signal,
       );
       if (!Array.isArray(raw) || raw.length !== 1 || !record(raw[0]))
         throw new Error('Missing node');
@@ -206,7 +216,8 @@ export function renderInput(input: unknown): RenderResult {
       if (target === 'mihomo') checkMihomo(output, node);
       else checkSingbox(output, node);
       return output;
-    } catch {
+    } catch (error) {
+      if (error instanceof AppError && error.status >= 500) throw error;
       report('EXPORT_FIELD_LOSS', '此项无法完整输出已开放的连接字段，请修正参数或明确排除。');
     }
   }
@@ -216,8 +227,8 @@ export function renderInput(input: unknown): RenderResult {
     if (isChain(item)) {
       const name = allocate(item.name, item.nodeIndex);
       const entryName = allocate(item.name.slice(0, 480) + ' · 前置', item.nodeIndex);
-      const entry = convert(item.entry, entryName, item.nodeIndex, 'entry');
-      const exit = convert(item.exit, name, item.nodeIndex, 'exit');
+      const entry = await convert(item.entry, entryName, item.nodeIndex, 'entry');
+      const exit = await convert(item.exit, name, item.nodeIndex, 'exit');
       if (!entry || !exit) continue;
       if (['hysteria2', 'tuic'].includes(item.exit.protocol)) {
         diagnostics.push(
@@ -243,7 +254,7 @@ export function renderInput(input: unknown): RenderResult {
       names.push(name);
     } else if (item.draft) {
       const name = allocate(item.draft.name, item.nodeIndex);
-      const output = convert(item.draft, name, item.nodeIndex);
+      const output = await convert(item.draft, name, item.nodeIndex);
       if (output) {
         nodes.push(output);
         names.push(name);

@@ -61,6 +61,7 @@ export function composeItems(
 
 type PublishingConverter = Pick<Converter, 'run' | 'ready' | 'isAvailable' | 'onAvailable'>;
 export class Publisher {
+  private interval: ReturnType<typeof setInterval> | undefined;
   private pending = new Set<string>();
   private running: string | undefined;
   private task: Promise<void> | undefined;
@@ -79,6 +80,8 @@ export class Publisher {
     this.unlisten = store.listen((ids) => this.schedule(ids));
   }
   start() {
+    this.interval = setInterval(() => this.schedule(this.store.enabledIds()), 6 * 60 * 60 * 1000);
+    this.interval.unref?.();
     this.schedule(this.store.needsBuild(this.engineVersion));
   }
   status(id: string): 'idle' | 'queued' | 'running' {
@@ -128,6 +131,10 @@ export class Publisher {
     if (!subscription.enabled) return;
     let snapshot;
     try {
+      await this.sources.sync();
+      await this.sources.prepare(
+        subscription.inputs.filter((i) => i.kind === 'source').map((i) => i.id),
+      );
       snapshot = this.store.snapshot(id, this.nodes, this.sources);
     } catch (error) {
       if (!this.store.fail(id, subscription.revision, subscription.formats, publicError(error)))
@@ -206,6 +213,7 @@ export class Publisher {
           }));
         }
         if (this.closed) return;
+        await this.sources.sync();
         if (!this.store.commit(id, subscription.revision, this.engineVersion, writes)) {
           this.schedule([id]);
           return;
@@ -227,6 +235,7 @@ export class Publisher {
     while (this.task) await this.task;
   }
   async close() {
+    clearInterval(this.interval);
     this.closed = true;
     this.unsubscribe();
     this.unlisten();

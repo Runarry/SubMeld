@@ -8,42 +8,98 @@ import {
   type ParseResult,
   type ProduceResult,
 } from '../shared/contracts.js';
-import { fromUpstream, record, toUpstream, validateDraft } from './model.js';
+import { fromUpstream, toUpstream, validateDraft } from './model.js';
 import { byteLimit, preflight, splitInput } from './input.js';
 
-// The untyped upstream is isolated here; each return value is validated before use.
-const loaded: unknown = await import(new URL('../../converter/upstream.mjs', import.meta.url).href);
-if (!record(loaded) || typeof loaded.parse !== 'function' || typeof loaded.produce !== 'function')
-  throw new Error('Invalid converter build');
-const parseUpstream = loaded.parse;
-export const produceUpstream = loaded.produce;
+import { SubStoreClient } from '../sub-store.js';
+import { record } from './model.js';
+import type { NodeDraft } from '../shared/contracts.js';
 
-export function parseInput(input: unknown): ParseResult {
+// The pinned upstream decodes TUIC passwords twice. Adapt only the API input,
+// never the stored/public URI; remove when a verified upstream release fixes it.
+function parserInput(raw: string) {
+  if (!raw.startsWith('tuic://')) return raw;
+  const url = new URL(raw);
+  url.password = encodeURIComponent(url.password);
+  return url.href;
+}
+function completeUri(raw: unknown, node: NodeDraft): string {
+  if (typeof raw !== 'string' || !raw) throw new Error('Empty upstream output');
+  if (node.protocol === 'ss') {
+    const url = new URL(raw);
+    url.searchParams.delete('udp');
+    return url.href;
+  }
+  if (node.protocol === 'trojan') {
+    const separator = raw.lastIndexOf('@');
+    if (separator < 0) throw new Error('Invalid upstream URI');
+    return 'trojan://' + encodeURIComponent(node.auth.password) + raw.slice(separator);
+  }
+  if (node.protocol === 'vmess') {
+    const value: unknown = JSON.parse(Buffer.from(raw.slice(8), 'base64').toString('utf8'));
+    if (!record(value)) throw new Error('Invalid VMess output');
+    value.allowInsecure = node.tls.insecure ? 1 : 0;
+    return 'vmess://' + Buffer.from(JSON.stringify(value), 'utf8').toString('base64');
+  }
+  if (node.protocol === 'tuic' && node.tls.alpn.length) {
+    const url = new URL(raw);
+    url.searchParams.set('alpn', node.tls.alpn.join(','));
+    return url.href;
+  }
+  return raw;
+}
+
+export async function produceUpstream(
+  proxies: unknown[],
+  target: string,
+  type?: string,
+  client = new SubStoreClient(),
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return client.convert(
+    proxies.map((p) => JSON.stringify(p)).join('\n'),
+    target,
+    type === 'internal',
+    signal,
+  );
+}
+
+export async function parseInput(
+  input: unknown,
+  client = new SubStoreClient(),
+  signal?: AbortSignal,
+): Promise<ParseResult> {
   const request = parseRequestSchema.safeParse(input);
   if (!request.success) throw new AppError('INVALID_REQUEST', '解析请求格式无效。', 400);
   const { entries, diagnostics } = splitInput(request.data.text, request.data.format);
-  const items = entries.map((entry, nodeIndex) => {
-    const itemDiagnostics = preflight(entry, nodeIndex);
-    if (itemDiagnostics.some((d) => d.level === 'error'))
-      return { nodeIndex, excluded: false, draft: null, diagnostics: itemDiagnostics };
-    try {
-      const raw = typeof entry === 'string' ? entry : JSON.stringify(entry);
-      const parsed: unknown = parseUpstream(raw);
-      if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error('Missing input item');
-      const draft = fromUpstream(parsed[0], nodeIndex);
-      itemDiagnostics.push(...validateDraft(draft, nodeIndex));
-      return { nodeIndex, excluded: false, draft, diagnostics: itemDiagnostics };
-    } catch {
-      itemDiagnostics.push(
-        diagnostic(
-          nodeIndex,
-          'NODE_PARSE_FAILED',
-          '此项无法完整解析为已支持节点；请检查必填字段和参数组合。',
-        ),
-      );
-      return { nodeIndex, excluded: false, draft: null, diagnostics: itemDiagnostics };
-    }
-  });
+  const items: ParseResult['items'] = [];
+  for (const [nodeIndex, entry] of entries.entries()) {
+    signal?.throwIfAborted();
+    const parseEntry = async () => {
+      const itemDiagnostics = preflight(entry, nodeIndex);
+      if (itemDiagnostics.some((d) => d.level === 'error'))
+        return { nodeIndex, excluded: false, draft: null, diagnostics: itemDiagnostics };
+      try {
+        const raw = typeof entry === 'string' ? entry : JSON.stringify(entry);
+        const parsed = await client.convert(parserInput(raw), 'JSON', true, signal);
+        if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error('Missing input item');
+        const draft = fromUpstream(parsed[0], nodeIndex);
+        itemDiagnostics.push(...validateDraft(draft, nodeIndex));
+        return { nodeIndex, excluded: false, draft, diagnostics: itemDiagnostics };
+      } catch (error) {
+        if (error instanceof AppError && error.status >= 500) throw error;
+        itemDiagnostics.push(
+          diagnostic(
+            nodeIndex,
+            'NODE_PARSE_FAILED',
+            '此项无法完整解析为已支持节点；请检查必填字段和参数组合。',
+          ),
+        );
+        return { nodeIndex, excluded: false, draft: null, diagnostics: itemDiagnostics };
+      }
+    };
+    items.push(await parseEntry());
+  }
   return {
     items,
     diagnostics,
@@ -77,17 +133,30 @@ export function prepareItems(input: unknown) {
     throw new AppError('CONVERSION_FAILED', '请修正或明确排除错误节点。', 422, diagnostics);
   return { items, included, diagnostics };
 }
-export function produceInput(input: unknown): ProduceResult {
+export async function produceInput(
+  input: unknown,
+  client = new SubStoreClient(),
+  signal?: AbortSignal,
+): Promise<ProduceResult> {
   const { items, included, diagnostics } = prepareItems(input);
   const lines: string[] = [];
   let outputBytes = 0;
   for (const item of included) {
     if (!item.draft) continue;
     try {
-      const output: unknown = produceUpstream([structuredClone(toUpstream(item.draft))], 'URI');
+      const output = completeUri(
+        await produceUpstream(
+          [structuredClone(toUpstream(item.draft))],
+          'URI',
+          undefined,
+          client,
+          signal,
+        ),
+        item.draft,
+      );
       if (typeof output !== 'string' || !output || output.includes('\n') || output.includes('\r'))
         throw new Error('Invalid URI output');
-      const check: unknown = parseUpstream(output);
+      const check = await client.convert(parserInput(output), 'JSON', true, signal);
       if (!Array.isArray(check) || check.length !== 1) throw new Error('Missing output item');
       const roundTrip = fromUpstream(check[0], item.nodeIndex);
       // Check the promised connection fields, not arbitrary upstream metadata.

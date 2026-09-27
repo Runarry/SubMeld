@@ -78,7 +78,7 @@ export async function checkNodeTestConnections(binaries, results, versions) {
       { signal = new AbortController().signal, path = '/probe', timeoutMs = 4000 } = {},
     ) {
       const port = await freeProbePort();
-      const full = renderInput({ target, items: [item], listenPort: port }).full;
+      const full = (await renderInput({ target, items: [item], listenPort: port })).full;
       try {
         return await runNodeProbe(
           { target, version: versions[target].version, path: binaries[target] },

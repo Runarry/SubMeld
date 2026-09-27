@@ -3,7 +3,7 @@ export class AppError extends Error {
   constructor(
     public code: string,
     message: string,
-    public status: 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 503 = 422,
+    public status: 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 502 | 503 = 422,
     public diagnostics?: Diagnostic[],
   ) {
     super(message);

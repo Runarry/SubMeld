@@ -1,3 +1,5 @@
+import { UpstreamResources } from './upstream-resources.js';
+import { SubStoreClient } from './sub-store.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +30,7 @@ import {
 } from './shared/contracts.js';
 
 export type AppOptions = {
+  resources: UpstreamResources;
   webRoot?: string;
   tester?: NodeTester;
   nodes: NodeStore;
@@ -40,6 +43,7 @@ export type AppOptions = {
   converter: Pick<Converter, 'run'>;
 };
 export function createApp({
+  resources,
   webRoot,
   tester,
   config,
@@ -69,10 +73,11 @@ export function createApp({
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
     context.header('Referrer-Policy', 'no-referrer');
-    context.header(
-      'Content-Security-Policy',
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-    );
+    if (context.req.path.startsWith('/submeld') || context.req.path.startsWith('/api/'))
+      context.header(
+        'Content-Security-Policy',
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      );
     await next();
   });
   app.use('/api/*', async (context, next) => {
@@ -118,6 +123,70 @@ export function createApp({
         throw new AppError('UNAUTHENTICATED', '请先登录。', 401);
     }
     await next();
+  });
+  app.use('/api/*', async (c, next) => {
+    if (
+      /^\/api\/(nodes|chains|sources|subscriptions|node-tests)(?:\/|$)/.test(c.req.path) &&
+      !/\/(artifacts|cancel)(?:\/|$)/.test(c.req.path)
+    )
+      await resources.sync();
+    await next();
+  });
+  app.get('/api/integrations', (c) => {
+    if (!auth.valid(getCookie(c, cookieName)))
+      throw new AppError('UNAUTHENTICATED', '请先登录。', 401);
+    return c.json({
+      subStore: '/?api=' + encodeURIComponent(config.publicOrigin + '/upstream/sub-store'),
+      telegram: config.telegramBot ? 'https://t.me/' + config.telegramBot : null,
+    });
+  });
+  const frontend = new SubStoreClient(new URL(resources.client.origin).origin);
+  // The native frontend may keep the proxy prefix when its backend secret path differs.
+  app.on(['GET', 'HEAD'], ['/share/*', '/upstream/sub-store/share/*'], async (c) => {
+    const url = new URL(c.req.url);
+    const path = url.pathname.replace(/^\/upstream\/sub-store(?=\/share\/)/, '');
+    const response = await frontend.request(path + url.search, {
+      method: c.req.method,
+      headers: { 'user-agent': c.req.header('User-Agent') ?? 'SubMeld' },
+      signal: c.req.raw.signal,
+    });
+    response.headers.delete('set-cookie');
+    response.headers.delete('access-control-allow-origin');
+    response.headers.delete('access-control-allow-credentials');
+    response.headers.set('cache-control', 'private, no-store');
+    return response;
+  });
+  app.all('/upstream/sub-store/*', async (c) => {
+    if (!auth.valid(getCookie(c, cookieName)))
+      throw new AppError('UNAUTHENTICATED', '请先登录。', 401);
+    const write = !['GET', 'HEAD'].includes(c.req.method);
+    if (write && c.req.header('Origin') !== config.publicOrigin)
+      throw new AppError('ORIGIN_REJECTED', '请从本站管理界面操作。', 403);
+    const url = new URL(c.req.url);
+    const path = url.pathname.slice('/upstream/sub-store'.length);
+    const body = write ? await readJson(c.req.raw, 26 * 1024 * 1024, true) : undefined;
+    const forward = () =>
+      resources.client.request(path + url.search, {
+        method: c.req.method,
+        signal: c.req.raw.signal,
+        headers: {
+          'content-type': 'application/json',
+          'user-agent': c.req.header('User-Agent') ?? 'SubMeld',
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    const pure = /^\/api\/(proxy|rule|preview)(?:\/|$)/.test(path);
+    const response =
+      write && !pure
+        ? await resources.write(forward, [], () =>
+            resources.guardMutation(path, c.req.method, body),
+          )
+        : await forward();
+    response.headers.delete('set-cookie');
+    response.headers.delete('access-control-allow-origin');
+    response.headers.delete('access-control-allow-credentials');
+    response.headers.set('cache-control', 'private, no-store');
+    return response;
   });
   app.get('/healthz', (context) => {
     context.header('Cache-Control', 'no-store');
@@ -183,7 +252,7 @@ export function createApp({
     return context.json(nodes.list(page.data));
   });
   app.post('/api/nodes', async (context) =>
-    context.json(nodes.create(await readJson(context.req.raw, 26 * 1024 * 1024)), 201),
+    context.json(await nodes.create(await readJson(context.req.raw, 26 * 1024 * 1024)), 201),
   );
   app.post('/api/nodes/load', async (context) =>
     context.json(nodes.load(await readJson(context.req.raw, 128 * 1024))),
@@ -191,13 +260,16 @@ export function createApp({
   app.get('/api/nodes/:id', (context) => context.json(nodes.get(context.req.param('id'))));
   app.patch('/api/nodes/:id', async (context) =>
     context.json(
-      nodes.update(context.req.param('id'), await readJson(context.req.raw, 26 * 1024 * 1024)),
+      await nodes.update(
+        context.req.param('id'),
+        await readJson(context.req.raw, 26 * 1024 * 1024),
+      ),
     ),
   );
   app.delete('/api/nodes/:id', async (context) => {
     const input = revisionRequestSchema.safeParse(await readJson(context.req.raw, 1024));
     if (!input.success) throw new AppError('INVALID_REQUEST', '删除请求缺少有效版本。', 400);
-    nodes.delete(context.req.param('id'), input.data.revision);
+    await nodes.delete(context.req.param('id'), input.data.revision);
     return context.json({ deleted: true });
   });
   app.post('/api/convert/render', async (context) => {
@@ -251,9 +323,13 @@ export function createApp({
   app.patch('/api/node-tests/settings', async (c) =>
     c.json(testing().store.updateSettings(await readJson(c.req.raw, 8192))),
   );
-  app.post('/api/node-tests', async (c) =>
-    c.json(testing().start(await readJson(c.req.raw, MAX_BYTES)), 202),
-  );
+  app.post('/api/node-tests', async (c) => {
+    const selection = testSelectionSchema.safeParse(await readJson(c.req.raw, MAX_BYTES));
+    if (!selection.success)
+      throw new AppError('INVALID_REQUEST', '请选择有效且不重复的已保存测试对象。', 400);
+    await testing().store.refresh(selection.data.subjects);
+    return c.json(testing().start(selection.data), 202);
+  });
   app.get('/api/node-tests/current', (c) =>
     c.json(testing().current(listPage(c.req.query('page')))),
   );
@@ -294,34 +370,13 @@ export function createApp({
     return c.json({ deleted: true });
   });
   app.get('/api/sources', (c) => c.json(sources.list(listPage(c.req.query('page')))));
-  app.post('/api/sources', async (c) =>
-    c.json(
-      await sources.create(
-        await readJson(c.req.raw, 26 * 1024 * 1024),
-        converter,
-        c.req.raw.signal,
-      ),
-      201,
-    ),
-  );
-  app.get('/api/sources/:id', (c) => c.json(sources.get(c.req.param('id'))));
-  app.post('/api/sources/:id/refresh', async (c) =>
-    c.json(sources.requestRefresh(c.req.param('id'), await requestRevision(c.req.raw)), 202),
-  );
-  app.patch('/api/sources/:id', async (c) =>
-    c.json(
-      await sources.update(
-        c.req.param('id'),
-        await readJson(c.req.raw, 26 * 1024 * 1024),
-        converter,
-        c.req.raw.signal,
-      ),
-    ),
-  );
-  app.delete('/api/sources/:id', async (c) => {
-    sources.delete(c.req.param('id'), await requestRevision(c.req.raw));
-    return c.json({ deleted: true });
+  app.get('/api/sources/:id', async (c) => {
+    await sources.prepare([c.req.param('id')]);
+    return c.json(sources.get(c.req.param('id')));
   });
+  app.post('/api/sources/:id/refresh', async (c) =>
+    c.json(await sources.requestRefresh(c.req.param('id'), await requestRevision(c.req.raw))),
+  );
   app.get('/api/subscriptions', (c) => c.json(subscriptions.list(listPage(c.req.query('page')))));
   app.post('/api/subscriptions', async (c) => {
     const { id, token, key } = subscriptions.create(await readJson(c.req.raw, 26 * 1024 * 1024));
@@ -380,11 +435,15 @@ export function createApp({
   });
   if (webRoot) {
     const indexHtml = readFileSync(join(webRoot, 'index.html'), 'utf8');
-    app.get('/', (context) => {
+    app.get('/submeld/', (context) => {
       context.header('Cache-Control', 'no-store');
       return context.html(indexHtml);
     });
-    app.get('/assets/*', serveStatic({ root: webRoot }));
+    app.get(
+      '/submeld/assets/*',
+      serveStatic({ root: webRoot, rewriteRequestPath: (path) => path.replace(/^\/submeld/, '') }),
+    );
+    app.get('/submeld', (c) => c.redirect('/submeld/'));
   }
   app.get(
     '/source.tar.gz',
@@ -395,6 +454,22 @@ export function createApp({
       path: 'submeld-source.tar.gz',
     }),
   );
+  app.on(['GET', 'HEAD'], '*', async (c) => {
+    if (/^\/(api|s|upstream|submeld|download|gateway|server|data)(?:\/|$)/.test(c.req.path))
+      throw new AppError('NOT_FOUND', '请求的资源不存在。', 404);
+    if (!auth.valid(getCookie(c, cookieName))) return c.redirect('/submeld/');
+    const url = new URL(c.req.url);
+    if (url.pathname === '/' && !url.searchParams.has('api'))
+      return c.redirect('/?api=' + encodeURIComponent(config.publicOrigin + '/upstream/sub-store'));
+    const response = await frontend.request(url.pathname + url.search, {
+      method: c.req.method,
+      signal: c.req.raw.signal,
+    });
+    response.headers.delete('set-cookie');
+    response.headers.delete('access-control-allow-origin');
+    response.headers.delete('access-control-allow-credentials');
+    return response;
+  });
   app.notFound((context) =>
     context.json({ code: 'NOT_FOUND', message: '请求的资源不存在。' }, 404),
   );

@@ -51,7 +51,10 @@ export const draftSchema = z.discriminatedUnion('protocol', [
     ...base,
     protocol: z.literal('vless'),
     auth: z.strictObject({ uuid: authText }),
-    protocolOptions: z.strictObject({ flow: z.enum(['', 'xtls-rprx-vision']) }),
+    protocolOptions: z.strictObject({
+      flow: z.enum(['', 'xtls-rprx-vision']),
+      packetEncoding: z.literal('xudp').default('xudp'),
+    }),
   }),
   z.strictObject({
     ...base,
@@ -114,7 +117,7 @@ export const produceResultSchema = z.strictObject({
 });
 export type ParseResult = z.infer<typeof parseResultSchema>;
 export type ProduceResult = z.infer<typeof produceResultSchema>;
-export type WorkerRequest =
+export type ConversionRequest =
   | { kind: 'parse'; input: z.infer<typeof parseRequestSchema> }
   | { kind: 'produce'; input: z.infer<typeof produceRequestSchema> }
   | { kind: 'render'; input: z.infer<typeof renderRequestSchema> };
@@ -164,7 +167,12 @@ export function blankDraft(protocol: Protocol): NodeDraft {
         protocolOptions: { security: 'auto', alterId: 0 },
       };
     case 'vless':
-      return { ...common, protocol, auth: { uuid: '' }, protocolOptions: { flow: '' } };
+      return {
+        ...common,
+        protocol,
+        auth: { uuid: '' },
+        protocolOptions: { flow: '', packetEncoding: 'xudp' },
+      };
     case 'trojan':
       return { ...common, protocol, auth: { password: '' }, protocolOptions: {} };
     case 'hysteria2':

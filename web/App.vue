@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onBeforeUnmount, ref, provide } from 'vue';
+import HomePage from './HomePage.vue';
 import LoginView from './LoginView.vue';
 import NodeLibrary from './NodeLibrary.vue';
 import NodeTestsPage from './NodeTestsPage.vue';
@@ -11,10 +12,11 @@ import WorkbenchPage from './WorkbenchPage.vue';
 import { ApiError, request } from './api';
 import type { WorkbenchItem } from '../server/shared/contracts';
 
-type View = 'workbench' | 'library' | 'sources' | 'subscriptions' | 'tests';
+type View = 'home' | 'workbench' | 'library' | 'sources' | 'subscriptions' | 'tests';
 const nav = [
-  { view: 'subscriptions' as const, hash: 'subscriptions', label: '订阅方案' },
-  { view: 'sources' as const, hash: 'sources', label: '来源管理' },
+  { view: 'home' as const, hash: 'home', label: '服务入口' },
+  { view: 'subscriptions' as const, hash: 'subscriptions', label: '增强订阅' },
+  { view: 'sources' as const, hash: 'sources', label: '上游节点预览' },
   { view: 'library' as const, hash: 'nodes', label: '本地节点' },
   { view: 'tests' as const, hash: 'tests', label: '节点测试' },
   { view: 'workbench' as const, hash: 'workbench', label: '转换工作台' },
@@ -22,7 +24,7 @@ const nav = [
 const authenticated = ref(false);
 const checking = ref(true);
 const password = ref('');
-const view = ref<View | null>('subscriptions');
+const view = ref<View | null>('home');
 const busy = ref('');
 const message = ref('');
 const testMessage = ref('');
@@ -52,7 +54,7 @@ function parseHash(): View {
   if (key === 'sources') return 'sources';
   if (key === 'nodes' || key === 'library') return 'library';
   if (key === 'workbench') return 'workbench';
-  return 'subscriptions';
+  return key === 'subscriptions' ? 'subscriptions' : 'home';
 }
 function setView(next: View) {
   const item = nav.find((entry) => entry.view === next);
@@ -74,7 +76,7 @@ function lockWorkspace() {
   testMessage.value = '';
   password.value = '';
   message.value = '';
-  view.value = 'subscriptions';
+  view.value = 'home';
 }
 async function api(path: string, body?: unknown, method?: string): Promise<unknown> {
   try {
@@ -142,7 +144,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
     <div class="rail-brand">
       <span class="brand-mark" aria-hidden="true">S</span>
       <span>SubMeld</span>
-      <span class="version">1.0.0</span>
+      <span class="version">2.0.0</span>
     </div>
     <nav class="app-nav" aria-label="管理页面">
       <button
@@ -194,6 +196,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
           查看测试进度
         </button>
       </p>
+      <HomePage v-if="view === 'home'" :api="api" />
       <NodeTestsPage v-if="view === 'tests'" :api="api" :subjects="testSubjects" />
       <WorkbenchPage v-show="view === 'workbench'" ref="workbench" :api="api" />
       <NodeLibrary v-if="view === 'library'" :api="api" @load="openWorkbench" />

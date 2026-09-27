@@ -1,0 +1,20 @@
+{
+  "admin": [],
+  "webapi": {
+    "enable": false
+  },
+  "slaveConfig": {
+    "slaves": [
+      {
+        "type": "miaospeed",
+        "id": "local",
+        "address": "miaospeed:8765",
+        "path": "/miaospeed",
+        "token": "REPLACE_WITH_MIAOSPEED_TOKEN",
+        "tls": false,
+        "mtls": false,
+        "comment": "本机 miaospeed"
+      }
+    ]
+  }
+}

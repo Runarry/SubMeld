@@ -249,7 +249,7 @@ export async function checkChainConnections(binaries, results) {
           join(caseDir, 'entry'),
         );
         await entryCore.ready(entryPort);
-        const result = renderInput({ target, items: [chain], listenPort: clientPort });
+        const result = await renderInput({ target, items: [chain], listenPort: clientPort });
         const config = target === 'mihomo' ? parse(result.full) : JSON.parse(result.full);
         if (target === 'mihomo') config['log-level'] = 'debug';
         client = await start(binaries[target], target, config, join(caseDir, 'client'));

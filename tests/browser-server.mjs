@@ -1,3 +1,5 @@
+import { resetUpstream } from './upstream-fixture.mjs';
+await resetUpstream();
 import { mkdirSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { KernelManager } from '../dist/server/kernels.js';
@@ -10,9 +12,6 @@ import { openSettings } from '../dist/server/database.js';
 import { hashPassword, Auth } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
 import { Publisher } from '../dist/server/publisher.js';
-import { SourceRefresher } from '../dist/server/source-refresher.js';
-import { AppError } from '../dist/server/errors.js';
-import { UUID } from './fixtures.mjs';
 mkdirSync('.cache', { recursive: true });
 const directory = mkdtempSync(resolve('.cache/browser-'));
 const settings = openSettings(directory, true);
@@ -30,21 +29,6 @@ const publisher = new Publisher(
   converter,
 );
 publisher.start();
-// A deterministic upstream substitute belongs only to this isolated browser harness.
-const attempts = new Map();
-const refresher = new SourceRefresher(settings.sources, converter, {
-  async fetch({ url }) {
-    const source = new URL(url);
-    if (source.hostname !== 'source.test')
-      throw new AppError('SOURCE_DNS_FAILED', '测试来源无法解析。');
-    const attempt = (attempts.get(url) ?? 0) + 1;
-    attempts.set(url, attempt);
-    if (source.pathname === '/failure' || source.searchParams.get('fail') === String(attempt))
-      throw new AppError('SOURCE_HTTP_FAILED', '来源返回 HTTP 503，未接受新内容。');
-    const name = (source.searchParams.get('name') ?? 'remote') + '-' + attempt;
-    return 'vless://' + UUID + '@example.com:443?security=tls&type=tcp#' + encodeURIComponent(name);
-  },
-});
 // Browser coverage controls request timing and GitHub metadata; real traffic is covered by test:cores.
 const coreLocks = JSON.parse(readFileSync('tests/kernels.lock.json', 'utf8'));
 const kernels = new KernelManager(directory, {
@@ -76,8 +60,15 @@ const tester = new NodeTester(
   },
 );
 const app = createApp({
+  resources: settings.resources,
   tester,
-  config: { publicOrigin: 'http://127.0.0.1:3210', dataDir: directory, development: true },
+  config: {
+    publicOrigin: 'http://127.0.0.1:3210',
+    dataDir: directory,
+    development: true,
+    subStoreUrl: process.env.SUB_STORE_URL,
+    telegramBot: '',
+  },
   webRoot: fileURLToPath(new URL('../dist/web/', import.meta.url)),
   auth,
   converter,
@@ -104,7 +95,6 @@ async function close() {
   server.closeAllConnections();
   await tester.close();
   await kernels.close();
-  await refresher.close();
   await publisher.close();
   await converter.close();
   auth.close();

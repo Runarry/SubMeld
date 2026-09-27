@@ -57,10 +57,10 @@ export class ControlledConverter {
         if (value !== undefined) return value;
       }
       return request.kind === 'parse'
-        ? parseInput(request.input)
+        ? await parseInput(request.input)
         : request.kind === 'produce'
-          ? produceInput(request.input)
-          : renderInput(request.input);
+          ? await produceInput(request.input)
+          : await renderInput(request.input);
     } finally {
       this.busy = false;
       queueMicrotask(() => {

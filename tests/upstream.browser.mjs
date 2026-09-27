@@ -1,0 +1,115 @@
+/* global document, window */
+import { test, expect } from '@playwright/test';
+import { UUID } from './fixtures.mjs';
+async function login(page) {
+  await page.goto('/submeld/');
+  await page.getByLabel('管理员密码', { exact: true }).fill('SubMeld-UI-Test-Only-2026');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+}
+async function native(page, path, body, method = 'POST') {
+  const response = await page.request.fetch('/upstream/sub-store' + path, {
+    method,
+    data: body,
+    headers: { Origin: 'http://127.0.0.1:3210', 'Content-Type': 'application/json' },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  return response.json();
+}
+test('native Sub-Store edits and renames resources without losing enhanced identity', async ({
+  page,
+}, info) => {
+  await login(page);
+  const name = 'native-' + info.project.name;
+  await native(page, '/api/subs', {
+    name,
+    displayName: name,
+    source: 'local',
+    content: 'vless://' + UUID + '@example.com:443?security=tls#native',
+    process: [],
+  });
+  const response = page.waitForResponse(
+    (r) => r.url().includes('/upstream/sub-store/api/subs') && r.request().method() === 'GET',
+  );
+  await page.getByRole('link', { name: '打开 Sub-Store', exact: true }).click();
+  await response;
+  await expect(page.getByText(/^(Subscription|订阅管理)$/, { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(name, { exact: true })).toBeVisible();
+  const before = (await native(page, '/api/sub/' + name, undefined, 'GET')).data;
+  await page
+    .locator('.sub-item-wrapper')
+    .filter({ has: page.getByRole('heading', { name, exact: true }) })
+    .locator('button')
+    .filter({ has: page.locator('svg[data-icon="pen-nib"]') })
+    .click();
+  const renamed = name + '-renamed';
+  await page
+    .getByRole('textbox', { name: 'Unique name(do not include / )', exact: true })
+    .fill(renamed);
+  await page.getByRole('textbox', { name: 'The display name', exact: true }).fill(renamed);
+  await page.getByRole('tab', { name: 'Content', exact: true }).click();
+  const content = 'vless://' + UUID + '@edited.example.com:443?security=tls#native-edited';
+  await page.locator('.cm-content[contenteditable="true"]').fill(content);
+  const saved = page.waitForResponse(
+    (r) => r.request().method() === 'PATCH' && r.url().includes('/api/sub/' + name),
+  );
+  await page.locator('.submit-btn').click();
+  expect((await saved).status()).toBe(200);
+  await expect(page.getByRole('heading', { name: renamed, exact: true })).toBeVisible();
+  const after = (await native(page, '/api/sub/' + renamed, undefined, 'GET')).data;
+  expect(after._submeld).toEqual(before._submeld);
+  expect(after.content).toBe(content);
+  await page.screenshot({ path: info.outputPath('native-substore.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await native(page, '/api/sub/' + renamed, undefined, 'DELETE');
+});
+test('upstream preview copies nodes, starts tests and clears selection after snapshot replacement', async ({
+  page,
+}, info) => {
+  await login(page);
+  const name = 'preview-' + info.project.name;
+  const content = (label) => 'vless://' + UUID + '@example.com:443?security=tls#' + label;
+  await native(page, '/api/subs', {
+    name,
+    source: 'local',
+    content: content('first'),
+    process: [],
+  });
+  await page.getByRole('button', { name: '上游节点预览', exact: true }).click();
+  await page
+    .getByRole('row')
+    .filter({ hasText: name })
+    .getByRole('button', { name: '查看节点' })
+    .click();
+  await page.getByRole('checkbox', { name: '选择 first', exact: true }).check();
+  await page.getByRole('button', { name: '复制所选为本地节点' }).click();
+  await expect(page.getByRole('status')).toContainText('已保存为 Sub-Store');
+  await page.getByRole('checkbox', { name: '选择 first', exact: true }).check();
+  await page.getByRole('button', { name: '测试所选节点', exact: true }).click();
+  await expect(page.getByRole('button', { name: '查看测试进度', exact: true })).toBeVisible();
+  await native(page, '/api/sub/' + name, { content: content('second') }, 'PATCH');
+  await page.getByRole('button', { name: '更新上游快照' }).click();
+  await expect(page.getByRole('checkbox', { name: '选择 second', exact: true })).not.toBeChecked();
+  await expect(page.getByRole('button', { name: '复制所选为本地节点' })).toBeDisabled();
+  await page.screenshot({ path: info.outputPath('upstream-preview.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await native(
+    page,
+    '/api/sub/' + name,
+    {
+      content:
+        content('second') +
+        '\nss://' +
+        Buffer.from('aes-256-cfb:public-test').toString('base64') +
+        '@example.com:8388#unsupported',
+    },
+    'PATCH',
+  );
+  await page.getByRole('button', { name: '更新上游快照' }).click();
+  await expect(page.getByRole('alert')).toContainText('第 2 项');
+  await native(page, '/api/sub/' + name, undefined, 'DELETE');
+});
