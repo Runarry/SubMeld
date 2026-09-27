@@ -1,4 +1,4 @@
-/* global document, window */
+/* global document, window, caches */
 import { test, expect } from '@playwright/test';
 import { UUID } from './fixtures.mjs';
 async function login(page) {
@@ -16,6 +16,68 @@ async function native(page, path, body, method = 'POST') {
   expect(response.ok(), await response.text()).toBe(true);
   return response.json();
 }
+
+test('Sub-Store offline cache preserves enhanced navigation, reloads and fresh assets', async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole('link', { name: '打开 Sub-Store', exact: true }).click();
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '打开 Sub-Store', exact: true }).click();
+  await page.goto('/submeld/#/nodes');
+  await expect(page.getByRole('heading', { name: '本地节点', exact: true })).toBeVisible();
+  await page.goto('/submeld/');
+  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  const asset = await page.locator('script[src*="/submeld/assets/"]').getAttribute('src');
+  // Poison only this test's disposable browser cache, proving enhanced scripts
+  // are fetched from the server even when the native runtime cache has an entry.
+  await page.evaluate(async (url) => {
+    await (
+      await caches.open('js-cache')
+    ).put(
+      url,
+      new Response('cached-wrong-application', {
+        headers: { 'Content-Type': 'application/javascript' },
+      }),
+    );
+  }, asset);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  const response = await page.goto('/s/missing/uri');
+  expect(response.status()).toBe(404);
+  expect(await page.locator('body').innerText()).toContain('NOT_FOUND');
+});
+
+test('an already installed native worker upgrades without clearing saved browser settings', async ({
+  page,
+  context,
+}) => {
+  await login(page);
+  await context.addCookies([{ name: 'submeld-test-legacy-worker', value: '1', url: page.url() }]);
+  await page.evaluate(async () => {
+    localStorage.setItem('submeld-regression-setting', 'preserved');
+    await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+  });
+  await context.clearCookies({ name: 'submeld-test-legacy-worker' });
+  await page.goto('/submeld/');
+  // The legacy worker serves its native index here and registers the updated
+  // /sw.js. It must become active while this old-controlled page remains open.
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  }).toPass({ timeout: 15000 });
+  expect(await page.evaluate(() => localStorage.getItem('submeld-regression-setting'))).toBe(
+    'preserved',
+  );
+});
 test('native Sub-Store edits and renames resources without losing enhanced identity', async ({
   page,
 }, info) => {

@@ -1,5 +1,6 @@
 import { UpstreamResources } from './upstream-resources.js';
 import { SubStoreClient } from './sub-store.js';
+import { frontendWorkerBoundary } from './frontend-worker.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -141,6 +142,14 @@ export function createApp({
     });
   });
   const frontend = new SubStoreClient(new URL(resources.client.origin).origin);
+  app.get('/sw.js', async (c) => {
+    const response = await frontend.request('/sw.js', { signal: c.req.raw.signal });
+    if (!response.ok) return response;
+    return c.body(frontendWorkerBoundary + (await response.text()), 200, {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+  });
   // The native frontend may keep the proxy prefix when its backend secret path differs.
   app.on(['GET', 'HEAD'], ['/share/*', '/upstream/sub-store/share/*'], async (c) => {
     const url = new URL(c.req.url);

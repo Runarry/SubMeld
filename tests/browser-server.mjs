@@ -79,7 +79,17 @@ const app = createApp({
   publisher,
 });
 const server = serve({
-  fetch: (request) => {
+  fetch: async (request) => {
+    if (
+      new URL(request.url).pathname === '/sw.js' &&
+      request.headers.get('cookie')?.includes('submeld-test-legacy-worker=1')
+    ) {
+      // Install the real pinned worker to reproduce browsers that predate the fix.
+      const upstream = await fetch(new URL('/sw.js', process.env.SUB_STORE_URL));
+      return new Response(await upstream.text(), {
+        headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-store' },
+      });
+    }
     if (request.method === 'POST' && new URL(request.url).pathname === '/api/auth/login')
       clock += 300001;
     return app.fetch(request);

@@ -39,6 +39,8 @@ Node.js 24.6.0、pnpm 10.33.2；一个根包，Vue + TypeScript、Node.js + Hono
 
 站点根路径是 Sub-Store；`/submeld/` 是服务入口和增强工具。首次构建/准备内核需要联网，缓存复用。直接运行构建产物时，将 PUBLIC_ORIGIN 改为 `http://127.0.0.1:3000`，执行 `pnpm build`、`pnpm cores:prepare`、`pnpm start --dev`。
 
+代理层给原生 Service Worker 增加路径边界：Sub-Store 保留自己的离线缓存，`/submeld/`、增强 API 和私人产物直接读取服务端。已有旧缓存的浏览器先重新打开 Sub-Store，等待页面载入后刷新增强页即可；无需清空浏览器设置或订阅数据。
+
 开发服务的正常停止命令为 `docker compose -f compose.dev.yaml stop`。不用 `down -v` 清理需要保留的数据。
 
 ## 使用流程
