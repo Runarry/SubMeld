@@ -1,3 +1,4 @@
+import { UpstreamFiles } from './upstream-files.js';
 import { UpstreamResources } from './upstream-resources.js';
 import { SubStoreClient } from './sub-store.js';
 import { frontendWorkerBoundary } from './frontend-worker.js';
@@ -13,23 +14,18 @@ import type { Config } from './config.js';
 import type { Auth } from './auth.js';
 import type { NodeStore } from './nodes.js';
 import type { ChainStore } from './chains.js';
-import type { SourceStore } from './sources.js';
+
 import type { SubscriptionStore } from './subscriptions.js';
-import type { Publisher } from './publisher.js';
+
 import type { NodeTester } from './node-tests.js';
 import { testSelectionSchema } from './shared/node-tests.js';
 import { renderTargetSchema } from './shared/contracts.js';
 import { outputFormatSchema } from './shared/subscriptions.js';
-import type { Converter } from './converter/pool.js';
+
 import { AppError, publicError } from './errors.js';
 import { readJson } from './input.js';
-import {
-  MAX_BYTES,
-  parseRequestSchema,
-  produceRequestSchema,
-  renderRequestSchema,
-  revisionRequestSchema,
-} from './shared/contracts.js';
+import { MAX_BYTES } from './shared/contracts.js';
+import { revisionSchema } from './shared/resources.js';
 
 export type AppOptions = {
   koipy: KoipySettingsStore;
@@ -38,12 +34,9 @@ export type AppOptions = {
   tester?: NodeTester;
   nodes: NodeStore;
   chains: ChainStore;
-  sources: SourceStore;
   subscriptions: SubscriptionStore;
-  publisher: Publisher;
   config: Config;
   auth: Auth;
-  converter: Pick<Converter, 'run'>;
 };
 export function createApp({
   koipy,
@@ -52,24 +45,17 @@ export function createApp({
   tester,
   config,
   auth,
-  converter,
   nodes,
   chains,
-  sources,
   subscriptions,
-  publisher,
 }: AppOptions) {
   const app = new Hono();
   const cookieName = config.development ? 'submeld-session' : '__Host-submeld-session';
   const writes = new Set([
     '/api/auth/login',
     '/api/auth/logout',
-    '/api/convert/parse',
-    '/api/convert/produce',
-    '/api/convert/render',
     '/api/nodes',
     '/api/chains',
-    '/api/sources',
     '/api/subscriptions',
     '/api/node-tests',
     '/api/kernels',
@@ -95,7 +81,6 @@ export function createApp({
       [
         '/api/nodes/',
         '/api/chains/',
-        '/api/sources/',
         '/api/subscriptions/',
         '/api/node-tests/',
         '/api/kernels/',
@@ -132,7 +117,7 @@ export function createApp({
   });
   app.use('/api/*', async (c, next) => {
     if (
-      /^\/api\/(nodes|chains|sources|subscriptions|node-tests)(?:\/|$)/.test(c.req.path) &&
+      /^\/api\/(nodes|chains|subscriptions)(?:\/|$)/.test(c.req.path) &&
       !/\/(artifacts|cancel)(?:\/|$)/.test(c.req.path)
     )
       await resources.sync();
@@ -150,6 +135,14 @@ export function createApp({
   app.get('/api/integrations/koipy', (c) => c.json(koipy.get(config.telegramBot)));
   app.patch('/api/integrations/koipy', async (c) =>
     c.json(koipy.update(await readJson(c.req.raw, 32 * 1024))),
+  );
+  const supportFiles = new UpstreamFiles(resources);
+  app.get('/api/integrations/files', async (c) => {
+    await resources.sync();
+    return c.json(supportFiles.supportFiles());
+  });
+  app.patch('/api/integrations/files/:id', async (c) =>
+    c.json(await supportFiles.updateSupport(c.req.param('id'), await requestRevision(c.req.raw))),
   );
   const frontend = new SubStoreClient(new URL(resources.client.origin).origin);
   app.get('/sw.js', async (c) => {
@@ -196,11 +189,7 @@ export function createApp({
       });
     const pure = /^\/api\/(proxy|rule|preview)(?:\/|$)/.test(path);
     const response =
-      write && !pure
-        ? await resources.write(forward, [], () =>
-            resources.guardMutation(path, c.req.method, body),
-          )
-        : await forward();
+      write && !pure ? await resources.write(forward, path, c.req.method, body) : await forward();
     response.headers.delete('set-cookie');
     response.headers.delete('access-control-allow-origin');
     response.headers.delete('access-control-allow-credentials');
@@ -241,66 +230,26 @@ export function createApp({
     });
     return context.json({ authenticated: false });
   });
-  app.post('/api/convert/parse', async (context) => {
-    const input = parseRequestSchema.safeParse(await readJson(context.req.raw, 26 * 1024 * 1024));
-    if (!input.success) throw new AppError('INVALID_REQUEST', '解析请求格式无效。', 400);
-    if (Buffer.byteLength(input.data.text) > MAX_BYTES)
-      throw new AppError('INPUT_LIMIT_EXCEEDED', '输入超过 4 MiB。', 413);
-    return context.json(
-      await converter.run({ kind: 'parse', input: input.data }, context.req.raw.signal),
-    );
-  });
-  app.post('/api/convert/produce', async (context) => {
-    const raw = await readJson(context.req.raw, 26 * 1024 * 1024);
-    if (Buffer.byteLength(JSON.stringify(raw)) > MAX_BYTES)
-      throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数据超过 4 MiB。', 413);
-    const input = produceRequestSchema.safeParse(raw);
-    if (!input.success) throw new AppError('INVALID_REQUEST', '节点数据结构无效。', 400);
-    return context.json(
-      await converter.run({ kind: 'produce', input: input.data }, context.req.raw.signal),
-    );
-  });
-  app.get('/api/nodes', (context) => {
-    const page = z.coerce
-      .number()
-      .int()
-      .min(0)
-      .max(1000000)
-      .safeParse(context.req.query('page') ?? 0);
-    if (!page.success) throw new AppError('INVALID_REQUEST', '页码无效。', 400);
-    return context.json(nodes.list(page.data));
-  });
-  app.post('/api/nodes', async (context) =>
-    context.json(await nodes.create(await readJson(context.req.raw, 26 * 1024 * 1024)), 201),
-  );
-  app.post('/api/nodes/load', async (context) =>
-    context.json(nodes.load(await readJson(context.req.raw, 128 * 1024))),
-  );
-  app.get('/api/nodes/:id', (context) => context.json(nodes.get(context.req.param('id'))));
-  app.patch('/api/nodes/:id', async (context) =>
-    context.json(
-      await nodes.update(
-        context.req.param('id'),
-        await readJson(context.req.raw, 26 * 1024 * 1024),
+  app.get('/api/nodes/resources', (c) => c.json({ resources: resources.listResources() }));
+  app.get('/api/nodes', async (c) =>
+    c.json(
+      await nodes.list(
+        c.req.query('resourceId'),
+        c.req.query('search') ?? '',
+        listPage(c.req.query('page')),
+        c.req.query('refresh') === '1',
       ),
     ),
   );
-  app.delete('/api/nodes/:id', async (context) => {
-    const input = revisionRequestSchema.safeParse(await readJson(context.req.raw, 1024));
-    if (!input.success) throw new AppError('INVALID_REQUEST', '删除请求缺少有效版本。', 400);
-    await nodes.delete(context.req.param('id'), input.data.revision);
-    return context.json({ deleted: true });
-  });
-  app.post('/api/convert/render', async (context) => {
-    const raw = await readJson(context.req.raw, 26 * 1024 * 1024);
-    if (Buffer.byteLength(JSON.stringify(raw)) > MAX_BYTES)
-      throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数据超过 4 MiB。', 413);
-    const input = renderRequestSchema.safeParse(raw);
-    if (!input.success) throw new AppError('INVALID_REQUEST', '目标生成请求无效。', 400);
-    return context.json(
-      await converter.run({ kind: 'render', input: input.data }, context.req.raw.signal),
-    );
-  });
+  app.post('/api/nodes', async (c) =>
+    c.json(await nodes.create(await readJson(c.req.raw, 26 * 1024 * 1024)), 201),
+  );
+  app.post('/api/nodes/detail', async (c) =>
+    c.json(await nodes.get(await readJson(c.req.raw, 8192))),
+  );
+  app.post('/api/nodes/delete', async (c) =>
+    c.json(await nodes.delete(await readJson(c.req.raw, MAX_BYTES))),
+  );
   function listPage(value: string | undefined) {
     const page = z.coerce
       .number()
@@ -312,24 +261,20 @@ export function createApp({
     return page.data;
   }
   async function requestRevision(request: Request) {
-    const input = revisionRequestSchema.safeParse(await readJson(request, 1024));
-    if (!input.success) throw new AppError('INVALID_REQUEST', '请求缺少有效版本。', 400);
-    return input.data.revision;
+    const value = z.object({ revision: revisionSchema }).safeParse(await readJson(request, 1024));
+    if (!value.success) throw new AppError('INVALID_REQUEST', '请求缺少有效版本。', 400);
+    return value.data.revision;
   }
-  const detail = (id: string) =>
-    subscriptions.detail(id, publisher.engineVersion, publisher.status(id));
-  function issued(id: string, token: string, key: string) {
-    const subscription = detail(id);
-    return {
-      subscription,
-      urls: Object.fromEntries(
-        subscription.formats.map((format) => [
-          format,
-          config.publicOrigin + '/s/' + token + '/' + format + '?key=' + key,
-        ]),
-      ),
-    };
+  async function updateBody(request: Request) {
+    const value = z
+      .object({ revision: revisionSchema })
+      .catchall(z.unknown())
+      .safeParse(await readJson(request, MAX_BYTES));
+    if (!value.success) throw new AppError('INVALID_REQUEST', '请求缺少有效版本。', 400);
+    const { revision, ...config } = value.data;
+    return { revision, config };
   }
+  const detail = (id: string) => subscriptions.detail(id, config.publicOrigin);
   function testing() {
     if (!tester) throw new AppError('TEST_UNAVAILABLE', '节点测试服务尚未就绪。', 503);
     return tester;
@@ -376,81 +321,48 @@ export function createApp({
     if (!target.success) throw new AppError('INVALID_REQUEST', '内核目标无效。', 400);
     return c.json(testing().kernels.update(target.data), 202);
   });
-  app.get('/api/chains', (c) => c.json(chains.list(listPage(c.req.query('page')))));
+  app.get('/api/chains', async (c) => c.json(await chains.list(listPage(c.req.query('page')))));
   app.post('/api/chains', async (c) =>
-    c.json(chains.create(await readJson(c.req.raw, 16 * 1024)), 201),
+    c.json(await chains.create(await readJson(c.req.raw, 16 * 1024)), 201),
   );
-  app.get('/api/chains/:id', (c) => c.json(chains.get(c.req.param('id'))));
-  app.patch('/api/chains/:id', async (c) =>
-    c.json(chains.update(c.req.param('id'), await readJson(c.req.raw, 16 * 1024))),
-  );
+  app.get('/api/chains/:id', async (c) => c.json(await chains.get(c.req.param('id'))));
+  app.patch('/api/chains/:id', async (c) => {
+    const body = await updateBody(c.req.raw);
+    return c.json(await chains.update(c.req.param('id'), body.config, body.revision));
+  });
   app.delete('/api/chains/:id', async (c) => {
-    chains.delete(c.req.param('id'), await requestRevision(c.req.raw));
+    await chains.delete(c.req.param('id'), await requestRevision(c.req.raw));
     return c.json({ deleted: true });
   });
-  app.get('/api/sources', (c) => c.json(sources.list(listPage(c.req.query('page')))));
-  app.get('/api/sources/:id', async (c) => {
-    await sources.prepare([c.req.param('id')]);
-    return c.json(sources.get(c.req.param('id')));
-  });
-  app.post('/api/sources/:id/refresh', async (c) =>
-    c.json(await sources.requestRefresh(c.req.param('id'), await requestRevision(c.req.raw))),
-  );
   app.get('/api/subscriptions', (c) => c.json(subscriptions.list(listPage(c.req.query('page')))));
   app.post('/api/subscriptions', async (c) => {
-    const { id, token, key } = subscriptions.create(await readJson(c.req.raw, 26 * 1024 * 1024));
-    return c.json(issued(id, token, key), 201);
+    const plan = await subscriptions.create(await readJson(c.req.raw, MAX_BYTES));
+    return c.json(await detail(plan.id), 201);
   });
-  app.get('/api/subscriptions/:id', (c) => c.json(detail(c.req.param('id'))));
+  app.get('/api/subscriptions/:id', async (c) => c.json(await detail(c.req.param('id'))));
   app.patch('/api/subscriptions/:id', async (c) => {
-    subscriptions.update(c.req.param('id'), await readJson(c.req.raw, 26 * 1024 * 1024));
-    return c.json(detail(c.req.param('id')));
+    const body = await updateBody(c.req.raw);
+    const plan = await subscriptions.update(c.req.param('id'), body.config, body.revision);
+    return c.json(await detail(plan.id));
   });
   app.delete('/api/subscriptions/:id', async (c) => {
-    subscriptions.delete(c.req.param('id'), await requestRevision(c.req.raw));
+    await subscriptions.delete(c.req.param('id'), await requestRevision(c.req.raw));
     return c.json({ deleted: true });
   });
-  app.post('/api/subscriptions/:id/generate', async (c) => {
-    const sub = subscriptions.current(c.req.param('id'), await requestRevision(c.req.raw));
-    if (!sub.enabled) throw new AppError('SUBSCRIPTION_DISABLED', '请先启用方案。', 422);
-    publisher.schedule([sub.id]);
-    return c.json(detail(sub.id), 202);
+  app.post('/api/subscriptions/:id/share', async (c) => {
+    await subscriptions.share(c.req.param('id'), await requestRevision(c.req.raw), false);
+    return c.json(await detail(c.req.param('id')));
   });
-  app.post('/api/subscriptions/:id/reset-token', async (c) => {
-    const { id, token, key } = subscriptions.resetToken(
-      c.req.param('id'),
-      await requestRevision(c.req.raw),
-    );
-    return c.json(issued(id, token, key));
+  app.post('/api/subscriptions/:id/revoke', async (c) => {
+    await subscriptions.share(c.req.param('id'), await requestRevision(c.req.raw), true);
+    return c.json(await detail(c.req.param('id')));
   });
-  app.get('/api/subscriptions/:id/artifacts/:format', (c) => {
+  app.get('/api/subscriptions/:id/artifacts/:format', async (c) => {
     const format = outputFormatSchema.safeParse(c.req.param('format'));
-    if (!format.success) throw new AppError('NOT_FOUND', '请求的资源不存在。', 404);
-    return c.json(subscriptions.artifact(c.req.param('id'), format.data, publisher.engineVersion));
-  });
-  app.use('/s/*', async (c, next) => {
-    c.header('Cache-Control', 'private, no-store');
-    await next();
-  });
-  app.use('/s', async (c, next) => {
-    c.header('Cache-Control', 'private, no-store');
-    await next();
-  });
-  app.on(['GET', 'HEAD'], '/s/:token/:format', (c) => {
-    const artifact = subscriptions.read(
-      c.req.param('token'),
-      c.req.param('format'),
-      publisher.engineVersion,
-      c.req.query('key'),
+    if (!format.success) throw new AppError('NOT_FOUND', '请求的格式不存在。', 404);
+    return c.json(
+      await subscriptions.artifact(c.req.param('id'), format.data, c.req.query('refresh') === '1'),
     );
-    const type = artifact.format.startsWith('mihomo')
-      ? 'application/yaml'
-      : ['uri', 'base64'].includes(artifact.format)
-        ? 'text/plain'
-        : 'application/json';
-    c.header('Content-Type', type + '; charset=utf-8');
-    c.header('Content-Length', String(Buffer.byteLength(artifact.content)));
-    return c.req.method === 'HEAD' ? c.body(null, 200) : c.body(artifact.content, 200);
   });
   if (webRoot) {
     const indexHtml = readFileSync(join(webRoot, 'index.html'), 'utf8');
@@ -492,7 +404,11 @@ export function createApp({
   app.notFound((context) =>
     context.json({ code: 'NOT_FOUND', message: '请求的资源不存在。' }, 404),
   );
-  app.onError((error, context) => {
+  app.onError((failure, context) => {
+    const error =
+      failure instanceof z.ZodError
+        ? new AppError('INVALID_REQUEST', '请求格式无效。', 400)
+        : failure;
     const result = publicError(error);
     console.warn(
       JSON.stringify({

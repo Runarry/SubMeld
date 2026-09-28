@@ -10,6 +10,7 @@ import {
   renderRequestSchema,
   type NodeDraft,
   type RenderResult,
+  type RenderTarget,
 } from '../shared/contracts.js';
 import { record, fromUpstream, toUpstream, validateDraft } from './model.js';
 import { produceUpstream } from './engine.js';
@@ -94,8 +95,14 @@ function checkSingbox(value: Record<string, unknown>, node: NodeDraft) {
 }
 export async function renderInput(
   input: unknown,
-  client = new SubStoreClient(),
+  client: Pick<SubStoreClient, 'convert'> = new SubStoreClient(),
   signal?: AbortSignal,
+  template: (
+    target: RenderTarget,
+    nodes: Record<string, unknown>[],
+    names: string[],
+    port: number,
+  ) => unknown = basicConfig,
 ): Promise<RenderResult> {
   if (Buffer.byteLength(JSON.stringify(input)) > MAX_BYTES)
     throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数据超过 4 MiB。', 413);
@@ -153,7 +160,13 @@ export async function renderInput(
       );
     return name;
   }
-  async function convert(draft: NodeDraft, name: string, index: number, role?: 'entry' | 'exit') {
+  async function convert(
+    draft: NodeDraft,
+    name: string,
+    index: number,
+    role?: 'entry' | 'exit',
+    detour?: string,
+  ) {
     const node = structuredClone(draft);
     node.name = name;
     const report = (
@@ -204,7 +217,12 @@ export async function renderInput(
     try {
       if (target === 'xray') return xrayOutbound(node);
       const raw: unknown = await produceUpstream(
-        [structuredClone(toUpstream(node))],
+        [
+          {
+            ...structuredClone(toUpstream(node)),
+            ...(detour ? { 'underlying-proxy': detour } : {}),
+          },
+        ],
         target === 'mihomo' ? 'Mihomo' : 'sing-box',
         'internal',
         client,
@@ -215,6 +233,7 @@ export async function renderInput(
       const output = raw[0];
       if (target === 'mihomo') checkMihomo(output, node);
       else checkSingbox(output, node);
+      if (detour) equal(output[target === 'mihomo' ? 'dialer-proxy' : 'detour'], detour);
       return output;
     } catch (error) {
       if (error instanceof AppError && error.status >= 500) throw error;
@@ -228,7 +247,7 @@ export async function renderInput(
       const name = allocate(item.name, item.nodeIndex);
       const entryName = allocate(item.name.slice(0, 480) + ' · 前置', item.nodeIndex);
       const entry = await convert(item.entry, entryName, item.nodeIndex, 'entry');
-      const exit = await convert(item.exit, name, item.nodeIndex, 'exit');
+      const exit = await convert(item.exit, name, item.nodeIndex, 'exit', entryName);
       if (!entry || !exit) continue;
       if (['hysteria2', 'tuic'].includes(item.exit.protocol)) {
         diagnostics.push(
@@ -242,9 +261,7 @@ export async function renderInput(
         );
         if (target === 'mihomo') entry.udp = true;
       }
-      if (target === 'mihomo') exit['dialer-proxy'] = entryName;
-      else if (target === 'singbox') exit.detour = entryName;
-      else {
+      if (target === 'xray') {
         const stream = exit.streamSettings;
         if (!record(stream)) throw new AppError('CONVERSION_FAILED', 'Xray 链式配置缺少传输设置。');
         stream.sockopt = { dialerProxy: entryName };
@@ -268,7 +285,7 @@ export async function renderInput(
       ? stringify(value, { lineWidth: 0 })
       : JSON.stringify(value, null, 2) + '\n';
   const fragment = serialize(target === 'mihomo' ? { proxies: nodes } : { outbounds: nodes });
-  const full = serialize(basicConfig(target, nodes, names, listenPort));
+  const full = serialize(template(target, nodes, names, listenPort));
   if ([fragment, full].some((value) => Buffer.byteLength(value) > MAX_BYTES))
     throw new AppError('OUTPUT_LIMIT_EXCEEDED', '此目标输出超过 4 MiB。');
   return {

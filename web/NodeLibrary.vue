@@ -1,350 +1,406 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
-import NodeEditor from './NodeEditor.vue';
-import ChainLibrary from './ChainLibrary.vue';
-import NodeImport from './NodeImport.vue';
-import ListPagination from './ui/ListPagination.vue';
-import ModalDialog from './ui/ModalDialog.vue';
-import StatusBadge from './ui/StatusBadge.vue';
-import { ApiError } from './api';
-import NodeTestSummary from './NodeTestSummary.vue';
-import { useNodeTests } from './nodeTests';
-import type { TestSubject } from '../server/shared/node-tests';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
-  blankDraft,
-  protocols,
   nodeListSchema,
-  storedNodeSchema,
-  loadedNodesSchema,
-  updateNodeSchema,
-  type NodeSummary,
-  type StoredNode,
-  type NodeDraft,
-  type Protocol,
-  type WorkbenchItem,
-} from '../server/shared/contracts';
+  nodeDetailsSchema,
+  nodeRefSchema,
+  resourceSchema,
+  type NodeView,
+  type Resource,
+} from '../server/shared/resources';
+import type { TestSubject } from '../server/shared/node-tests';
+import { useNodeTests } from './nodeTests';
+import NodeTestSummary from './NodeTestSummary.vue';
+import ModalDialog from './ui/ModalDialog.vue';
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
 }>();
-const emit = defineEmits<{ load: [items: WorkbenchItem[]]; 'open-sources': [] }>();
-const rows = ref<NodeSummary[]>([]),
-  total = ref(0),
+const nodes = ref<NodeView[]>([]),
+  resources = ref<Resource[]>([]),
+  selected = ref<string[]>([]),
   page = ref(0),
-  selected = ref<string[]>([]);
-const subject = (node: NodeSummary): TestSubject => ({
-  kind: 'node',
-  id: node.id,
-  revision: node.revision,
-});
-const testing = useNodeTests(() => rows.value.map(subject), props.api);
-const selectedSubjects = () =>
-  rows.value.filter((node) => selected.value.includes(node.id)).map(subject);
-const busy = ref(false),
+  total = ref(0),
+  resourceId = ref(''),
+  search = ref(''),
+  busy = ref(false),
   message = ref(''),
-  conflict = ref(false);
-const draft = ref<NodeDraft | null>(null),
-  baseline = ref<StoredNode | null>(null),
-  newProtocol = ref<Protocol>('vless');
-const chainRefresh = ref(0);
-const importing = ref(false),
-  importSaving = ref(false);
-const locked = computed(() => busy.value || importSaving.value);
-const cleared = new Set<string>();
-async function imported(count: number) {
-  busy.value = true;
-  selected.value = [];
-  try {
-    page.value = 0;
-    await refresh();
-    page.value = Math.max(0, Math.ceil(total.value / 25) - 1);
-    if (page.value) await refresh();
-    message.value = '已添加 ' + count + ' 个本地节点，已定位到最后一页。';
-  } catch {
-    message.value = '已添加 ' + count + ' 个本地节点，但列表刷新失败，请点击刷新列表。';
-  } finally {
-    busy.value = false;
-  }
-}
-async function refresh() {
-  const result = nodeListSchema.parse(await props.api('/api/nodes?page=' + page.value));
-  rows.value = result.nodes;
-  total.value = result.total;
-  chainRefresh.value++;
-  selected.value = selected.value.filter((id) => rows.value.some((n) => n.id === id));
-}
+  errors = ref<string[]>([]);
+const form = ref<{ name: string; source: 'local' | 'remote'; content: string; url: string } | null>(
+  null,
+);
+const detail = ref<ReturnType<typeof nodeDetailsSchema.parse> | null>(null),
+  deleting = ref<NodeView[] | null>(null);
+const native = '/?api=' + encodeURIComponent(location.origin + '/upstream/sub-store');
+const key = (node: NodeView) => node.resourceId + ':' + node.nodeIndex;
+const nodeRef = (node: NodeView) =>
+  nodeRefSchema.parse({
+    resourceId: node.resourceId,
+    revision: node.revision,
+    snapshotHash: node.snapshotHash,
+    nodeIndex: node.nodeIndex,
+  });
+const subject = (node: NodeView): TestSubject => ({ kind: 'node', ...nodeRef(node) });
+const testing = useNodeTests(() => nodes.value.filter((n) => n.testable).map(subject), props.api);
+const chosen = computed(() => nodes.value.filter((n) => selected.value.includes(key(n))));
+let alive = true,
+  ticket = 0;
+onBeforeUnmount(() => {
+  alive = false;
+  ticket++;
+});
 async function act(action: () => Promise<void>) {
   if (busy.value) return;
   busy.value = true;
   message.value = '';
   try {
     await action();
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 409) conflict.value = true;
-    message.value = error instanceof Error ? error.message : '操作失败，请重试。';
+  } catch (e) {
+    if (alive) message.value = e instanceof Error ? e.message : '操作失败。';
   } finally {
-    busy.value = false;
+    if (alive) busy.value = false;
   }
 }
-function startNew() {
-  baseline.value = null;
-  draft.value = blankDraft(newProtocol.value);
-  cleared.clear();
-  conflict.value = false;
-  message.value = '';
-}
-async function edit(id: string) {
-  await act(async () => {
-    const node = storedNodeSchema.parse(await props.api('/api/nodes/' + id));
-    baseline.value = node;
-    draft.value = JSON.parse(JSON.stringify(node.draft));
-    cleared.clear();
-    conflict.value = false;
-  });
-}
-function differences(current: object, original: object) {
-  const previous = new Map(Object.entries(original));
-  return Object.fromEntries(
-    Object.entries(current).filter(
-      ([key, value]) => JSON.stringify(value) !== JSON.stringify(previous.get(key)),
+async function load(force = false) {
+  const current = ++ticket;
+  const result = nodeListSchema.parse(
+    await props.api(
+      '/api/nodes?page=' +
+        page.value +
+        '&resourceId=' +
+        encodeURIComponent(resourceId.value) +
+        '&search=' +
+        encodeURIComponent(search.value) +
+        (force ? '&refresh=1' : ''),
     ),
   );
+  if (!alive || current !== ticket) return;
+  nodes.value = result.nodes;
+  resources.value = result.resources;
+  total.value = result.total;
+  errors.value = result.errors.map((e) => e.message);
+  selected.value = [];
+  if (!nodes.value.length && page.value) {
+    page.value--;
+    await load(force);
+  }
 }
 async function save() {
-  await act(async () => {
-    if (!draft.value) return;
-    if (!baseline.value) {
-      await props.api('/api/nodes', { drafts: [draft.value] });
-      draft.value = null;
-    } else {
-      const before = baseline.value.draft,
-        current = draft.value;
-      const changes: Record<string, unknown> = {};
-      for (const key of ['name', 'server', 'port'] as const)
-        if (current[key] !== before[key]) changes[key] = current[key];
-      for (const key of ['tls', 'transport', 'auth', 'protocolOptions'] as const) {
-        const diff = differences(current[key], before[key]);
-        for (const field of key === 'auth'
-          ? ['uuid', 'password']
-          : key === 'protocolOptions'
-            ? ['obfsPassword']
-            : []) {
-          if (diff[field] === '') {
-            if (!cleared.has(key + '.' + field))
-              throw new Error('清空认证信息请使用字段旁的“清空”按钮。');
-            diff[field] = null;
-          }
-        }
-        if (Object.keys(diff).length) changes[key] = diff;
-      }
-      const input = updateNodeSchema.parse({ revision: baseline.value.revision, changes });
-      const result = storedNodeSchema.parse(
-        await props.api('/api/nodes/' + baseline.value.id, input, 'PATCH'),
-      );
-      baseline.value = result;
-      draft.value = JSON.parse(JSON.stringify(result.draft));
-      cleared.clear();
-      conflict.value = false;
-    }
-    await refresh();
-    message.value = '节点已保存，相关订阅已安排更新。';
-  });
+  if (!form.value) return;
+  const saved = resourceSchema.parse(await props.api('/api/nodes', form.value));
+  if (!alive) return;
+  form.value = null;
+  resourceId.value = saved.id;
+  page.value = 0;
+  search.value = '';
+  await load();
+  message.value = '已保存到 Sub-Store。';
 }
-async function toggle(node: NodeSummary) {
-  await act(async () => {
-    await props.api(
-      '/api/nodes/' + node.id,
-      { revision: node.revision, enabled: !node.enabled },
-      'PATCH',
-    );
-    await refresh();
-    message.value = node.enabled
-      ? '节点已禁用，相关订阅旧产物已失效。工作台中的独立副本不受影响。'
-      : '节点已启用。';
-  });
+async function remove() {
+  if (!deleting.value) return;
+  await props.api('/api/nodes/delete', { nodes: deleting.value.map(nodeRef) });
+  if (!alive) return;
+  deleting.value = null;
+  await load();
+  message.value = '删除操作已保存到 Sub-Store。';
 }
-async function remove(node: NodeSummary) {
-  if (
-    !window.confirm(
-      '删除这个本地节点？被链式代理引用的节点须先解除引用；关联方案会移除此输入并重新生成。',
-    )
-  )
-    return;
-  await act(async () => {
-    await props.api('/api/nodes/' + node.id, { revision: node.revision }, 'DELETE');
-    if (baseline.value?.id === node.id) {
-      baseline.value = null;
-      draft.value = null;
-    }
-    if (rows.value.length === 1 && page.value > 0) page.value--;
-    await refresh();
-    message.value = '节点已删除。';
-  });
-}
-async function load() {
-  await act(async () => {
-    const result = loadedNodesSchema.parse(
-      await props.api('/api/nodes/load', {
-        ids: rows.value.filter((n) => selected.value.includes(n.id)).map((n) => n.id),
-      }),
-    );
-    emit('load', result.items);
-    message.value = '已请求将所选节点追加到工作台。';
-  });
-}
-async function turnPage(delta: number) {
-  await act(async () => {
-    page.value += delta;
-    selected.value = [];
-    await refresh();
-  });
-}
-onMounted(() => void act(refresh));
+onMounted(() => void act(() => load()));
 </script>
 <template>
-  <section class="library" aria-label="本地节点库">
-    <div class="page-header">
+  <section class="page">
+    <header class="page-header">
       <div>
-        <h1>本地节点</h1>
-        <p class="muted">这里管理供独立编辑和两跳链引用的单节点订阅，数据仍保存在 Sub-Store。</p>
+        <h1>节点</h1>
+        <p>查看 Sub-Store 中的全部订阅节点，直接添加、删除或测试。</p>
       </div>
-      <button type="button" :disabled="locked" @click="act(refresh)">刷新列表</button>
-    </div>
-    <p class="notice">
-      在 Sub-Store 添加的普通订阅节点显示在上游预览中。
-      <button type="button" @click="emit('open-sources')">查看 Sub-Store 节点</button>
-    </p>
-    <p v-if="message" role="status" class="notice">{{ message }}</p>
-    <p v-if="testing.error" class="error-note">{{ testing.error }}</p>
-    <div class="toolbar">
-      <button
-        type="button"
-        :disabled="locked || testing.starting || !selected.length"
-        @click="testing.start(selectedSubjects())"
-      >
-        测试所选本地节点
-      </button>
-      <label
-        >新建协议<select v-model="newProtocol" :disabled="locked">
-          <option v-for="p in protocols" :key="p" :value="p">{{ p.toUpperCase() }}</option>
-        </select></label
-      >
-      <button type="button" class="primary" :disabled="locked" @click="startNew">
-        新建本地节点
-      </button>
-      <button
-        type="button"
-        :disabled="locked"
-        :aria-expanded="importing"
-        @click="importing = !importing"
-      >
-        导入节点
-      </button>
-      <button
-        type="button"
-        :disabled="
-          locked ||
-          !selected.length ||
-          rows.some((node) => selected.includes(node.id) && !node.enabled)
-        "
-        @click="load"
-      >
-        载入所选到工作台
-      </button>
-    </div>
-    <div class="library-main">
-      <p v-if="!rows.length" class="empty-state">
-        还没有本地节点。可直接导入、手动新建，或从工作台选择后另存。
-      </p>
-      <ul v-else class="library-list">
-        <li v-for="node in rows" :key="node.id" @click="edit(node.id)">
-          <label class="check-label" @click.stop
-            ><input
-              v-model="selected"
-              type="checkbox"
-              :value="node.id"
-              :disabled="locked"
-              :aria-label="'选择本地节点 ' + node.name"
-            />
-            <span class="node-name"
-              >{{ node.name
-              }}<small
-                >{{ node.protocol.toUpperCase() }} · 版本 {{ node.revision }}
-                <StatusBadge
-                  :tone="node.enabled ? 'ok' : 'off'"
-                  :label="node.enabled ? '启用' : '禁用'" /></small
-              ><NodeTestSummary
-                :results="testing.forSubject(subject(node))"
-                @show="testing.show([subject(node)])"
-            /></span>
-          </label>
-          <div class="toolbar" @click.stop>
-            <button
-              type="button"
-              :disabled="locked || testing.starting"
-              @click="testing.start([subject(node)])"
-            >
-              测试节点
-            </button>
-            <button type="button" :disabled="locked" @click="edit(node.id)">编辑</button
-            ><button type="button" :disabled="locked" @click="toggle(node)">
-              {{ node.enabled ? '禁用' : '启用' }}</button
-            ><button type="button" class="danger linkish" :disabled="locked" @click="remove(node)">
-              删除
-            </button>
-          </div>
-        </li>
-      </ul>
-      <ListPagination :page="page" :total="total" :disabled="locked" @turn="turnPage" />
-    </div>
-    <ChainLibrary :api="api" :refresh-key="chainRefresh" :disabled="locked" />
-    <ModalDialog
-      v-if="draft"
-      :label="baseline ? '编辑本地节点' : '新建本地节点'"
-      :dismissible="!locked"
-      @close="
-        draft = null;
-        baseline = null;
-      "
-    >
-      <fieldset :disabled="locked" class="library-editor">
-        <legend>{{ baseline ? '编辑本地节点' : '新建本地节点' }}</legend>
-        <p v-if="conflict" class="warning-note">
-          服务器已有更新。当前编辑已保留；重新载入会替换这些未保存内容。
-        </p>
-        <button v-if="conflict && baseline" type="button" @click="edit(baseline.id)">
-          重新载入服务器版本
+      <div class="actions">
+        <a :href="native">在 Sub-Store 中编辑</a
+        ><button
+          class="primary"
+          :disabled="busy"
+          @click="form = { name: '', source: 'local', content: '', url: '' }"
+        >
+          添加节点或订阅
         </button>
-        <NodeEditor v-model="draft" :persisted="!!baseline" @clear-secret="cleared.add($event)" />
-      </fieldset>
-      <template #footer>
-        <button type="button" class="primary" :disabled="locked" @click="save">保存本地节点</button>
-        <button
-          type="button"
-          :disabled="locked"
-          @click="
-            draft = null;
-            baseline = null;
+      </div>
+    </header>
+    <div class="panel filters">
+      <label
+        >所属订阅
+        <select
+          v-model="resourceId"
+          :disabled="busy"
+          @change="
+            page = 0;
+            act(() => load());
           "
         >
-          关闭编辑
-        </button>
-      </template>
-    </ModalDialog>
-    <ModalDialog
-      v-if="importing"
-      label="导入节点"
-      wide
-      elevated
-      :dismissible="!importSaving && !busy"
-      @close="importing = false"
-    >
-      <NodeImport
-        :api="api"
+          <option value="">全部订阅（不重复计入组合）</option>
+          <option v-for="r in resources" :key="r.id" :value="r.id">
+            {{ r.name }}{{ r.type === 'collection' ? '（组合预览）' : '' }}
+          </option>
+        </select></label
+      ><input
+        v-model="search"
+        aria-label="搜索节点"
+        placeholder="搜索名称、协议、订阅"
+        @keydown.enter.prevent="
+          page = 0;
+          act(() => load());
+        "
+      /><button
         :disabled="busy"
-        @close="importing = false"
-        @saving="importSaving = $event"
-        @saved="imported"
-      />
-    </ModalDialog>
+        @click="
+          page = 0;
+          act(() => load());
+        "
+      >
+        搜索</button
+      ><button :disabled="busy" @click="act(() => load(true))">刷新上游</button>
+    </div>
+    <p v-if="message" role="status" class="notice">{{ message }}</p>
+    <p v-for="(error, i) in errors" :key="i" role="alert">{{ error }}</p>
+    <p v-if="testing.error" role="alert">{{ testing.error }}</p>
+    <div class="selection-bar">
+      <span>{{ total }} 个节点 · 已选 {{ chosen.length }}</span
+      ><button
+        :disabled="!chosen.some((n) => n.testable) || testing.starting"
+        @click="testing.start(chosen.filter((n) => n.testable).map(subject))"
+      >
+        测试所选</button
+      ><button
+        :disabled="!chosen.length || busy || chosen.some((n) => n.deletion === 'unavailable')"
+        class="danger"
+        @click="deleting = chosen"
+      >
+        删除所选
+      </button>
+    </div>
+    <div class="panel node-list">
+      <p v-if="busy && !nodes.length" role="status">正在读取 Sub-Store…</p>
+      <p v-else-if="!nodes.length">当前没有节点。可添加订阅地址或粘贴节点文本。</p>
+      <article v-for="node in nodes" :key="key(node)" class="node-row">
+        <input
+          v-model="selected"
+          type="checkbox"
+          :value="key(node)"
+          :aria-label="'选择 ' + node.name"
+        />
+        <div class="node-main">
+          <strong>{{ node.name }}</strong>
+          <p class="muted">
+            {{ node.protocol }} · {{ node.resourceName
+            }}{{ node.available ? '' : ' · 已被处理规则排除' }}
+          </p>
+          <p v-if="!node.testable" class="muted">{{ node.testReason }}</p>
+          <NodeTestSummary
+            :results="testing.forSubject(subject(node))"
+            @show="testing.show([subject(node)])"
+          />
+        </div>
+        <div class="row-actions">
+          <button
+            :disabled="busy"
+            @click="
+              act(async () => {
+                detail = nodeDetailsSchema.parse(await api('/api/nodes/detail', nodeRef(node)));
+              })
+            "
+          >
+            查看</button
+          ><button
+            :disabled="!node.testable || testing.starting"
+            @click="testing.start([subject(node)])"
+          >
+            测试</button
+          ><button
+            :disabled="busy || node.deletion === 'unavailable'"
+            class="danger"
+            @click="deleting = [node]"
+          >
+            删除
+          </button>
+        </div>
+      </article>
+    </div>
+    <div class="pagination">
+      <button
+        :disabled="busy || page === 0"
+        @click="
+          page--;
+          act(() => load());
+        "
+      >
+        上一页</button
+      ><span>第 {{ page + 1 }} 页</span
+      ><button
+        :disabled="busy || (page + 1) * 25 >= total"
+        @click="
+          page++;
+          act(() => load());
+        "
+      >
+        下一页
+      </button>
+    </div>
+    <ModalDialog v-if="form" label="添加节点或订阅" :dismissible="!busy" @close="form = null"
+      ><h2>添加节点或订阅</h2>
+      <form id="add-resource" class="node-form" @submit.prevent="act(save)">
+        <label>订阅名称<input v-model="form.name" required maxlength="512" /></label
+        ><label
+          >添加方式<select v-model="form.source">
+            <option value="local">粘贴节点文本</option>
+            <option value="remote">订阅地址</option>
+          </select></label
+        ><label v-if="form.source === 'local'"
+          >节点文本<textarea
+            v-model="form.content"
+            rows="10"
+            required
+            placeholder="粘贴一个或多个 URI、JSON 或 YAML 节点"
+          /></label
+        ><label v-else
+          >订阅地址<textarea
+            v-model="form.url"
+            rows="5"
+            required
+            placeholder="每行一个 HTTP(S) 订阅地址"
+          />
+        </label>
+        <p>保存后可在 Sub-Store 原生页面编辑内容和处理规则。</p>
+        <p v-if="message" role="alert">{{ message }}</p>
+      </form>
+      <template #footer
+        ><button :disabled="busy" @click="form = null">取消</button
+        ><button form="add-resource" type="submit" class="primary" :disabled="busy">
+          保存到 Sub-Store
+        </button></template
+      ></ModalDialog
+    >
+    <ModalDialog v-if="detail" label="节点详情" wide @close="detail = null"
+      ><h2>{{ detail.name }}</h2>
+      <p>{{ detail.resourceName }} · {{ detail.protocol }}</p>
+      <h3>处理后内容</h3>
+      <pre>{{ JSON.stringify(detail.processed, null, 2) }}</pre>
+      <h3>原始节点</h3>
+      <pre>{{ JSON.stringify(detail.original, null, 2) }}</pre>
+      <template #footer
+        ><a :href="native">打开 Sub-Store 编辑</a
+        ><button @click="detail = null">关闭</button></template
+      ></ModalDialog
+    >
+    <ModalDialog v-if="deleting" label="删除节点" :dismissible="!busy" @close="deleting = null"
+      ><h2>删除 {{ deleting.length }} 个节点</h2>
+      <p>
+        手动导入的节点会从保存内容中实际移除；远程或脚本生成的节点会通过精确名称规则排除。远程节点改名后需要重新设置排除规则。
+      </p>
+      <p v-if="resourceId && resources.find((r) => r.id === resourceId)?.type === 'collection'">
+        此次排除只影响当前组合订阅。
+      </p>
+      <p v-if="message" role="alert">{{ message }}</p>
+      <template #footer
+        ><button :disabled="busy" @click="deleting = null">取消</button
+        ><button class="danger" :disabled="busy" @click="act(remove)">确认删除</button></template
+      ></ModalDialog
+    >
   </section>
 </template>
+<style scoped>
+.filters,
+.selection-bar,
+.row-actions,
+.actions,
+.pagination {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.filters {
+  flex-direction: row;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+.filters label {
+  display: grid;
+  flex: 0 1 240px;
+  gap: 6px;
+  text-align: left;
+  max-width: 100%;
+}
+.filters > input {
+  flex: 1 1 260px;
+  min-width: 0;
+  width: auto;
+}
+.filters select {
+  max-width: 100%;
+}
+.selection-bar {
+  margin: 16px 0;
+}
+.node-list {
+  padding: 0 18px;
+}
+.node-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.node-row:last-child {
+  border: 0;
+}
+.node-main {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.node-main p {
+  margin: 5px 0;
+}
+.node-form {
+  display: grid;
+  gap: 16px;
+}
+.node-form label {
+  display: grid;
+  gap: 6px;
+}
+.node-form textarea,
+.node-form input,
+.node-form select {
+  width: 100%;
+  min-width: 0;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+}
+.pagination {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+@media (max-width: 650px) {
+  .node-row {
+    flex-wrap: wrap;
+  }
+  .node-main {
+    flex-basis: 80%;
+  }
+  .row-actions {
+    margin-left: 28px;
+  }
+  .filters label {
+    display: grid;
+    flex-basis: 100%;
+    width: 100%;
+  }
+  .filters input {
+    flex-basis: 100%;
+    width: 100%;
+  }
+}
+</style>

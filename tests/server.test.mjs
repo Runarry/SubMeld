@@ -10,8 +10,8 @@ import { serve } from '@hono/node-server';
 import { createApp } from '../dist/server/app.js';
 import { Auth, hashPassword, SESSION_MS } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
-import { Publisher } from '../dist/server/publisher.js';
-import { node, items, UUID, TEST_PASSWORD } from './fixtures.mjs';
+
+import { TEST_PASSWORD } from './fixtures.mjs';
 let server, origin, auth, converter, cookie, hash, settings, directory;
 const logs = [];
 const password = 'test-only-admin-password';
@@ -32,12 +32,11 @@ before(async () => {
       resources: settings.resources,
       config,
       auth,
-      converter,
+
       nodes: settings.nodes,
       chains: settings.chains,
-      sources: settings.sources,
+
       subscriptions: settings.subscriptions,
-      publisher: new Publisher(settings.subscriptions, settings.nodes, settings.sources, converter),
     }).fetch,
     hostname: '127.0.0.1',
     port: 0,
@@ -116,8 +115,8 @@ test('health GET/HEAD is public; unknown API and subscription paths remain JSON 
     }
   }
 });
-test('all conversion calls require login and no-store responses', async () => {
-  for (const path of ['/api/convert/parse', '/api/convert/produce']) {
+test('all node management calls require login and no-store responses', async () => {
+  for (const path of ['/api/nodes', '/api/nodes/delete']) {
     const r = await post(path, {});
     assert.equal(r.status, 401);
     assert.match(r.headers.get('cache-control'), /no-store/);
@@ -125,12 +124,7 @@ test('all conversion calls require login and no-store responses', async () => {
   assert.equal((await fetch(origin + '/api/auth/me')).status, 401);
 });
 test('login and every management write reject missing or cross-origin headers', async () => {
-  for (const path of [
-    '/api/auth/login',
-    '/api/auth/logout',
-    '/api/convert/parse',
-    '/api/convert/produce',
-  ]) {
+  for (const path of ['/api/auth/login', '/api/auth/logout', '/api/nodes', '/api/nodes/delete']) {
     for (const headers of [
       { Origin: 'null' },
       { Origin: 'https://attacker.example' },
@@ -165,12 +159,11 @@ test('login creates an HttpOnly Strict cookie and production adds Secure and __H
     resources: settings.resources,
     config: { ...config, development: false, publicOrigin: 'https://submeld.example' },
     auth: new Auth(hash),
-    converter,
+
     nodes: settings.nodes,
     chains: settings.chains,
-    sources: settings.sources,
+
     subscriptions: settings.subscriptions,
-    publisher: new Publisher(settings.subscriptions, settings.nodes, settings.sources, converter),
   });
   const pr = await production.request('https://submeld.example/api/auth/login', {
     method: 'POST',
@@ -184,39 +177,41 @@ test('login creates an HttpOnly Strict cookie and production adds Secure and __H
   assert.match(pr.headers.get('set-cookie'), /^__Host-submeld-session=/);
   assert.match(pr.headers.get('set-cookie'), /; Secure/);
 });
-test('HTTP parse/edit/produce works and unknown fields cannot bypass validation', async () => {
-  const r = await post('/api/convert/parse', {
-    format: 'uri',
-    text: 'vless://' + UUID + '@example.com:443?security=tls#Original',
+test('HTTP node addition uses native storage and rejects malformed management payloads', async () => {
+  const saved = await post('/api/nodes', {
+    name: 'api-import',
+    source: 'local',
+    content: 'ss://YWVzLTEyOC1nY206dGVzdA==@example.com:443#api-node',
   });
-  assert.equal(r.status, 200);
-  const parsed = await r.json();
-  parsed.items[0].draft.name = 'Edited';
-  parsed.items[0].draft.tls.serverName = 'edited.example.com';
-  const generated = await post('/api/convert/produce', { items: parsed.items });
-  assert.equal(generated.status, 200);
-  const output = await generated.json();
-  assert.equal(new URL(output.uri).searchParams.get('sni'), 'edited.example.com');
-  assert.match(output.uri, /#Edited$/);
-  assert.equal(Buffer.from(output.base64, 'base64').toString(), output.uri);
-  parsed.items[0].draft.extra = 'unsupported';
-  assert.equal((await post('/api/convert/produce', { items: parsed.items })).status, 400);
-  const broken = items(node('trojan'));
-  broken[0].draft.auth.password = '';
-  const failure = await post('/api/convert/produce', { items: broken });
-  assert.equal(failure.status, 422);
-  assert.doesNotMatch(
-    await failure.text(),
-    new RegExp(TEST_PASSWORD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  assert.equal(saved.status, 201);
+  const resource = await saved.json();
+  const list = await (
+    await fetch(origin + '/api/nodes?resourceId=' + resource.id, { headers: { Cookie: cookie } })
+  ).json();
+  assert.equal(list.nodes.length, 1);
+  assert.equal(
+    (await post('/api/nodes', { name: 'bad', source: 'local', content: 'x', unknown: true }))
+      .status,
+    400,
   );
+  assert.equal(
+    (await post('/api/nodes/delete', { nodes: [{ resourceId: resource.id }] })).status,
+    400,
+  );
+  assert.equal((await fetch(origin + '/api/sources', { headers: { Cookie: cookie } })).status, 404);
 });
 test('streamed limits, malformed JSON and compressed requests fail safely', async () => {
   assert.equal(
-    (await post('/api/convert/parse', { format: 'uri', text: 'x'.repeat(4 * 1024 * 1024 + 1) }))
-      .status,
+    (
+      await post('/api/nodes', {
+        name: 'too big',
+        source: 'local',
+        content: 'x'.repeat(4 * 1024 * 1024 + 1),
+      })
+    ).status,
     413,
   );
-  const malformed = await fetch(origin + '/api/convert/parse', {
+  const malformed = await fetch(origin + '/api/nodes', {
     method: 'POST',
     headers: {
       Origin: origin,
@@ -227,7 +222,7 @@ test('streamed limits, malformed JSON and compressed requests fail safely', asyn
     body: '{broken',
   });
   assert.equal(malformed.status, 400);
-  assert.equal((await post('/api/convert/parse', {}, { 'Content-Encoding': 'gzip' })).status, 415);
+  assert.equal((await post('/api/nodes', {}, { 'Content-Encoding': 'gzip' })).status, 415);
 });
 test('logout revokes the current cookie; fixed expiry and restart invalidate sessions', async () => {
   assert.equal((await post('/api/auth/logout', {})).status, 200);
@@ -283,7 +278,7 @@ test('actual chunked request bytes are bounded without relying on Content-Length
   const login = await post('/api/auth/login', { password });
   const currentCookie = login.headers.get('set-cookie').split(';')[0];
   const chunks = Array(27).fill(Buffer.alloc(1024 * 1024, 32));
-  const response = await fetch(origin + '/api/convert/parse', {
+  const response = await fetch(origin + '/api/nodes', {
     method: 'POST',
     headers: {
       Origin: origin,

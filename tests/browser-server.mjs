@@ -11,7 +11,7 @@ import { createApp } from '../dist/server/app.js';
 import { openSettings } from '../dist/server/database.js';
 import { hashPassword, Auth } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
-import { Publisher } from '../dist/server/publisher.js';
+
 mkdirSync('.cache', { recursive: true });
 const directory = mkdtempSync(resolve('.cache/browser-'));
 const settings = openSettings(directory, true);
@@ -22,13 +22,7 @@ let clock = Date.now();
 const auth = new Auth(settings.getPasswordHash(), () => clock);
 const converter = new Converter();
 await converter.ready;
-const publisher = new Publisher(
-  settings.subscriptions,
-  settings.nodes,
-  settings.sources,
-  converter,
-);
-publisher.start();
+
 // Browser coverage controls request timing and GitHub metadata; real traffic is covered by test:cores.
 const coreLocks = JSON.parse(readFileSync('tests/kernels.lock.json', 'utf8'));
 const kernels = new KernelManager(directory, {
@@ -72,12 +66,11 @@ const app = createApp({
   },
   webRoot: fileURLToPath(new URL('../dist/web/', import.meta.url)),
   auth,
-  converter,
+
   nodes: settings.nodes,
   chains: settings.chains,
-  sources: settings.sources,
+
   subscriptions: settings.subscriptions,
-  publisher,
 });
 const server = serve({
   fetch: async (request) => {
@@ -106,7 +99,7 @@ async function close() {
   server.closeAllConnections();
   await tester.close();
   await kernels.close();
-  await publisher.close();
+
   await converter.close();
   auth.close();
   settings.close();

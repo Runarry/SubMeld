@@ -1,6 +1,5 @@
-import type Database from 'better-sqlite3';
+import { removeLocalNodes } from './local-content.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { z } from 'zod';
 import { AppError } from './errors.js';
 import {
   SubStoreClient,
@@ -8,419 +7,483 @@ import {
   upstreamIdentitySchema,
   type UpstreamRecord,
 } from './sub-store.js';
-import type { InputChanges } from './subscriptions.js';
-import { parseInput } from './converter/engine.js';
+import { checkedDraft } from './converter/normalized.js';
+import { chainConfigSchema } from './shared/chains.js';
 import {
-  nodeSummarySchema,
-  storedNodeSchema,
-  type NodeDraft,
-  type ParseResult,
-} from './shared/contracts.js';
-import { sourceSchema } from './shared/subscriptions.js';
+  addResourceSchema,
+  deleteNodesSchema,
+  type NodeRef,
+  type NodeSelector,
+  type NodeView,
+  type Resource,
+} from './shared/resources.js';
+import type { NodeDraft } from './shared/contracts.js';
+import { MAX_BYTES } from './shared/contracts.js';
 
-export const stateOperation = '_submeldEnabled';
-export function enabled(record: UpstreamRecord) {
-  return (
-    !Array.isArray(record.process) ||
-    !record.process.some(
-      (p) =>
-        typeof p === 'object' &&
-        p !== null &&
-        stateOperation in p &&
-        !('disabled' in p && p.disabled),
-    )
-  );
-}
-export function withEnabled(record: UpstreamRecord, value: boolean): UpstreamRecord {
-  const process = (Array.isArray(record.process) ? record.process : []).filter(
-    (p) => !(typeof p === 'object' && p !== null && stateOperation in p),
-  );
-  if (!value)
-    process.push({ type: 'Regex Filter', args: { regex: [], keep: true }, [stateOperation]: true });
-  return { ...record, process };
-}
 export const hash = (value: unknown) =>
   createHash('sha256')
     .update(JSON.stringify(value) ?? 'null')
     .digest('hex');
-const metadataSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  upstream_name: z.string(),
-  upstream_type: z.enum(['sub', 'collection']),
-  enabled: z.number(),
-  revision: z.number(),
-  fingerprint: z.string(),
-  present: z.number(),
-  created_at: z.string(),
-  updated_at: z.string(),
-});
+export type Entry = { type: 'sub' | 'collection' | 'file'; record: UpstreamRecord };
+type RawNode = Record<string, unknown>;
+export type Snapshot = {
+  resource: Resource;
+  snapshotHash: string;
+  original: RawNode[];
+  processed: RawNode[];
+  rows: {
+    view: NodeView;
+    original: RawNode | null;
+    processed: RawNode | null;
+    rawIndex: number | null;
+  }[];
+};
+export function marker(record: UpstreamRecord) {
+  const value = upstreamIdentitySchema.safeParse(record[identityKey]);
+  return value.success ? value.data : null;
+}
+export const rawDraft = (raw: unknown): NodeDraft => checkedDraft(raw);
+const cleanRaw = (raw: RawNode) =>
+  Object.fromEntries(
+    Object.entries(raw).filter(
+      ([key]) =>
+        ![
+          'id',
+          '_subName',
+          '_subDisplayName',
+          '_collectionName',
+          '_collectionDisplayName',
+        ].includes(key),
+    ),
+  );
 
-/** Credentials and parsed snapshots live only in memory; SQLite contains references and hashes. */
+/** Upstream records and preview credentials stay in memory. No editable node database. */
 export class UpstreamResources {
-  private records = new Map<string, { type: 'sub' | 'collection'; record: UpstreamRecord }>();
-  private drafts = new Map<string, NodeDraft>();
-  private snapshots = new Map<string, ParseResult>();
-  constructor(
-    readonly db: Database.Database,
-    readonly client: SubStoreClient,
-    private changes: InputChanges,
-  ) {}
-
+  private entries = new Map<string, Entry>();
+  private snapshots = new Map<string, Snapshot>();
+  constructor(readonly client: SubStoreClient) {}
   sync() {
     return this.client.exclusive(() => this.syncUnlocked());
   }
-  private async syncUnlocked(alreadyInvalidated = false) {
+  async syncUnlocked() {
     const catalog = (
       await Promise.all(
-        (['sub', 'collection'] as const).map(async (type) =>
+        (['sub', 'collection', 'file'] as const).map(async (type) =>
           (await this.client.records(type)).map((record) => ({ type, record })),
         ),
       )
     ).flat();
-    const next = new Map<string, { type: 'sub' | 'collection'; record: UpstreamRecord }>();
-    const draftUpdates = new Map<string, NodeDraft>();
+    const next = new Map<string, Entry>();
     for (const entry of catalog) {
-      let identity = upstreamIdentitySchema.safeParse(entry.record[identityKey]);
-      if (!identity.success) {
-        const marker = { id: randomUUID(), kind: 'source' as const };
+      let id = marker(entry.record);
+      if (!id && entry.type === 'file') continue;
+      if (!id) {
+        id = { id: randomUUID() };
         await this.client.api(
-          `/api/${entry.type}/${encodeURIComponent(entry.record.name)}`,
-          { [identityKey]: marker },
+          '/api/' + entry.type + '/' + encodeURIComponent(entry.record.name),
+          { [identityKey]: id },
           'PATCH',
         );
-        entry.record = { ...entry.record, [identityKey]: marker };
-        identity = upstreamIdentitySchema.safeParse(marker);
+        entry.record = { ...entry.record, [identityKey]: id };
       }
-      if (!identity.success) throw new Error('Invalid generated identity');
-      const { id, kind } = identity.data;
-      if (next.has(id))
+      if (next.has(id.id))
         throw new AppError(
           'UPSTREAM_ID_DUPLICATE',
-          '上游资源标记重复，请删除重复标记后重新绑定。',
+          '上游资源 UUID 重复，请在 Sub-Store 中修正标记。',
           409,
         );
-      next.set(id, entry);
-      if (kind === 'node') {
-        if (hash(this.records.get(id)?.record) === hash(entry.record) && this.drafts.has(id)) {
-          const draft = this.drafts.get(id);
-          if (draft) draftUpdates.set(id, draft);
-        } else if (
-          entry.type === 'sub' &&
-          entry.record.source === 'local' &&
-          typeof entry.record.content === 'string'
-        ) {
-          try {
-            let text = entry.record.content;
-            const json = text.trim().startsWith('{');
-            if (json) {
-              const value: unknown = JSON.parse(text);
-              if (value && typeof value === 'object' && 'type' in value)
-                text = JSON.stringify({ proxies: [value] });
-            }
-            const parsed = await parseInput({ text, format: json ? 'yaml' : 'auto' }, this.client);
-            const item = parsed.items[0];
-            if (
-              parsed.items.length === 1 &&
-              item?.draft &&
-              !item.diagnostics.some((d) => d.level === 'error')
-            )
-              draftUpdates.set(id, item.draft);
-          } catch (error) {
-            if (error instanceof AppError && error.status >= 500) throw error;
-            // Keep the reference repairable through the native editor; node() explains the invalid content.
-          }
-        }
-      }
+      next.set(id.id, entry);
+      if (hash(this.entries.get(id.id)?.record) !== hash(entry.record))
+        this.snapshots.delete(id.id);
     }
-    const affected = new Set<string>();
-    this.db.transaction(() => {
-      for (const [id, entry] of next) {
-        const { kind } = upstreamIdentitySchema.parse(entry.record[identityKey]);
-        const table = kind === 'node' ? 'nodes' : 'sources';
-        const raw: unknown = this.db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id);
-        const old = raw ? metadataSchema.parse(raw) : null;
-        const fingerprint = hash(entry.record);
-        const draft = draftUpdates.get(id);
-        const name =
-          (draft?.name ??
-            (typeof entry.record.displayName === 'string'
-              ? entry.record.displayName.trim()
-              : '')) ||
-          entry.record.name;
-        const now = new Date().toISOString();
-        if (!old) {
-          this.db
-            .prepare(
-              `INSERT INTO ${table}(id,name,upstream_name,upstream_type,enabled,revision,fingerprint,present,created_at,updated_at) VALUES (?,?,?,?,?,1,?,1,?,?)`,
-            )
-            .run(
-              id,
-              name,
-              entry.record.name,
-              entry.type,
-              Number(enabled(entry.record)),
-              fingerprint,
-              now,
-              now,
-            );
-        } else if (old.fingerprint !== fingerprint || !old.present || old.name !== name) {
-          this.db
-            .prepare(
-              `UPDATE ${table} SET name=?,upstream_name=?,upstream_type=?,enabled=?,revision=revision+1,fingerprint=?,present=1,updated_at=? WHERE id=?`,
-            )
-            .run(
-              name,
-              entry.record.name,
-              entry.type,
-              Number(enabled(entry.record)),
-              fingerprint,
-              now,
-              id,
-            );
-          if (!alreadyInvalidated)
-            for (const sub of this.changes.invalidateInput(kind, id)) affected.add(sub);
-          if (kind === 'source') {
-            this.snapshots.delete(id);
-            this.db
-              .prepare("UPDATE sources SET snapshot_hash='',saved_at=NULL,node_count=0 WHERE id=?")
-              .run(id);
-          }
-        }
-        if (draft)
-          this.db.prepare('UPDATE nodes SET protocol=? WHERE id=?').run(draft.protocol, id);
-      }
-      for (const table of ['nodes', 'sources'] as const) {
-        const existing = z
-          .array(z.object({ id: z.string() }))
-          .parse(this.db.prepare(`SELECT id FROM ${table} WHERE present=1`).all());
-        for (const { id } of existing)
-          if (!next.has(id)) {
-            this.db
-              .prepare(`UPDATE ${table} SET present=0,enabled=0,revision=revision+1 WHERE id=?`)
-              .run(id);
-            this.snapshots.delete(id);
-            if (!alreadyInvalidated)
-              for (const sub of this.changes.invalidateInput(
-                table === 'nodes' ? 'node' : 'source',
-                id,
-              ))
-                affected.add(sub);
-          }
-      }
-    })();
-    this.records = next;
-    this.drafts = draftUpdates;
-    this.changes.notify([...affected]);
+    for (const id of this.snapshots.keys()) if (!next.has(id)) this.snapshots.delete(id);
+    this.entries = next;
   }
-  record(id: string) {
-    const item = this.records.get(id);
-    if (!item)
-      throw new AppError(
-        'UPSTREAM_REFERENCE_MISSING',
-        '上游资源或身份标记已删除，请重新绑定。',
-        404,
-      );
+  record(id: string): Entry {
+    const item = this.entries.get(id);
+    if (!item) throw new AppError('NOT_FOUND', '上游资源或身份标记已不存在，请重新选择。', 404);
     return item;
   }
-  nodeSummary(id: string) {
-    const row = metadataSchema
-      .extend({ protocol: z.string() })
-      .parse(this.db.prepare('SELECT * FROM nodes WHERE id=?').get(id));
-    return nodeSummarySchema.parse({
-      id,
-      name: row.name,
-      protocol: row.protocol,
-      enabled: !!row.enabled && !!row.present,
-      revision: row.revision,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    });
+  files(role?: string) {
+    return [...this.entries.entries()]
+      .filter(([, e]) => e.type === 'file' && (!role || marker(e.record)?.role === role))
+      .map(([id, e]) => ({ id, record: e.record }));
   }
-  node(id: string) {
-    this.record(id);
-    const draft = this.drafts.get(id);
-    if (!draft)
+  resource(id: string): Resource {
+    const entry = this.record(id);
+    if (entry.type === 'file') throw new AppError('INVALID_RESOURCE', '此资源不是订阅。', 400);
+    return {
+      id,
+      type: entry.type,
+      name:
+        (typeof entry.record.displayName === 'string' && entry.record.displayName.trim()) ||
+        entry.record.name,
+      upstreamName: entry.record.name,
+      revision: hash(entry.record),
+    };
+  }
+  listResources() {
+    return [...this.entries.keys()]
+      .filter((id) => this.record(id).type !== 'file')
+      .map((id) => this.resource(id));
+  }
+  cached(id: string) {
+    const snapshot = this.snapshots.get(id);
+    if (!snapshot || snapshot.resource.revision !== this.resource(id).revision)
+      throw new AppError('REVISION_CONFLICT', '节点内容已变化，请刷新列表。', 409);
+    return snapshot;
+  }
+  async preview(id: string, force = false) {
+    const entry = this.record(id),
+      resource = this.resource(id);
+    const data = await this.client.preview(resource.type, entry.record, force);
+    if (this.resource(id).revision !== resource.revision)
+      throw new AppError('REVISION_CONFLICT', '读取期间订阅已修改，请重试。', 409);
+    const snapshotHash = hash(data);
+    const rows: Snapshot['rows'] = [];
+    const counts = new Map<number, number>();
+    for (const raw of data.processed)
+      if (Number.isInteger(raw.id))
+        counts.set(Number(raw.id), (counts.get(Number(raw.id)) ?? 0) + 1);
+    const linked = new Set<number>();
+    const local =
+      resource.type === 'sub' &&
+      entry.record.source === 'local' &&
+      !['localFirst', 'remoteFirst'].includes(String(entry.record.mergeSources));
+    const add = (original: RawNode | null, processed: RawNode | null, rawIndex: number | null) => {
+      const raw = processed ?? original ?? {};
+      const name = typeof raw.name === 'string' ? raw.name : '未命名节点';
+      let testReason = '';
+      try {
+        rawDraft(raw);
+      } catch (e) {
+        testReason = e instanceof Error ? e.message : '此节点尚不支持测试。';
+      }
+      const unique = data.processed.filter((n) => n.name === name).length === 1;
+      rows.push({
+        original,
+        processed,
+        rawIndex,
+        view: {
+          resourceId: id,
+          revision: resource.revision,
+          snapshotHash,
+          nodeIndex: rows.length,
+          name,
+          protocol: typeof raw.type === 'string' ? raw.type : '未知',
+          resourceName: resource.name,
+          available: processed !== null,
+          testable: !testReason,
+          testReason,
+          deletion:
+            local && rawIndex !== null ? 'content' : processed && unique ? 'filter' : 'unavailable',
+        },
+      });
+    };
+    for (const processed of data.processed) {
+      const index =
+        Number.isInteger(processed.id) &&
+        Number(processed.id) >= 0 &&
+        Number(processed.id) < data.original.length &&
+        counts.get(Number(processed.id)) === 1
+          ? Number(processed.id)
+          : null;
+      if (index !== null) linked.add(index);
+      add(index === null ? null : (data.original[index] ?? null), processed, index);
+    }
+    for (const [index, original] of data.original.entries())
+      if (!linked.has(index) && !counts.has(index)) add(original, null, index);
+    const snapshot = { resource, snapshotHash, ...data, rows };
+    this.snapshots.set(id, snapshot);
+    return snapshot;
+  }
+  async list(resourceId?: string, search = '', page = 0, force = false) {
+    const resources = this.listResources();
+    const selected = resourceId
+      ? resources.filter((r) => r.id === resourceId)
+      : resources.filter((r) => r.type === 'sub');
+    if (resourceId && !selected.length) throw new AppError('NOT_FOUND', '订阅已不存在。', 404);
+    const nodes: NodeView[] = [],
+      errors: { resourceId: string; message: string }[] = [];
+    for (const resource of selected) {
+      try {
+        nodes.push(...(await this.preview(resource.id, force)).rows.map((row) => row.view));
+      } catch (error) {
+        errors.push({
+          resourceId: resource.id,
+          message: error instanceof AppError ? error.message : '无法读取上游订阅。',
+        });
+      }
+    }
+    const filtered = nodes.filter((node) =>
+      (node.name + ' ' + node.protocol + ' ' + node.resourceName)
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    );
+    return {
+      nodes: filtered.slice(page * 25, page * 25 + 25),
+      resources,
+      errors,
+      total: filtered.length,
+    };
+  }
+  current(ref: NodeRef) {
+    const snapshot = this.cached(ref.resourceId);
+    const row = snapshot.rows[ref.nodeIndex];
+    if (
+      !row ||
+      snapshot.snapshotHash !== ref.snapshotHash ||
+      snapshot.resource.revision !== ref.revision
+    )
+      throw new AppError('REVISION_CONFLICT', '节点内容或顺序已变化，请刷新列表。', 409);
+    return row;
+  }
+  resolve(selector: NodeSelector) {
+    const matches = this.cached(selector.resourceId).rows.filter(
+      (row) => row.view.available && row.view.name === selector.nodeName,
+    );
+    if (matches.length !== 1)
       throw new AppError(
-        'UPSTREAM_NODE_INVALID',
-        '此上游本地订阅必须完整包含一个受支持节点，请在 Sub-Store 修正。',
+        'CHAIN_REFERENCE_INVALID',
+        matches.length
+          ? '链成员名称重复，请重命名后重新选择。'
+          : '链成员已被删除、改名或排除，请重新选择。',
         422,
       );
-    return storedNodeSchema.parse({
-      ...this.nodeSummary(id),
-      draft: structuredClone(draft),
-      modelVersion: 1,
-    });
+    return matches[0]!;
   }
-  source(id: string) {
-    this.record(id);
-    const row = metadataSchema
-      .extend({
-        snapshot_hash: z.string(),
-        saved_at: z.string().nullable(),
-        node_count: z.number(),
-        last_attempt_at: z.string().nullable(),
-        error_json: z.string().nullable(),
-      })
-      .parse(this.db.prepare('SELECT * FROM sources WHERE id=?').get(id));
-    const snapshot = this.snapshots.get(id);
-    return sourceSchema.parse({
-      id,
-      name: row.name,
-      enabled: !!row.enabled && !!row.present,
-      revision: row.revision,
-      kind: 'upstream',
-      format: 'auto',
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      nodeCount: row.node_count,
-      savedAt: row.saved_at,
-      snapshotHash: row.snapshot_hash,
-      lastAttemptAt: row.last_attempt_at,
-      error: row.error_json ? JSON.parse(row.error_json) : null,
-      refresh: 'idle',
-      modelVersion: 1,
-      items: snapshot?.items ?? [],
-      diagnostics: snapshot?.diagnostics ?? [],
-      upstreamName: row.upstream_name,
-      upstreamType: row.upstream_type,
-    });
+  async prepare(ids: string[], force = false) {
+    for (const id of new Set(ids)) await this.preview(id, force);
   }
-  async refresh(id: string, force = false) {
-    const before = this.source(id);
-    const { type, record } = this.record(id);
-    const path = type === 'sub' ? '/download/' : '/download/collection/';
-    try {
-      const response = await this.client.request(
-        path + encodeURIComponent(record.name) + '?target=JSON' + (force ? '&noCache=true' : ''),
-      );
-      if (!response.ok) throw new AppError('UPSTREAM_SOURCE_FAILED', '上游订阅暂不可用。', 502);
-      const values = z
-        .array(z.record(z.string(), z.unknown()))
-        .max(2000)
-        .parse(await response.json());
-      const parsed = await parseInput(
-        { text: JSON.stringify({ proxies: values }), format: 'yaml' },
-        this.client,
-      );
-      if (
-        !values.length ||
-        parsed.items.length !== values.length ||
-        parsed.items.some((i) => !i.draft || i.diagnostics.some((d) => d.level === 'error'))
-      )
-        throw new AppError(
-          'SOURCE_INVALID',
-          '此上游订阅包含增强功能无法完整处理的节点，请在 Sub-Store 检查。',
-          422,
-          [...parsed.diagnostics, ...parsed.items.flatMap((item) => item.diagnostics)],
-        );
-      await this.client.exclusive(async () => {
-        await this.syncUnlocked();
-        if (this.source(id).revision !== before.revision)
-          throw new AppError('REVISION_CONFLICT', '上游来源已修改，请重新载入。', 409);
-        const fingerprint = hash(values),
-          now = new Date().toISOString();
-        const affected = this.db.transaction(() => {
-          this.db
-            .prepare(
-              'UPDATE sources SET snapshot_hash=?,saved_at=?,node_count=?,last_attempt_at=?,error_json=NULL WHERE id=?',
-            )
-            .run(fingerprint, now, values.length, now, id);
-          if (fingerprint !== before.snapshotHash) {
-            this.db.prepare('DELETE FROM node_test_results WHERE source_id=?').run(id);
-            return this.changes.updateInput('source', id);
-          }
-          return [];
-        })();
-        this.snapshots.set(id, parsed);
-        this.changes.notify(affected);
+  async create(input: unknown) {
+    if (
+      typeof input === 'object' &&
+      input &&
+      'content' in input &&
+      typeof input.content === 'string' &&
+      Buffer.byteLength(input.content) > MAX_BYTES
+    )
+      throw new AppError('INPUT_LIMIT_EXCEEDED', '节点内容超过 4 MiB。', 413);
+    const parsed = addResourceSchema.safeParse(input);
+    if (!parsed.success) throw new AppError('INVALID_REQUEST', '请填写订阅名称及有效的内容。', 400);
+    const value = parsed.data;
+    if (value.source === 'local' ? !value.content.trim() : !value.url.trim())
+      throw new AppError('INVALID_REQUEST', '节点内容或订阅地址不能为空。', 400);
+    if (value.source === 'remote')
+      for (const url of value.url.trim().split(/\r?\n/)) {
+        let valid = false;
+        try {
+          valid = ['http:', 'https:'].includes(new URL(url.trim()).protocol);
+        } catch {
+          /* validated below */
+        }
+        if (!valid) throw new AppError('INVALID_REQUEST', '订阅地址必须是 HTTP(S) URL。', 400);
+      }
+    return this.client.exclusive(async () => {
+      await this.syncUnlocked();
+      const id = randomUUID();
+      await this.client.api('/api/subs', {
+        name: 'sm-' + id,
+        displayName: value.name,
+        source: value.source,
+        content: value.source === 'local' ? value.content : '',
+        url: value.source === 'remote' ? value.url : '',
+        process: [],
+        [identityKey]: { id },
       });
-      return this.source(id);
-    } catch (error) {
-      this.db
-        .prepare('UPDATE sources SET last_attempt_at=?,error_json=? WHERE id=? AND revision=?')
-        .run(
-          new Date().toISOString(),
-          JSON.stringify({
-            code: 'UPSTREAM_SOURCE_FAILED',
-            message: '无法获取完整的上游节点，请检查 Sub-Store。',
-          }),
-          id,
-          before.revision,
-        );
-      throw error instanceof AppError
-        ? error
-        : new AppError('UPSTREAM_SOURCE_FAILED', '无法获取完整的上游节点，请检查 Sub-Store。', 502);
+      await this.syncUnlocked();
+      return this.resource(id);
+    });
+  }
+  chainDefinitions() {
+    return this.files('chain').map(({ id, record }) => {
+      try {
+        return { id, ...chainConfigSchema.parse(JSON.parse(String(record.content))) };
+      } catch {
+        throw new AppError('CHAIN_INVALID', '上游链定义无法读取，请先修正后再删除节点。', 409);
+      }
+    });
+  }
+  async assertDeletable(refs: NodeRef[]) {
+    const chains = this.chainDefinitions();
+    const selectors = chains
+      .flatMap((c) => [c.entry, c.exit])
+      .filter((s) => this.entries.has(s.resourceId));
+    await this.prepare(selectors.map((s) => s.resourceId));
+    for (const ref of refs) {
+      const row = this.current(ref);
+      for (const selector of selectors) {
+        if (selector.resourceId === ref.resourceId && selector.nodeName === row.view.name)
+          throw new AppError('NODE_IN_USE', '此节点正在被两跳链引用，请先修改或删除链。', 409);
+        for (const selected of this.cached(selector.resourceId).rows.filter(
+          (r) => r.view.available && r.view.name === selector.nodeName,
+        )) {
+          const raw = selected.original ?? selected.processed;
+          const origin = row.processed ?? row.original;
+          if (
+            raw?._subName === this.record(ref.resourceId).record.name &&
+            origin &&
+            hash(cleanRaw(raw)) === hash(cleanRaw(origin))
+          )
+            throw new AppError('NODE_IN_USE', '此节点经组合订阅被链引用，请先修改或删除链。', 409);
+        }
+      }
     }
   }
-  assertRemovable(ids: string[]) {
-    for (const id of ids)
-      if (
-        this.db.prepare('SELECT id FROM chains WHERE entry_node_id=? OR exit_node_id=?').get(id, id)
-      )
-        throw new AppError('NODE_IN_USE', '节点正被链式代理引用，请先替换引用或删除链。', 422);
+  async deleteNodes(input: unknown) {
+    const parsed = deleteNodesSchema.safeParse(input);
+    if (!parsed.success) throw new AppError('INVALID_REQUEST', '删除请求缺少有效的节点快照。', 400);
+    const refs = parsed.data.nodes;
+    if (new Set(refs.map((r) => r.resourceId + ':' + r.nodeIndex)).size !== refs.length)
+      throw new AppError('INVALID_REQUEST', '不能重复选择同一节点。', 400);
+    return this.client.exclusive(async () => {
+      await this.syncUnlocked();
+      await this.prepare(refs.map((r) => r.resourceId));
+      await this.assertDeletable(refs);
+      const changes = new Map<string, { removed: Set<number>; names: string[] }>();
+      for (const ref of refs) {
+        const row = this.current(ref);
+        if (row.view.deletion === 'unavailable')
+          throw new AppError(
+            'NODE_DELETE_UNSAFE',
+            '无法唯一定位此节点，请在 Sub-Store 原生页面编辑。',
+            409,
+          );
+        const change = changes.get(ref.resourceId) ?? { removed: new Set<number>(), names: [] };
+        if (row.view.deletion === 'content' && row.rawIndex !== null)
+          change.removed.add(row.rawIndex);
+        else change.names.push(row.view.name);
+        changes.set(ref.resourceId, change);
+      }
+      const patches: { id: string; entry: Entry; patch: Record<string, unknown> }[] = [];
+      for (const [id, change] of changes) {
+        const entry = this.record(id),
+          snapshot = this.cached(id);
+        const patch: Record<string, unknown> = {};
+        if (change.removed.size) {
+          const remaining = snapshot.original
+            .filter((_, index) => !change.removed.has(index))
+            .map(cleanRaw);
+          const content = await removeLocalNodes(
+            String(entry.record.content ?? ''),
+            change.removed,
+            snapshot.original.length,
+            (line) => this.client.convert(line, 'JSON', true),
+          );
+          const checked = await this.client.preview('sub', {
+            ...entry.record,
+            content,
+            process: [],
+          });
+          if (hash(checked.original.map(cleanRaw)) !== hash(remaining))
+            throw new AppError(
+              'NODE_DELETE_UNSAFE',
+              '无法保证其他节点字段完整，请在 Sub-Store 原生页面编辑。',
+              409,
+            );
+          patch.content = content;
+        }
+        if (change.names.length)
+          patch.process = [
+            ...(Array.isArray(entry.record.process) ? entry.record.process : []),
+            {
+              type: 'Regex Filter',
+              args: {
+                regex: change.names.map(
+                  (name) => '^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
+                ),
+                keep: false,
+              },
+              _submeldExcluded: true,
+            },
+          ];
+        patches.push({ id, entry, patch });
+      }
+      const completed: string[] = [];
+      for (const { id, entry, patch } of patches) {
+        try {
+          await this.client.api(
+            '/api/' + entry.type + '/' + encodeURIComponent(entry.record.name),
+            patch,
+            'PATCH',
+          );
+          completed.push(id);
+        } catch {
+          await this.syncUnlocked();
+          throw new AppError(
+            'UPSTREAM_PARTIAL_WRITE',
+            '上游未完成全部删除，已完成 ' + completed.length + ' 个订阅；请刷新后检查。',
+            502,
+          );
+        }
+      }
+      await this.syncUnlocked();
+      return { deleted: refs.length };
+    });
   }
   guardMutation(path: string, method: string, body: unknown) {
     const removed: string[] = [];
-    for (const [id, { type, record }] of this.records) {
-      if (type !== 'sub') continue;
-      if (path === '/api/sub/' + encodeURIComponent(record.name)) {
-        if (method === 'DELETE') removed.push(id);
+    const one = /^\/api\/(sub|collection)\/([^/]+)$/.exec(path);
+    if (one && method === 'DELETE')
+      for (const [id, entry] of this.entries)
+        if (entry.type === one[1] && entry.record.name === decodeURIComponent(one[2]!))
+          removed.push(id);
+    if (
+      method === 'PUT' &&
+      ['/api/subs', '/api/collections'].includes(path) &&
+      Array.isArray(body)
+    ) {
+      const names = new Set(
+        body.filter((v) => v && typeof v === 'object').map((v: Record<string, unknown>) => v.name),
+      );
+      const ids = new Set(
+        body.flatMap((value) => {
+          if (!value || typeof value !== 'object' || !(identityKey in value)) return [];
+          const parsed = upstreamIdentitySchema.safeParse(value[identityKey]);
+          return parsed.success ? [parsed.data.id] : [];
+        }),
+      );
+      for (const resource of this.listResources())
         if (
-          method === 'PATCH' &&
-          typeof body === 'object' &&
-          body !== null &&
-          identityKey in body
-        ) {
-          const marker = upstreamIdentitySchema.safeParse(Reflect.get(body, identityKey));
-          if (
-            !marker.success ||
-            marker.data.id !== id ||
-            marker.data.kind !== upstreamIdentitySchema.parse(record[identityKey]).kind
-          )
-            removed.push(id);
-        }
-      }
-      if (path === '/api/subs' && method === 'PUT' && Array.isArray(body)) {
+          resource.type === (path === '/api/subs' ? 'sub' : 'collection') &&
+          !names.has(resource.upstreamName) &&
+          !ids.has(resource.id)
+        )
+          removed.push(resource.id);
+    }
+    if (!removed.length) return;
+    for (const chain of this.chainDefinitions())
+      for (const selector of [chain.entry, chain.exit]) {
+        if (removed.includes(selector.resourceId))
+          throw new AppError('NODE_IN_USE', '此订阅含有链成员，请先修改或删除链。', 409);
+        const entry = this.entries.get(selector.resourceId);
         if (
-          !body.some((value) => {
-            if (!value || typeof value !== 'object') return false;
-            const marker = upstreamIdentitySchema.safeParse(Reflect.get(value, identityKey));
+          entry?.type === 'collection' &&
+          removed.some((id) => {
+            const child = this.record(id);
             return (
-              marker.success &&
-              marker.data.id === id &&
-              marker.data.kind === upstreamIdentitySchema.parse(record[identityKey]).kind
+              child.type === 'sub' &&
+              ((Array.isArray(entry.record.subscriptions) &&
+                entry.record.subscriptions.includes(child.record.name)) ||
+                (Array.isArray(entry.record.subscriptionTags) &&
+                  Array.isArray(child.record.tag) &&
+                  child.record.tag.some((t) =>
+                    (entry.record.subscriptionTags as unknown[]).includes(t),
+                  )))
             );
           })
         )
-          removed.push(id);
+          throw new AppError('NODE_IN_USE', '此订阅经组合订阅被链引用，请先修改或删除链。', 409);
       }
-    }
-    this.assertRemovable(removed);
   }
-  async write<T>(
-    operation: () => Promise<T>,
-    removed: string[] = [],
-    validate: () => void = () => {},
-  ) {
+  async write(forward: () => Promise<Response>, path: string, method: string, body: unknown) {
     return this.client.exclusive(async () => {
       await this.syncUnlocked();
-      this.assertRemovable(removed);
-      validate();
-      // Invalidate before crossing the service boundary; a crash cannot republish pre-edit data.
-      const affected = this.db.transaction(() => {
-        const ids = z
-          .array(z.object({ id: z.string() }))
-          .parse(this.db.prepare('SELECT id FROM subscriptions').all())
-          .map((v) => v.id);
-        this.db.exec('UPDATE subscriptions SET revision=revision+1; DELETE FROM artifacts;');
-        return ids;
-      })();
+      this.guardMutation(path, method, body);
       try {
-        return await operation();
+        return await forward();
       } finally {
-        await this.syncUnlocked(true);
-        this.changes.notify(affected);
+        await this.syncUnlocked();
       }
     });
   }

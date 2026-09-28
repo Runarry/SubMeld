@@ -1,380 +1,217 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
-import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fixture, waitFor } from './upstream-fixture.mjs';
+import { parse } from 'yaml';
+import { fixture, ref } from './upstream-fixture.mjs';
 import { node, TEST_PASSWORD } from './fixtures.mjs';
-import { newSubscription, outputFormats } from '../dist/server/shared/subscriptions.js';
-import { ENGINE_VERSION } from '../dist/server/subscriptions.js';
 import { toUpstream } from '../dist/server/converter/model.js';
+import { newSubscription, outputFormats } from '../dist/server/shared/subscriptions.js';
 import { openSettings } from '../dist/server/database.js';
-import { parseInput } from '../dist/server/converter/engine.js';
-import { renderInput } from '../dist/server/converter/render.js';
-import { composeItems } from '../dist/server/publisher.js';
-import { ControlledConverter } from './publication-fixtures.mjs';
-import { chainFixtures } from './chain-fixtures.mjs';
-async function source(f, name = 'source', drafts = [node('ss')]) {
-  await f.client.api('/api/subs', {
+export async function add(f, drafts = [node('ss')], name = 'imported') {
+  return f.nodes.create({
     name,
     source: 'local',
-    content: drafts.map((d) => JSON.stringify(toUpstream(d))).join('\n'),
-    process: [],
+    content: JSON.stringify({ proxies: drafts.map(toUpstream) }),
   });
+}
+function plan(inputs, formats = [...outputFormats]) {
+  return { ...newSubscription(), name: 'native-output', inputs, formats };
+}
+test('unified local deletion preserves other fields and operations; SQLite has no proxy configuration', async (t) => {
+  const f = await fixture(t);
+  const a = node('ss'),
+    b = node('vless');
+  a.name = 'first';
+  b.name = 'second';
+  const resource = await add(f, [a, b]);
+  const record = f.resources.record(resource.id).record;
+  const process = [{ type: 'Flag Operator', args: { mode: 'remove' } }];
+  await f.client.api('/api/sub/' + record.name, { process }, 'PATCH');
   await f.resources.sync();
-  const row = f.sources.list(0).sources.find((s) => s.name === name);
-  assert.ok(row);
-  await f.sources.prepare([row.id]);
-  return f.sources.get(row.id);
-}
-function plan(inputs) {
-  return { ...newSubscription(), name: 'enhanced', inputs, formats: [...outputFormats] };
-}
-async function published(f, id) {
-  await waitFor(() =>
-    f.subscriptions
-      .detail(id, ENGINE_VERSION, f.publisher.status(id))
-      .artifacts.every((a) => a.readable),
-  );
-}
-
-test('credentials belong to native Sub-Store, validation is atomic and identities survive restart', async (t) => {
-  const f = await fixture(t, { publish: false });
-  const saved = await f.nodes.create({ drafts: [node('ss'), node('vless')] });
-  const records = await f.client.records('sub');
-  assert.equal(records.length, 2);
-  assert.ok(records.every((r) => r.source === 'local' && r._submeld.kind === 'node'));
-  assert.equal(JSON.stringify(f.nodes.list(0)).includes(TEST_PASSWORD), false);
+  const list = await f.nodes.list();
+  assert.equal(list.total, 2);
+  assert.equal(JSON.stringify(list).includes(TEST_PASSWORD), false);
+  assert.equal(list.nodes[0].deletion, 'content');
+  await f.nodes.delete({ nodes: [ref(list.nodes[0])] });
+  const after = (await f.client.records('sub'))[0];
+  assert.deepEqual(after.process, process);
+  const saved = JSON.parse(after.content).proxies;
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].name, 'second');
+  assert.equal(saved[0].uuid, b.auth.uuid);
   const db = new Database(join(f.directory, 'submeld-v2.sqlite'), { readonly: true });
-  assert.ok(
-    !db
-      .prepare('PRAGMA table_info(nodes)')
+  assert.deepEqual(
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
       .all()
-      .some((c) => /draft|password|content/.test(c.name)),
-  );
-  assert.ok(
-    !db
-      .prepare('PRAGMA table_info(sources)')
-      .all()
-      .some((c) => /snapshot_json|headers|url|text/.test(c.name)),
+      .map((r) => r.name)
+      .sort(),
+    ['node_test_results', 'settings'],
   );
   db.close();
-  const broken = node('ss');
-  broken.auth.password = '';
-  await assert.rejects(() => f.nodes.create({ drafts: [node('ss'), broken] }), {
-    code: 'NODE_INVALID',
-  });
-  assert.equal((await f.client.records('sub')).length, 2);
   f.close();
   const reopened = openSettings(f.directory, true, f.client);
   try {
     await reopened.resources.sync();
-    assert.equal(reopened.nodes.get(saved.nodes[0].id).draft.auth.password, TEST_PASSWORD);
+    assert.equal((await reopened.nodes.list()).total, 1);
   } finally {
     reopened.close();
   }
 });
-
-test('native blank display names fall back to stable names and repair already indexed sources', async (t) => {
-  const f = await fixture(t, { publish: false });
+test('unsupported test protocols remain visible; stale snapshots cannot delete reordered nodes', async (t) => {
+  const f = await fixture(t);
   await f.client.api('/api/subs', {
-    name: 'default',
+    name: 'native',
     displayName: '',
     source: 'local',
-    content: JSON.stringify(toUpstream(node('vless'))),
+    content: JSON.stringify({
+      proxies: [
+        { type: 'socks5', name: 'visible', server: 'example.com', port: 1080 },
+        toUpstream(node('ss')),
+      ],
+    }),
     process: [],
   });
-  const response = await f.request('/api/sources');
-  assert.equal(response.status, 200);
-  const saved = (await response.json()).sources[0];
-  assert.equal(saved.name, 'default');
-  f.resources.db.prepare("UPDATE sources SET name='' WHERE id=?").run(saved.id);
   await f.resources.sync();
-  assert.equal(f.sources.get(saved.id).name, 'default');
-  const preview = await f.request('/api/sources/' + saved.id);
-  assert.equal(preview.status, 200);
-  assert.equal((await preview.json()).items.length, 1);
-  await f.client.api('/api/sub/default', { displayName: '   ' }, 'PATCH');
-  await f.resources.sync();
-  assert.equal(f.sources.list(0).sources[0].name, 'default');
-});
-
-test('native rename keeps identity and disable suppresses native output without deleting the node', async (t) => {
-  const f = await fixture(t, { publish: false });
-  const {
-    nodes: [saved],
-  } = await f.nodes.create({ drafts: [node('ss')] });
-  const record = f.resources.record(saved.id).record;
-  assert.equal(
-    (await f.request('/upstream/sub-store/api/sub/' + record.name, { name: 'renamed' }, 'PATCH'))
-      .status,
-    200,
-  );
-  assert.equal(f.resources.record(saved.id).record.name, 'renamed');
-  await f.nodes.update(saved.id, { revision: f.nodes.get(saved.id).revision, enabled: false });
-  assert.equal(
-    (await (await f.client.request('/download/renamed?target=JSON')).json()).status,
-    'failed',
-  );
-  assert.equal(f.nodes.get(saved.id).draft.auth.password, TEST_PASSWORD);
-  await assert.rejects(() => f.nodes.update(saved.id, { revision: 1, enabled: true }), {
+  const list = await f.nodes.list();
+  assert.equal(list.total, 2);
+  assert.equal(list.resources[0].name, 'native');
+  assert.equal(list.nodes.find((n) => n.name === 'visible').testable, false);
+  const record = (await f.client.records('sub'))[0],
+    content = JSON.parse(record.content);
+  content.proxies.reverse();
+  await f.client.api('/api/sub/native', { content: JSON.stringify(content) }, 'PATCH');
+  await assert.rejects(() => f.nodes.delete({ nodes: [ref(list.nodes[0])] }), {
     code: 'REVISION_CONFLICT',
   });
-  assert.throws(() => f.nodes.load({ ids: [saved.id] }), { code: 'NODE_DISABLED' });
-  const process = f.resources.record(saved.id).record.process.map((operation) => ({
-    ...operation,
-    disabled: true,
-  }));
-  await f.request('/upstream/sub-store/api/sub/renamed', { process }, 'PATCH');
-  assert.equal(f.nodes.get(saved.id).enabled, true);
-  const output = await (await f.client.request('/download/renamed?target=JSON')).json();
-  assert.equal(output.length, 1);
+  assert.equal(JSON.parse((await f.client.records('sub'))[0].content).proxies.length, 2);
 });
-
-test('native delete and bulk replacement protect chain members; lost identity stays repairable', async (t) => {
-  const f = await fixture(t, { publish: false });
-  const {
-    nodes: [a, b],
-  } = await f.nodes.create({ drafts: [node('ss'), node('ss')] });
-  const chain = f.chains.create({
-    name: 'two hops',
-    enabled: true,
-    entryNodeId: a.id,
-    exitNodeId: b.id,
-  });
-  const record = f.resources.record(a.id).record;
-  assert.equal(
-    (await f.request('/upstream/sub-store/api/sub/' + record.name, undefined, 'DELETE')).status,
-    422,
-  );
-  assert.equal((await f.request('/upstream/sub-store/api/subs', [], 'PUT')).status, 422);
-  await f.client.api('/api/sub/' + record.name, { _submeld: null }, 'PATCH');
-  await f.resources.sync();
-  assert.throws(() => f.nodes.get(a.id), { code: 'UPSTREAM_REFERENCE_MISSING' });
-  assert.equal(f.chains.get(chain.id).available, false);
-  f.chains.delete(chain.id, chain.revision);
-  assert.equal(f.chains.list(0).total, 0);
-});
-
-test('native sources and collections feed all eight enhanced formats in order', async (t) => {
+test('official upstream independently generates all eight formats, native shares revoke, template edits persist', async (t) => {
   const f = await fixture(t);
-  await source(f);
-  await f.client.api('/api/collections', {
-    name: 'combined',
-    subscriptions: ['source'],
-    process: [],
-  });
-  await f.resources.sync();
-  const combined = f.sources.list(0).sources.find((s) => s.name === 'combined');
-  assert.ok(combined);
-  const local = await f.nodes.create({ drafts: [{ ...node('ss'), name: 'independent' }] });
-  const issued = f.subscriptions.create(
-    plan([
-      { kind: 'source', id: combined.id },
-      { kind: 'node', id: local.nodes[0].id },
-    ]),
-  );
-  await published(f, issued.id);
-  const uri = f.subscriptions.artifact(issued.id, 'uri', ENGINE_VERSION).content;
-  assert.equal((await parseInput({ format: 'uri', text: uri })).items.length, 2);
-  assert.equal(
-    Buffer.from(
-      f.subscriptions.artifact(issued.id, 'base64', ENGINE_VERSION).content,
-      'base64',
-    ).toString(),
-    uri,
-  );
-});
-
-test('chain output retains target dependencies, excludes URI and rejects disabled hops', async () => {
-  for (const target of ['mihomo', 'singbox', 'xray']) {
-    const chains = chainFixtures(target, 0);
-    const rendered = await renderInput({ target, items: chains, listenPort: 1080 });
-    assert.equal(rendered.counts.output, chains.length);
-    const disabled = structuredClone(chains[0]);
-    disabled.available = false;
-    await assert.rejects(
-      () => renderInput({ target, items: [disabled] }),
-      (e) => e.diagnostics.some((d) => d.code === 'CHAIN_NODE_DISABLED'),
-    );
-    assert.ok(
-      composeItems(plan([]), chains, 'uri').every(
-        (i) => i.excluded && i.diagnostics.some((d) => d.code === 'CHAIN_URI_EXCLUDED'),
-      ),
-    );
+  const resource = await add(f);
+  const saved = await f.subscriptions.create(plan([{ kind: 'resource', id: resource.id }]));
+  assert.equal(f.resources.files('plan').length, 1);
+  assert.equal(f.resources.files('output').length, 8);
+  const generated = {};
+  for (const format of outputFormats)
+    generated[format] = (await f.subscriptions.artifact(saved.id, format)).content;
+  assert.ok(generated.uri.startsWith('ss://'));
+  assert.equal(Buffer.from(generated.base64, 'base64').toString(), generated.uri);
+  assert.equal(parse(generated.mihomo).proxies.length, 1);
+  assert.equal(JSON.parse(generated.singbox).outbounds.length, 2);
+  assert.equal(JSON.parse(generated.xray).outbounds.length, 1);
+  await f.subscriptions.share(saved.id, saved.revision, false);
+  const urls = (await f.subscriptions.detail(saved.id, f.config.publicOrigin)).urls;
+  for (const format of outputFormats) {
+    const response = await f.app.request(urls[format][0]);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(await response.text(), generated[format]);
   }
-});
-
-test('native editing invalidates publication immediately and token reset revokes GET and HEAD', async (t) => {
-  const f = await fixture(t);
-  const {
-    nodes: [saved],
-  } = await f.nodes.create({ drafts: [node('ss')] });
-  const issued = f.subscriptions.create(plan([{ kind: 'node', id: saved.id }]));
-  await published(f, issued.id);
-  const path = '/s/' + issued.token + '/uri?key=' + issued.key;
-  for (const method of ['GET', 'HEAD'])
-    assert.equal((await f.app.request(path, { method })).status, 200);
-  const record = f.resources.record(saved.id).record;
-  await f.request(
-    '/upstream/sub-store/api/sub/' + record.name,
-    { content: JSON.stringify(toUpstream({ ...node('ss'), name: 'changed' })) },
+  const template = f.resources.files('template').find((r) => r.record._submeld.format === 'mihomo');
+  const changed = JSON.parse(template.record.content);
+  changed['log-level'] = 'info';
+  await f.client.api(
+    '/api/file/' + template.record.name,
+    { content: JSON.stringify(changed) },
     'PATCH',
   );
-  assert.ok(
-    f.subscriptions
-      .detail(issued.id, ENGINE_VERSION, f.publisher.status(issued.id))
-      .artifacts.every((a) => !a.readable),
+  await f.resources.sync();
+  assert.equal(
+    parse((await f.subscriptions.artifact(saved.id, 'mihomo')).content)['log-level'],
+    'info',
   );
-  await published(f, issued.id);
-  f.subscriptions.resetToken(issued.id, f.subscriptions.get(issued.id).revision);
-  for (const method of ['GET', 'HEAD'])
-    assert.equal((await f.app.request(path, { method })).status, 404);
+  await f.subscriptions.update(
+    saved.id,
+    plan([{ kind: 'resource', id: resource.id }]),
+    saved.revision,
+  );
+  assert.equal(
+    JSON.parse(
+      (await f.client.records('file')).find((r) => r.name === template.record.name).content,
+    )['log-level'],
+    'info',
+  );
+  await f.subscriptions.share(saved.id, f.subscriptions.get(saved.id).revision, true);
+  for (const url of Object.values(urls).flat())
+    assert.notEqual((await f.app.request(url)).status, 200);
+  assert.equal((await f.app.request('/s/old/uri?key=old')).status, 404);
+  f.close();
+  const output = (await f.client.records('file')).find(
+    (r) => r._submeld?.role === 'output' && r._submeld.format === 'xray',
+  );
+  assert.equal((await f.client.request('/api/file/' + output.name)).status, 200);
 });
-
-test('source reorder rejects old indexed results and stores a content hash', async (t) => {
-  const f = await fixture(t, { publish: false });
-  const src = await source(f, 'ordered', [
-    { ...node('ss'), name: 'A' },
-    { ...node('ss'), name: 'B' },
-  ]);
-  const subject = {
-    kind: 'source',
-    id: src.id,
-    revision: src.revision,
-    snapshotHash: src.snapshotHash,
-    nodeIndex: 0,
-  };
-  assert.equal(f.nodeTests.capture(subject).name, 'A');
+test('chains use ordinary nodes, follow renamed resources and same-name updates; deletion, duplicates and identity loss are explicit', async (t) => {
+  const f = await fixture(t);
+  const a = node('ss'),
+    b = node('vless');
+  a.name = 'entry';
+  b.name = 'exit';
+  b.tls.insecure = false;
+  const resource = await add(f, [a, b]);
+  const chain = await f.chains.create({
+    name: 'route',
+    enabled: true,
+    entry: { resourceId: resource.id, nodeName: 'entry' },
+    exit: { resourceId: resource.id, nodeName: 'exit' },
+  });
+  const saved = await f.subscriptions.create(
+    plan([
+      { kind: 'chain', id: chain.id },
+      { kind: 'node', resourceId: resource.id, nodeName: 'entry' },
+    ]),
+  );
+  const yaml = parse((await f.subscriptions.artifact(saved.id, 'mihomo')).content);
+  assert.equal(yaml.proxies[0]['dialer-proxy'], yaml.proxies[1].name);
+  assert.equal(
+    JSON.parse((await f.subscriptions.artifact(saved.id, 'singbox')).content).outbounds[1].detour,
+    'route · 前置',
+  );
+  assert.equal(
+    JSON.parse((await f.subscriptions.artifact(saved.id, 'xray')).content).outbounds[0]
+      .streamSettings.sockopt.dialerProxy,
+    'route · 前置',
+  );
+  assert.equal((await f.subscriptions.artifact(saved.id, 'uri')).content.split('\n').length, 1);
+  const list = await f.nodes.list();
+  await assert.rejects(() => f.nodes.delete({ nodes: [ref(list.nodes[0])] }), {
+    code: 'NODE_IN_USE',
+  });
+  const record = f.resources.record(resource.id).record;
+  assert.equal(
+    (await f.request('/upstream/sub-store/api/sub/' + record.name, undefined, 'DELETE')).status,
+    409,
+  );
   await f.client.api(
-    '/api/sub/ordered',
+    '/api/sub/' + record.name,
     {
-      content: [
-        { ...node('ss'), name: 'B' },
-        { ...node('ss'), name: 'A' },
-      ]
-        .map((d) => JSON.stringify(toUpstream(d)))
-        .join('\n'),
+      name: 'renamed',
+      content: JSON.stringify({
+        proxies: [toUpstream(b), { ...toUpstream(a), server: 'updated.example.com' }],
+      }),
     },
     'PATCH',
   );
   await f.resources.sync();
-  await f.sources.prepare([src.id]);
-  assert.notEqual(f.sources.get(src.id).snapshotHash, src.snapshotHash);
-  assert.equal(f.nodeTests.matches(subject), false);
-  assert.throws(() => f.nodeTests.capture(subject), { code: 'REVISION_CONFLICT' });
-});
-
-test('lost source identity fails publication instead of silently omitting nodes', async (t) => {
-  const f = await fixture(t);
-  const src = await source(f);
-  const issued = f.subscriptions.create(plan([{ kind: 'source', id: src.id }]));
-  await published(f, issued.id);
-  await f.request('/upstream/sub-store/api/sub/source', { _submeld: null }, 'PATCH');
-  await waitFor(() => f.publisher.status(issued.id) === 'idle');
-  assert.throws(() => f.subscriptions.artifact(issued.id, 'uri', ENGINE_VERSION), {
-    code: 'ARTIFACT_UNAVAILABLE',
-  });
-  assert.equal(f.subscriptions.get(issued.id).inputs[0].id, src.id);
-});
-
-test('upstream outage preserves previously published contents without serving management requests', async (t) => {
-  const f = await fixture(t);
-  const src = await source(f);
-  const issued = f.subscriptions.create(plan([{ kind: 'source', id: src.id }]));
-  await published(f, issued.id);
-  const before = f.subscriptions.artifact(issued.id, 'uri', ENGINE_VERSION).content;
-  const original = f.client.request;
-  f.client.request = async () => {
-    throw new Error('simulated transport outage');
-  };
-  f.publisher.schedule([issued.id]);
-  await waitFor(() => f.publisher.status(issued.id) === 'idle');
-  assert.equal(f.subscriptions.artifact(issued.id, 'uri', ENGINE_VERSION).content, before);
-  assert.equal((await f.request('/api/nodes')).status, 500);
-  f.client.request = original;
-});
-
-for (const outcome of ['success', 'failure'])
-  test('late ' + outcome + ' cannot restore pre-edit publication', async (t) => {
-    const converter = new ControlledConverter();
-    const f = await fixture(t, { converter });
-    const {
-      nodes: [saved],
-    } = await f.nodes.create({ drafts: [node('ss')] });
-    const gate = converter.hold(outcome === 'failure' ? new Error('test-only') : undefined);
-    const issued = f.subscriptions.create({
-      ...plan([{ kind: 'node', id: saved.id }]),
-      formats: ['uri', 'base64'],
-    });
-    await gate.entered;
-    await f.nodes.update(saved.id, { revision: saved.revision, changes: { name: 'replacement' } });
-    gate.release();
-    await published(f, issued.id);
-    const value = f.subscriptions.artifact(issued.id, 'uri', ENGINE_VERSION);
-    assert.equal(
-      (await parseInput({ format: 'uri', text: value.content })).items[0].draft.name,
-      'replacement',
-    );
-    assert.equal(value.builtRevision, f.subscriptions.get(issued.id).revision);
-  });
-
-test('native interface and API require login and same origin; invalid share tokens fail', async (t) => {
-  const f = await fixture(t, { publish: false });
-  assert.equal((await f.app.request('/upstream/sub-store/api/subs')).status, 401);
-  assert.equal((await f.app.request('/')).status, 302);
+  assert.equal((await f.chains.get(chain.id)).available, true);
   assert.equal(
-    (
-      await f.app.request('/upstream/sub-store/api/subs', {
-        method: 'POST',
-        headers: {
-          cookie: f.cookie,
-          Origin: 'https://other.invalid',
-          'content-type': 'application/json',
-        },
-        body: '{}',
-      })
-    ).status,
-    403,
+    parse((await f.subscriptions.artifact(saved.id, 'mihomo')).content).proxies[1].server,
+    'updated.example.com',
   );
-  assert.equal((await f.request('/upstream/sub-store/api/subs')).status, 200);
-  assert.equal((await f.request('/?api=http://127.0.0.1:3000/upstream/sub-store')).status, 200);
-  assert.notEqual((await f.app.request('/share/sub/missing?token=invalid')).status, 200);
-});
-
-test('native Mihomo sharing works without login and revocation is enforced upstream', async (t) => {
-  const f = await fixture(t, { publish: false });
-  await source(f);
-  const issued = await f.request('/upstream/sub-store/api/token', {
-    payload: { type: 'sub', name: 'source' },
+  await f.client.api(
+    '/api/sub/renamed',
+    { content: JSON.stringify({ proxies: [toUpstream(a), toUpstream(a), toUpstream(b)] }) },
+    'PATCH',
+  );
+  await f.resources.sync();
+  assert.equal((await f.chains.get(chain.id)).available, false);
+  await assert.rejects(() => f.subscriptions.artifact(saved.id, 'mihomo'), {
+    code: 'CHAIN_REFERENCE_INVALID',
   });
-  assert.equal(issued.status, 200);
-  const {
-    data: { token },
-  } = await issued.json();
-  assert.ok(token);
-  const link = '/share/sub/source?target=Mihomo&token=' + encodeURIComponent(token);
-  const shared = await f.app.request(link);
-  assert.equal(shared.status, 200);
-  assert.match(await shared.text(), /proxies:/);
-  assert.equal((await f.app.request('/upstream/sub-store' + link)).status, 200);
-  // The pinned native share endpoint supports GET and rejects HEAD.
-  assert.equal((await f.app.request(link, { method: 'HEAD' })).status, 405);
-  const revoked = await f.request(
-    '/upstream/sub-store/api/token/' + encodeURIComponent(token) + '?type=sub&name=source',
-    undefined,
-    'DELETE',
-  );
-  assert.equal(revoked.status, 200);
-  assert.notEqual((await f.app.request(link)).status, 200);
-  assert.notEqual((await f.app.request('/upstream/sub-store' + link)).status, 200);
-});
-
-test('legacy data is refused without modification', async (t) => {
-  const f = await fixture(t, { publish: false });
-  f.close();
-  const path = join(f.directory, 'submeld.sqlite');
-  writeFileSync(path, 'preserve-old-data');
-  assert.throws(() => openSettings(f.directory, true), /旧版数据目录/);
-  assert.equal(readFileSync(path, 'utf8'), 'preserve-old-data');
+  await f.client.api('/api/sub/renamed', { _submeld: null }, 'PATCH');
+  await f.resources.sync();
+  await assert.rejects(() => f.subscriptions.artifact(saved.id, 'mihomo'), {
+    code: 'REFERENCE_INVALID',
+  });
 });

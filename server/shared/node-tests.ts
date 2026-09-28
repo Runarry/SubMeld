@@ -1,45 +1,28 @@
+import { nodeRefSchema, revisionSchema } from './resources.js';
 import { z } from 'zod';
 import { MAX_NODES, renderTargetSchema } from './contracts.js';
 
 export const DEFAULT_PROBE_URL = 'https://cp.cloudflare.com/generate_204';
 export const coreTargets = ['mihomo', 'singbox', 'xray'] as const;
 export const coreLabels = { mihomo: 'Mihomo', singbox: 'sing-box', xray: 'Xray' };
-const identity = { id: z.string().uuid(), revision: z.number().int().positive() };
 export const testSubjectSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('node'), ...identity }),
-  z.strictObject({
-    kind: z.literal('source'),
-    ...identity,
-    snapshotHash: z.string(),
-    nodeIndex: z
-      .number()
-      .int()
-      .min(0)
-      .max(MAX_NODES - 1),
-  }),
+  nodeRefSchema.extend({ kind: z.literal('node') }),
   z.strictObject({
     kind: z.literal('chain'),
-    ...identity,
-    entryRevision: identity.revision,
-    exitRevision: identity.revision,
+    id: z.string().uuid(),
+    revision: revisionSchema,
+    entry: nodeRefSchema,
+    exit: nodeRefSchema,
   }),
 ]);
 export type TestSubject = z.infer<typeof testSubjectSchema>;
 export function subjectKey(subject: TestSubject) {
-  return (
-    subject.kind + ':' + subject.id + (subject.kind === 'source' ? ':' + subject.nodeIndex : '')
-  );
+  return subject.kind === 'node'
+    ? 'node:' + subject.resourceId + ':' + subject.nodeIndex
+    : 'chain:' + subject.id;
 }
 export function sameSubject(a: TestSubject, b: TestSubject) {
-  return (
-    subjectKey(a) === subjectKey(b) &&
-    a.revision === b.revision &&
-    (a.kind !== 'source' || (b.kind === 'source' && a.snapshotHash === b.snapshotHash)) &&
-    (a.kind !== 'chain' ||
-      (b.kind === 'chain' &&
-        a.entryRevision === b.entryRevision &&
-        a.exitRevision === b.exitRevision))
-  );
+  return JSON.stringify(testSubjectSchema.parse(a)) === JSON.stringify(testSubjectSchema.parse(b));
 }
 export const testSelectionSchema = z.strictObject({
   subjects: z

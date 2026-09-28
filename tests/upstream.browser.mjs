@@ -32,7 +32,7 @@ test('Sub-Store offline cache preserves enhanced navigation, reloads and fresh a
   await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
   await page.getByRole('link', { name: '打开 Sub-Store', exact: true }).click();
   await page.goto('/submeld/#/nodes');
-  await expect(page.getByRole('heading', { name: '本地节点', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   await page.goto('/submeld/');
   await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
   const asset = await page.locator('script[src*="/submeld/assets/"]').getAttribute('src');
@@ -79,7 +79,7 @@ test('an already installed native worker upgrades without clearing saved browser
   );
 });
 
-test('home opens upstream nodes with empty display names and editable Koipy and enhancement settings', async ({
+test('home opens upstream nodes and Koipy; support files and test settings have separate pages', async ({
   page,
 }, info) => {
   await login(page);
@@ -92,12 +92,10 @@ test('home opens upstream nodes with empty display names and editable Koipy and 
     process: [],
   });
   await page.getByRole('button', { name: '查看 Sub-Store 节点', exact: true }).click();
-  const row = page.getByRole('row').filter({ hasText: name });
-  await row.getByRole('button', { name: '查看节点' }).click();
+  await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption({ label: name });
   await expect(
     page.getByRole('checkbox', { name: '选择 visible-node', exact: true }),
   ).toBeVisible();
-  await expect(row).toContainText('1');
   await page.getByRole('button', { name: '服务入口', exact: true }).click();
   await page.getByRole('button', { name: '配置 Koipy', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Koipy 管理', exact: true })).toBeVisible();
@@ -123,16 +121,29 @@ test('home opens upstream nodes with empty display names and editable Koipy and 
   await expect(
     page.getByRole('link', { name: '打开 Telegram 机器人', exact: true }),
   ).toHaveAttribute('href', 'https://t.me/ExampleKoipyBot');
-  await page.getByRole('button', { name: '管理增强工具', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '增强工具', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '配套文件', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '配套脚本与模板', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '配套文件管理', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/#\/support-files$/);
+  await expect(page.getByLabel('HTTPS 测试地址', { exact: true })).toHaveCount(0);
+  for (const name of ['管理节点', '管理两跳链', '管理输出方案', '管理测试任务与结果'])
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('support-files.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.goto('/submeld/#/tools');
+  await expect(page).toHaveURL(/#\/support-files$/);
+  await expect(page.getByRole('heading', { name: '配套脚本与模板', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '节点测试', exact: true }).click();
   await page.getByLabel('HTTPS 测试地址', { exact: true }).fill('https://example.com/health');
   await page.getByRole('button', { name: '保存测试地址', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('已保存测试地址');
+  await expect(page.getByRole('status').filter({ hasText: '已保存测试地址' })).toBeVisible();
   await expect(page.getByRole('region', { name: '内核管理', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '使用默认测试地址', exact: true }).click();
   await page.getByRole('button', { name: '保存测试地址', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('已保存测试地址');
-  await page.screenshot({ path: info.outputPath('enhancement-settings.png'), fullPage: true });
+  await expect(page.getByRole('status').filter({ hasText: '已保存测试地址' })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('node-test-settings.png'), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -187,9 +198,7 @@ test('native Sub-Store edits and renames resources without losing enhanced ident
   );
   await native(page, '/api/sub/' + renamed, undefined, 'DELETE');
 });
-test('upstream preview copies nodes, starts tests and clears selection after snapshot replacement', async ({
-  page,
-}, info) => {
+test('unified selection clears after native snapshot replacement', async ({ page }, info) => {
   await login(page);
   const name = 'preview-' + info.project.name;
   const content = (label) => 'vless://' + UUID + '@example.com:443?security=tls#' + label;
@@ -199,39 +208,19 @@ test('upstream preview copies nodes, starts tests and clears selection after sna
     content: content('first'),
     process: [],
   });
-  await page.getByRole('button', { name: '上游节点预览', exact: true }).click();
-  await page
-    .getByRole('row')
-    .filter({ hasText: name })
-    .getByRole('button', { name: '查看节点' })
-    .click();
-  await page.getByRole('checkbox', { name: '选择 first', exact: true }).check();
-  await page.getByRole('button', { name: '复制所选为本地节点' }).click();
-  await expect(page.getByRole('status')).toContainText('已保存为 Sub-Store');
-  await page.getByRole('checkbox', { name: '选择 first', exact: true }).check();
-  await page.getByRole('button', { name: '测试所选节点', exact: true }).click();
-  await expect(page.getByRole('button', { name: '查看测试进度', exact: true })).toBeVisible();
-  await native(page, '/api/sub/' + name, { content: content('second') }, 'PATCH');
-  await page.getByRole('button', { name: '更新上游快照' }).click();
-  await expect(page.getByRole('checkbox', { name: '选择 second', exact: true })).not.toBeChecked();
-  await expect(page.getByRole('button', { name: '复制所选为本地节点' })).toBeDisabled();
-  await page.screenshot({ path: info.outputPath('upstream-preview.png'), fullPage: true });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
-  await native(
-    page,
-    '/api/sub/' + name,
-    {
-      content:
-        content('second') +
-        '\nss://' +
-        Buffer.from('aes-256-cfb:public-test').toString('base64') +
-        '@example.com:8388#unsupported',
-    },
-    'PATCH',
-  );
-  await page.getByRole('button', { name: '更新上游快照' }).click();
-  await expect(page.getByRole('alert')).toContainText('第 2 项');
-  await native(page, '/api/sub/' + name, undefined, 'DELETE');
+  try {
+    await page.getByRole('button', { name: '节点', exact: true }).click();
+    await page
+      .getByRole('combobox', { name: '所属订阅', exact: true })
+      .selectOption({ label: name });
+    await page.getByRole('checkbox', { name: '选择 first', exact: true }).check();
+    await native(page, '/api/sub/' + name, { content: content('second') }, 'PATCH');
+    await page.getByRole('button', { name: '刷新上游', exact: true }).click();
+    await expect(
+      page.getByRole('checkbox', { name: '选择 second', exact: true }),
+    ).not.toBeChecked();
+    await expect(page.getByRole('button', { name: '删除所选', exact: true })).toBeDisabled();
+  } finally {
+    await native(page, '/api/sub/' + name, undefined, 'DELETE');
+  }
 });

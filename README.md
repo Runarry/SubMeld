@@ -1,119 +1,130 @@
 # SubMeld · 订融
 
-SubMeld 2.0 以 Sub-Store 和 Koipy 的原生能力为主，补充结构化节点编辑、两跳链、增强订阅和三内核实测。节点与来源的权威数据保存在独立 Sub-Store 服务中；项目不再构建或运行内嵌 Sub-Store、转换 Worker 或自建来源抓取器。
+SubMeld 使用独立 Sub-Store 保存全部代理配置，并提供统一节点管理、两跳链、输出方案、三内核测试和 Koipy 配置入口。Sub-Store 负责实际转换、文件脚本执行、缓存和分享；SubMeld 不维护另一份可编辑节点库，不构建内嵌 Sub-Store。
 
-## 当前基线
+## 当前架构
 
-2026-09-27 所有者确认本次上游化方案，优先于旧文档中的单容器、禁止上游管理服务、抓取限制及旧数据库升级要求。采用上游原生脚本、联网、缓存与刷新行为。普通管理接口仅供自己的管理员使用。
+2026-09-27 所有者确认上游化重构，随后确认统一存储与流程精简。本基线优先于历史文档中的单容器、内嵌转换、节点分类和预生成发布要求。
 
-| 服务      | 职责                                                             |
-| --------- | ---------------------------------------------------------------- |
-| Sub-Store | 原生网页、节点与来源、普通组合订阅、转换和分享                   |
-| Koipy     | Telegram 指令、测试流程与结果展示                                |
-| miaospeed | Koipy 使用的测试后端，基于 Mihomo                                |
-| SubMeld   | 登录入口、增强编辑、链和配置组装、增强发布、三内核实测及内核更新 |
+| 服务      | 职责                                                                        |
+| --------- | --------------------------------------------------------------------------- |
+| Sub-Store | 原生前端、节点订阅、组合订阅、链与方案文件、模板、脚本执行、按需生成与分享  |
+| Koipy     | Telegram 普通节点测速与结果展示                                             |
+| miaospeed | Koipy 的实际测试后端，基于 Mihomo                                           |
+| SubMeld   | 登录与代理入口、统一增查删、链与方案表单、三内核实测、内核更新及 Koipy 配置 |
 
-官方镜像固定摘要见 [upstreams.lock.json](upstreams.lock.json)。当前 Sub-Store 后端为 2.42.2。上游保持原样，不维护分支；SubMeld 保留少量 URI 边界修正，覆盖 Trojan 密码编码、VMess 证书标记、TUIC ALPN 与密码解码，并核对输出字段。Xray 原生 JSON 输出、固定配置模板和两跳链仍由 SubMeld 补充。
+根路径是 Sub-Store 原生前端，`/submeld/` 是 SubMeld。管理 API 经登录与同源校验，普通和增强输出均使用上游原生分享令牌。原生 Service Worker 保留自己的离线缓存，SubMeld 页面和 API 直接访问服务端。
 
-这是新数据版本：**无需迁移旧数据，也不会删除或覆盖旧目录。** 使用新的 `data-v2` / Compose 卷。发现旧 `submeld.sqlite` 时拒绝打开该目录。旧版验收结果不能直接视为 2.0 已验收。
-
-## 文档索引
-
-保留三份原始文档及文件名，作为历史需求参考。本次确认的架构和 README / AGENTS.md 为当前执行基线。
-
-| 文件                                                          | 原文逻辑名称              |
-| ------------------------------------------------------------- | ------------------------- |
-| [开发规范与安全边界](docs/SubMeld_开发规范与安全边界_v1.0.md) | `docs/DEVELOPMENT.md`     |
-| [分阶段开发计划](docs/SubMeld_分阶段开发计划_v1.0.md)         | `docs/PLAN.md`            |
-| [旧版产品设计](docs/SubMeld_产品与技术设计文档_v1.0.md)       | 仅供参考，不是缺失的 v1.1 |
-
-Node.js 24.6.0、pnpm 10.33.2；一个根包，Vue + TypeScript、Node.js + Hono、SQLite。依赖使用精确版本。
-
-## 本地开发
-
-1. `pnpm install --frozen-lockfile`。
-2. 复制 `.env.example` 为 `.env`。默认开发入口 `http://127.0.0.1:5173`，数据目录 `./data-v2`。
-3. `docker compose -f compose.dev.yaml up -d`，独立上游仅绑定回环 39091。该开发服务使用自己的新数据卷；测试不会连接或重置它。
-4. 应用停止时运行 `pnpm admin:init --dev`，按提示设置至少 12 字符的密码。
-5. `pnpm dev`，打开 `http://127.0.0.1:5173/submeld/` 登录。
-
-站点根路径是 Sub-Store；`/submeld/` 是服务入口和增强工具。首次构建/准备内核需要联网，缓存复用。直接运行构建产物时，将 PUBLIC_ORIGIN 改为 `http://127.0.0.1:3000`，执行 `pnpm build`、`pnpm cores:prepare`、`pnpm start --dev`。
-
-代理层给原生 Service Worker 增加路径边界：Sub-Store 保留自己的离线缓存，`/submeld/`、增强 API 和私人产物直接读取服务端。已有旧缓存的浏览器先重新打开 Sub-Store，等待页面载入后刷新增强页即可；无需清空浏览器设置或订阅数据。
-
-开发服务的正常停止命令为 `docker compose -f compose.dev.yaml stop`。不用 `down -v` 清理需要保留的数据。
+官方镜像摘要固定于 [upstreams.lock.json](upstreams.lock.json)，与 Compose 一致；Sub-Store 后端为 2.42.2。沿用 Vue、TypeScript、Hono、SQLite 单根包，Node.js 24.6.0、pnpm 10.33.2。
 
 ## 使用流程
 
-**日常订阅管理：** 从服务入口打开 Sub-Store，使用其原生来源、本地内容、组合订阅、处理操作、文件与分享。普通订阅采用上游缓存及按请求生成语义；上游支持的额外协议可在原生界面使用。
+### 节点
 
-**结构化本地节点：** 在增强工具创建、编辑或批量导入节点。每条独立节点保存为 Sub-Store 的单节点本地订阅，名称初始为 `sm-node-<UUID>`。`_submeld` 元数据记录稳定身份，原生重命名不会改变引用。停用使用带标记的内置过滤操作，不删除凭据；三内核测试仍可读取停用节点的保存内容。原生界面也可以编辑这些订阅，需保持其单节点含义。
+“节点”页直接读取全部 Sub-Store 订阅，不再区分独立节点与来源节点。默认汇总各订阅；组合订阅单独预览，避免重复计数。支持搜索、批量选择、原始与处理后内容查看，以及单项或批量测试。
 
-**来源预览：** “上游节点预览”列出普通上游订阅和组合订阅。可读取、手动更新快照、复制所选节点为独立本地节点，或单项/批量测试。复制后的节点不跟随原来源变化。增强编辑与测试继续限定原有 SS、VMess、VLESS、Trojan、Hysteria2、TUIC 范围；不能完整表达的节点明确报错，不在增强输出中默默丢失。
+添加可粘贴节点文本或填写订阅地址，直接保存为原生订阅。节点凭据、原始文本、远程地址和处理操作都保存在 Sub-Store。复杂编辑、启停、脚本和普通组合订阅使用原生页面。
 
-服务入口的“查看 Sub-Store 节点”直接打开上游预览并读取当前订阅。上游显示名称为空时使用订阅名称；“尚未读取”与实际零节点分开显示。“本地节点”仅列出独立增强节点，普通订阅无需复制就可以预览和测试。
+删除行为：
 
-VLESS 增强输出保留上游默认 XUDP，其他 UDP 编码仍明确拒绝。Mihomo、sing-box 字段由上游输出并核对；Xray 用其原生 XUDP 配置表达。前台转换与后台发布顺序执行，等待期间可取消，整个请求最长两分钟。
+- 手动导入的节点从原始 JSON、YAML 或文本行中实际移除，保留其他节点、配置字段和处理操作。无法验证原始位置或剩余内容时拒绝修改，提示进入原生编辑器。
+- 远程订阅和脚本生成节点追加精确名称排除规则；不会修改提供者的订阅。节点同名更新后继续排除，改名后需重新设置；同名歧义不自动处理。
+- 组合预览的排除只影响该组合。被链引用的节点不能直接删除。
+- 删除使用资源版本与快照摘要，刷新或重排后的旧选择不能用于删除。
 
-**两跳链：** 引用两个不同的独立本地节点，路径为本机 → 前置 → 出口 → 目标。提供 Mihomo、sing-box、Xray 完整配置及片段；URI/Base64 明确排除链。被链引用的节点不能通过正常管理删除或批量替换。导入或外部改写清除身份标记后，旧引用显示失效，需要重新选择，不能靠同名节点自动接续。
+原生支持但 SubMeld 尚不能完整表达的协议或参数仍会显示。测试和增强输出明确说明不支持的项目，不将其静默减少或替换成直连。
 
-**增强订阅：** 引用上游订阅/组合、本地节点及链，保留顺序、名称/协议筛选、八种输出和可撤销私人地址。八种输出为 URI、Base64，以及三个目标的完整配置与节点片段。固定配置默认只监听回环，不生成空代理或失败直连配置。Xray 继续限定现有四协议及已验证参数组合。
+### 两跳链与输出方案
 
-增强产物在后台生成，启动、手动生成及每六小时更新；来源内容交给上游获取。来源面板的“更新上游快照”可强制绕过上游缓存。自动失败保留最近成功产物；人工修改先清除旧产物，再从上游重建。管理写入口在调用上游前先失效增强产物，避免跨服务失败恢复旧内容；本版本保守重建全部增强方案。私人 GET/HEAD 只读已有产物，不触发来源抓取或转换。
+两跳路径为本机 → 前置 → 出口 → 目标。可直接选择订阅或组合中的节点，无需复制。成员按资源 UUID 与精确节点名称引用：资源重命名保留关联，同名节点的新地址和凭据自动生效；节点消失、重名或 UUID 丢失时必须重新选择。
 
-**三内核测试：** 保留单批次、单项/批量、进度、取消、最近结果和网页官方内核更新。测试不改变发布内容。来源节点使用 `snapshotHash + nodeIndex`，刷新重排后不能串用结果。测试对象允许保存的内网/回环地址；目标仍限定公网 HTTPS，无重定向、无直连回退。真实内核版本由批次固定，更新失败保留当前版本。
+链、方案、模板和运行脚本使用 Sub-Store 原生文件保存，带用途、UUID 和格式版本元数据。首次保存方案时初始化缺失的配套文件，启动不会覆盖已有文件。“配套文件”页可手动写入当前内置版本，执行前检查文件版本并提示覆盖自定义内容。
 
-“增强工具”页提供各增强管理入口，并直接配置测试地址和管理内核。默认目标为 `https://cp.cloudflare.com/generate_204`；本机 DNS 失败、返回 Fake-IP（198.18.0.0/15）或非公网地址时标为“测试目标异常”，此时尚未验证节点连接。可更换测试地址，或调整本机代理的 fake-ip-filter；不会将 Fake-IP 作为真实公网地址放行。
+方案支持订阅、组合、单节点和链的有序输入，以及名称、协议筛选和前后缀。保留八种输出：URI、Base64，Mihomo／sing-box／Xray 的完整配置和节点片段。URI／Base64 排除链。
 
-**Telegram：** 给自己的 Koipy 机器人发送普通节点的 Mihomo 分享链接，使用其原生测试指令。机器人必须能够访问该链接；测试结果保留在 Koipy，不与网页同步。本轮没有增加 Telegram 整链测试；两跳链在网页三内核测试。Koipy 本身不替代 sing-box/Xray 实测。
+Mihomo 与 sing-box 经上游转换及链式字段输出；Xray 使用随项目交付、在 Sub-Store 中执行的适配脚本，保持现有四协议和参数范围。三内核测试与文件脚本复用转换校验。生成检查节点数量、连接字段和模板中的节点列表，错误返回失败明细。
 
-“Koipy 管理”页可填写机器人用户名、激活码、Bot Token、管理员 ID、机器人代理及 `local` miaospeed 后端连接参数。配置直接写入原生 `config.yaml`；其他后端和自定义字段保留，密码字段留空表示保留，勾选清除才删除。读取接口仅返回是否已配置，不回传已保存的凭据。用户名入口立即生效，Koipy 配置按页面提示重启后生效；保存成功并不表示机器人已连接 Telegram。
+默认模板为 JSON 文本，允许在原生文件页面修改。占位符包括 `$nodes`、`$outbounds`、`$names`、`$first`、`$port`，按完整值替换。保留节点列表占位符；无效模板不会生成残缺配置。完整配置默认监听回环地址。
+
+### 按需生成与分享
+
+预览、客户端拉取均由 Sub-Store 当次生成，使用上游缓存、脚本和联网规则。“刷新并生成”请求上游绕过缓存。没有六小时发布任务、预生成产物库、本地分享密钥或旧 `/s/*` 地址。
+
+在方案页面创建或撤销分享，令牌由 Sub-Store 保存与验证。原生 `/share/file/*`、订阅和组合分享经同源代理转发。上游停机时输出不可用；不会返回 SubMeld 缓存的旧配置。分享遵循原生 GET 行为，HEAD 仍由上游决定。
+
+### 测试与 Koipy
+
+三内核测试保留批次进度、取消、最近结果、官方内核检查与手动更新。节点引用使用资源 UUID、快照摘要和位置；链测试同时固定两个成员的快照。内容变化或上游状态无法确认时，不保存迟到结果。处理规则排除的原始节点仍可测试。
+
+默认 HTTPS 目标为 `https://cp.cloudflare.com/generate_204`。DNS 失败、198.18.0.0/15 Fake-IP、非公网目标标为“测试目标异常”，不能据此判断节点失效。可在“节点测试”页更改测试地址；不会放行 Fake-IP。
+
+Koipy 管理页配置机器人用户名、激活码、Bot Token、管理员 ID、代理和 miaospeed 后端。直接写共享原生配置文件，保留其他后端和自定义字段；已保存的凭据不回传，留空保留，显式清除才删除。保存后按提示手动重启 Koipy。
+
+给 Koipy 发送其可访问的普通节点 Mihomo 原生分享链接。Telegram 测试结果留在 Koipy；整链与 sing-box／Xray 实测由网页提供。
+
+## 数据与兼容
+
+SQLite 仅保存账号、运行设置和测试结果，节点及配置预览在内存中。测试需要的临时凭据配置会在进程结束后清理。没有第二份可编辑节点凭据库。
+
+保留现有 Sub-Store 数据、UUID、登录和 Koipy 配置。本次当前环境没有已保存的旧链或增强方案；允许升级空业务定义的 v2 本地库，重建索引。旧测试引用不作为新快照的有效结果，需要重新测试。若旧库仍有链或方案则拒绝自动搬迁，保留原库并提示使用新目录；不实现通用旧配置或旧分享地址迁移。
+
+含旧版 `submeld.sqlite` 的目录仍拒绝打开，不删除、覆盖或迁移旧目录。旧 `#/sources`、`#/library` 和 `#/workbench` 书签进入统一节点页；旧来源和转换管理 API 已移除。
+
+## 本地运行
+
+1. `pnpm install --frozen-lockfile`，复制 `.env.example` 为 `.env`。
+2. `docker compose -f compose.dev.yaml up -d`，上游仅绑定回环 39091。
+3. 应用停止时运行 `pnpm admin:init --dev`，初始化密码；已有账号不重复初始化。
+4. `pnpm dev`，访问 `http://127.0.0.1:5173/submeld/`。
+
+运行构建产物时，将 PUBLIC_ORIGIN 设置为 `http://127.0.0.1:3000`，依次执行 `pnpm build`、`pnpm cores:prepare`、`pnpm start --dev`。默认数据目录 `data-v2`。
+
+停止开发上游使用 `docker compose -f compose.dev.yaml stop`；不要用 `down -v` 清理需要保留的数据。
 
 ## Linux 容器部署
 
-四服务见 [compose.yaml](compose.yaml)。仅 SubMeld 的 3000 端口发布到宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。不要公开其他服务端口。代理不缓存私人订阅，不记录带令牌的完整 URL。
+四服务配置见 [compose.yaml](compose.yaml)。仅 SubMeld 的 3000 端口绑定宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。
 
-1. 准备新的 `.env`，将 PUBLIC_ORIGIN 改为真实 HTTPS origin。
-2. 配置至少 16 字符随机 `MIAOSPEED_TOKEN`，以及需要从文件预填的 Koipy 激活码、Bot Token、机器人用户名和管理员 Telegram 数字 ID。这些值不提交 Git。
-3. `node --env-file=.env deploy/configure-koipy.mjs`。它从 [Koipy 配置模板](deploy/koipy.config.example.json) 填入管理员、miaospeed token 和已提供的激活码、Bot Token，仅在文件不存在时生成 `runtime-v2/koipy/config.yaml`。JSON 是合法 YAML，生成器只需 Node.js。也可先创建空配置目录，通过网页完成填写。Linux 下让容器用户 UID 1000 可写此共享目录，例如 `sudo chown -R 1000:1000 runtime-v2/koipy`。
+1. 准备私有 `.env`，设置实际 HTTPS PUBLIC_ORIGIN 和随机 MIAOSPEED_TOKEN。
+2. 可通过 `node --env-file=.env deploy/configure-koipy.mjs` 初始化 `runtime-v2/koipy/config.yaml`。已有文件不会被覆盖。也可先创建共享目录，再通过网页填写配置。
+3. Linux 下使容器用户 UID 1000 可写共享配置目录。
 4. `docker compose build submeld`。
-5. `docker compose run --rm --no-deps submeld node dist/server/cli.js init`，通过隐藏终端输入密码。
-6. `docker compose up -d sub-store submeld`。登录 `/submeld/` 后，在“Koipy 管理”检查或填写配置，Token 与步骤 2 保持一致，再运行 `docker compose up -d miaospeed koipy`。之后网页保存配置，执行 `docker compose restart koipy` 生效。
+5. 新安装运行 `docker compose run --rm --no-deps submeld node dist/server/cli.js init`。
+6. `docker compose up -d sub-store submeld`，登录配置 Koipy；核对 miaospeed Token 后运行 `docker compose up -d miaospeed koipy`。
+7. 后续网页修改 Koipy 配置，执行 `docker compose restart koipy` 生效。
 
-Koipy 激活码、Bot Token 和后端地址由原生配置文件读取，Compose 不再用环境变量覆盖网页保存的值。`KOIPY_CONFIG_PATH` 指定 SubMeld 写入位置；Compose 把相同目录共享到两个容器。若主机访问 Telegram 需要代理，可在管理页填写机器人代理。本项目不提供 Docker socket、网页容器更新或自动部署。
+KOIPY_CONFIG_PATH 指向共享原生文件；Compose 不使用环境变量覆盖网页保存的 Koipy 凭据，也不挂载 Docker socket。备份时停止服务并保存 Sub-Store 卷、本地账号与测试数据卷、Koipy 配置及私有环境配置。
 
-Sub-Store 与 SubMeld 使用独立新卷；Koipy 的配置文件单独持久保存。备份时停止服务，保存两个卷、Koipy 配置和私有环境配置。SQLite 不保存第二份可编辑节点凭据库，但生成产物仍包含节点秘密，应按私人配置保管。
-
-密码重置：先停止 SubMeld，再执行 `docker compose run --rm --no-deps submeld node dist/server/cli.js reset-password`。开发模式使用 `pnpm admin:reset-password --dev`。
+密码重置需先停止 SubMeld：开发使用 `pnpm admin:reset-password --dev`，容器使用 `docker compose run --rm --no-deps submeld node dist/server/cli.js reset-password`。
 
 ## 接口与验证
 
-增强 API 保留 `/api/auth`、`/api/convert`、`/api/nodes`、`/api/chains`、`/api/subscriptions`、`/api/node-tests`、`/api/kernels`。来源 API 仅提供列表、详情及手动读取上游快照；创建/编辑由原生 Sub-Store API 完成。来源详情与测试对象使用 `snapshotHash`。`/upstream/sub-store/*` 的管理请求经过登录和同源写保护；`/share/*` 及原生前端可能生成的 `/upstream/sub-store/share/*` 直接交给上游验证分享令牌。当前上游分享支持 GET，HEAD 返回 405；增强 `/s/*` 支持 GET/HEAD，由 SubMeld 验证令牌与 key。
+`/api/nodes` 负责统一节点管理；`/api/chains`、`/api/subscriptions` 适配上游文件；`/api/node-tests`、`/api/kernels` 保留测试与内核管理。`/api/integrations/koipy` 管理原生配置，`/api/integrations/files` 管理配套文件更新。上游原生管理使用 `/upstream/sub-store/*`。
 
-| 命令                 | 检查范围                                                                   |
-| -------------------- | -------------------------------------------------------------------------- |
-| `pnpm check`         | 格式、lint、严格类型、构建、工程/真实上游集成、三内核配置、链和 HTTPS 连通 |
-| `pnpm test`          | 构建与工程/真实上游集成                                                    |
-| `pnpm test:cores`    | 三内核配置、7 组链检查、每内核 7 项 HTTPS 场景                             |
-| `pnpm test:browser`  | 桌面与 390px 窄屏，原生界面和增强流程                                      |
-| `pnpm cores:prepare` | 准备锁定基线内核及其官方源码                                               |
+| 命令                 | 内容                                                                 |
+| -------------------- | -------------------------------------------------------------------- |
+| `pnpm check`         | 格式、lint、严格类型、构建、工程和隔离上游集成、三内核配置及真实连通 |
+| `pnpm test`          | 构建与工程／隔离上游集成                                             |
+| `pnpm test:cores`    | 三内核配置、7 组链式连接、每内核 7 项 HTTPS 场景                     |
+| `pnpm test:browser`  | 桌面及 390px 窄屏、原生页面、统一管理与增强流程                      |
+| `pnpm cores:prepare` | 准备锁定内核与官方源码                                               |
 
-测试入口自动创建临时官方 Sub-Store 容器，使用随机回环端口且不挂个人数据卷，完成后停止容器。需要可用 Docker；缺少上游时明确失败，不静默跳过。浏览器可用 `PLAYWRIGHT_CHANNEL=msedge`；内核检查支持 Windows x64 / Linux x64。构建镜像不运行依赖外部服务的工程测试，发布前应在验证环境运行 `pnpm check`。
+测试自动创建隔离官方 Sub-Store 容器，随机选择并固定测试期间的回环端口，不挂个人数据卷，结束后停止容器。依赖 Docker；缺失或失败不会模拟通过。镜像构建不运行依赖容器的验收。Windows 浏览器可设置 PLAYWRIGHT_CHANNEL=msedge。
 
-2026-09-27 本次实际验证：
+配置与真实连通检查使用 Sub-Store 文件脚本生成的配置；HTTP 目标、链两端使用受控测试服务。浏览器和任务状态测试使用受控探测结果，只用于验证交互和状态，不代表公网节点或 Telegram 已验证。
 
-- Windows `pnpm check`：格式、lint、严格类型、构建及 79 项工程/隔离 Sub-Store 集成测试通过。
-- Windows 与 Linux amd64：Mihomo 1.19.31、sing-box 1.14.1、Xray 26.3.27 配置检查通过，分别包含 41/41/33 个节点；每个平台的 7 组链式连接检查、每内核 7 项真实 HTTPS 场景通过。使用受控测试节点，不代表个人公网节点或所有客户端已验收。
-- Microsoft Edge 桌面与 390px 窄屏：30 项浏览器回归通过，包括原生界面内容编辑/重命名后的 UUID 保留、批量保存、停用测试、链成员保护、来源替换及失败节点明细。
-- Linux 最终运行镜像构建、非 root 只读运行、普通分享与增强发布通过。两个容器重启后节点、引用、产物和上游令牌保留，登录会话失效；撤销分享与上游暂停时读取最近产物通过。使用 Docker Desktop 隔离网络和新临时卷，没有切换现有部署。
-- Compose 配置校验、Koipy 模板生成及防覆盖检查通过；固定 miaospeed 镜像按 Compose 参数启动通过。
+2026-09-27 本轮格式、lint、严格类型和构建通过；隔离上游完整复跑通过 84 项工程测试、三内核配置检查、7 组真实链式连接和 21 项 HTTPS 场景。Edge 桌面与窄屏共 20 项浏览器回归通过。Windows 连续验收中出现过内核启动超时、QUIC 链路失败及一次超时用例返回连接错误，部分 `pnpm check` 因此失败；保留失败日志后完整复跑通过。未放宽超时或跳过用例，间歇性原因尚未确定。
 
-**尚未验收：** 真实 Koipy 激活及 Telegram 测速、更多公网节点和协议组合、v2rayN 实际导入/更新/连接，以及新架构的正式 HTTPS 反代和公网部署。缺少相应凭据或实际环境，未用模拟结果代替。
+更新后的本地服务另外使用现有的一个 VLESS 公网节点重新完成三内核 HTTPS 实测，三次均返回 204；未修改其订阅内容、UUID 或登录密码。
 
-后续手动测试修复：补齐空显示名称的来源展示、Koipy 配置页和增强工具管理页；新增 Fake-IP 诊断及测试目标异常分类。36 项桌面/窄屏浏览器回归和 84 项工程/上游集成测试通过；Koipy 配置写入与保留凭据已验证，真实 Telegram 激活状态仍需用户提供授权配置后确认。
+**需要实际环境另行验收：** 真实 Koipy 授权与 Telegram 测速、v2rayN 导入／更新／连接，以及正式 HTTPS 公网部署。旧版本的实际结果不自动延续到本架构。
 
-同次手动测试已使用用户提供的一个 VLESS 节点，经 Mihomo、sing-box、Xray 分别访问 Cloudflare 测试目标，三个结果均为 HTTP 204；不代表所有协议或客户端均已验收。
+## 原始文档与源码
 
-## 源码
+保留原始文档，不改写其历史内容；缺失的 v1.1 不以 v1.0 冒充：
 
-自有代码采用 AGPL-3.0-only。构建生成 `dist/submeld-source.tar.gz`，增强页面提供下载。内核准备步骤添加对应官方源码及许可证。原生上游由独立官方镜像提供，版本与镜像摘要可单独检查和升级；升级后须验证本项目使用的 API、身份元数据保留及转换字段。
+- [开发规范与安全边界](docs/SubMeld_开发规范与安全边界_v1.0.md)
+- [分阶段开发计划](docs/SubMeld_分阶段开发计划_v1.0.md)
+- [旧版产品设计](docs/SubMeld_产品与技术设计文档_v1.0.md)
+
+自有代码采用 AGPL-3.0-only。构建生成对应源码 `dist/submeld-source.tar.gz`、前端、服务端和自有配套脚本；内核准备添加官方源码及许可证。不复制或修改上游源码，不维护上游分支。升级官方镜像后需验证原生 API、脚本接口、元数据保留与转换字段。

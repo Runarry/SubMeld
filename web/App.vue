@@ -2,29 +2,26 @@
 import { nextTick, onMounted, onBeforeUnmount, ref, provide } from 'vue';
 import HomePage from './HomePage.vue';
 import KoipyPage from './KoipyPage.vue';
-import EnhancementTools from './EnhancementTools.vue';
+import SupportFiles from './SupportFiles.vue';
 import LoginView from './LoginView.vue';
 import NodeLibrary from './NodeLibrary.vue';
 import NodeTestsPage from './NodeTestsPage.vue';
 import { testActionsKey } from './nodeTests';
 import { testBatchSchema, type TestSubject } from '../server/shared/node-tests';
-import SourceLibrary from './SourceLibrary.vue';
+import ChainLibrary from './ChainLibrary.vue';
 import SubscriptionLibrary from './SubscriptionLibrary.vue';
-import WorkbenchPage from './WorkbenchPage.vue';
-import { ApiError, request } from './api';
-import type { WorkbenchItem } from '../server/shared/contracts';
 
-type View =
-  'home' | 'workbench' | 'library' | 'sources' | 'subscriptions' | 'tests' | 'koipy' | 'tools';
+import { ApiError, request } from './api';
+
+type View = 'home' | 'library' | 'chains' | 'subscriptions' | 'tests' | 'koipy' | 'supportFiles';
 const nav = [
   { view: 'home' as const, hash: 'home', label: '服务入口' },
-  { view: 'koipy' as const, hash: 'koipy', label: 'Koipy 管理' },
-  { view: 'tools' as const, hash: 'tools', label: '增强工具' },
-  { view: 'subscriptions' as const, hash: 'subscriptions', label: '增强订阅' },
-  { view: 'sources' as const, hash: 'sources', label: '上游节点预览' },
-  { view: 'library' as const, hash: 'nodes', label: '本地节点' },
+  { view: 'library' as const, hash: 'nodes', label: '节点' },
+  { view: 'chains' as const, hash: 'chains', label: '两跳链' },
+  { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
   { view: 'tests' as const, hash: 'tests', label: '节点测试' },
-  { view: 'workbench' as const, hash: 'workbench', label: '转换工作台' },
+  { view: 'koipy' as const, hash: 'koipy', label: 'Koipy 管理' },
+  { view: 'supportFiles' as const, hash: 'support-files', label: '配套文件' },
 ];
 const authenticated = ref(false);
 const checking = ref(true);
@@ -51,21 +48,22 @@ provide(testActionsKey, {
     setView('tests');
   },
 });
-const workbench = ref<{ appendNodes: (items: WorkbenchItem[]) => void } | null>(null);
 
 function parseHash(): View {
   const key = location.hash.replace(/^#\/?/, '');
-  if (key === 'koipy' || key === 'tools') return key;
+  if (key === 'koipy') return 'koipy';
+  if (key === 'support-files' || key === 'tools') return 'supportFiles';
   if (key === 'tests') return 'tests';
-  if (key === 'sources') return 'sources';
+  if (key === 'chains') return 'chains';
+  if (key === 'sources' || key === 'workbench') return 'library';
   if (key === 'nodes' || key === 'library') return 'library';
-  if (key === 'workbench') return 'workbench';
+
   return key === 'subscriptions' ? 'subscriptions' : 'home';
 }
 function setView(next: View) {
   const item = nav.find((entry) => entry.view === next);
   const hash = '#/' + (item?.hash ?? 'subscriptions');
-  const reload = view.value === next && next !== 'workbench';
+  const reload = view.value === next;
   view.value = reload ? null : next;
   if (location.hash !== hash) history.replaceState(null, '', hash);
   if (reload)
@@ -74,7 +72,7 @@ function setView(next: View) {
     });
 }
 function onHashChange() {
-  if (authenticated.value) view.value = parseHash();
+  if (authenticated.value) setView(parseHash());
 }
 function lockWorkspace() {
   authenticated.value = false;
@@ -117,10 +115,6 @@ async function logout() {
   } finally {
     busy.value = '';
   }
-}
-function openWorkbench(items: WorkbenchItem[]) {
-  workbench.value?.appendNodes(items);
-  setView('workbench');
 }
 onMounted(async () => {
   window.addEventListener('hashchange', onHashChange);
@@ -166,7 +160,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
             d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5zM4 5h8v1.5H4zm0 3h5v1.5H4z"
           />
         </svg>
-        <svg v-else-if="item.view === 'sources'" viewBox="0 0 16 16" aria-hidden="true">
+        <svg v-else-if="item.view === 'chains'" viewBox="0 0 16 16" aria-hidden="true">
           <path
             fill="currentColor"
             d="M8 1.5a4 4 0 0 0-3.46 6H3a2.5 2.5 0 0 0 0 5h10a2.5 2.5 0 0 0 0-5h-1.54A4 4 0 0 0 8 1.5"
@@ -204,16 +198,10 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       </p>
       <HomePage v-if="view === 'home'" :api="api" @navigate="setView" />
       <KoipyPage v-if="view === 'koipy'" :api="api" />
-      <EnhancementTools v-if="view === 'tools'" :api="api" @navigate="setView" />
+      <SupportFiles v-if="view === 'supportFiles'" :api="api" />
       <NodeTestsPage v-if="view === 'tests'" :api="api" :subjects="testSubjects" />
-      <WorkbenchPage v-show="view === 'workbench'" ref="workbench" :api="api" />
-      <NodeLibrary
-        v-if="view === 'library'"
-        :api="api"
-        @load="openWorkbench"
-        @open-sources="setView('sources')"
-      />
-      <SourceLibrary v-if="view === 'sources'" :api="api" @open-nodes="setView('library')" />
+      <NodeLibrary v-if="view === 'library'" :api="api" />
+      <ChainLibrary v-if="view === 'chains'" :api="api" />
       <SubscriptionLibrary v-if="view === 'subscriptions'" :api="api" />
     </main>
   </div>

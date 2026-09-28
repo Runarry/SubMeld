@@ -119,7 +119,9 @@ export class NodeTester {
                 result.message = '测试已取消，已有完成结果保留。';
               } else if (error instanceof AppError) {
                 result.message = error.message;
-                if (
+                if (error.code === 'TARGET_UNSUPPORTED') {
+                  result.status = 'unsupported';
+                } else if (
                   error.diagnostics?.some((diagnostic) => diagnostic.code === 'TARGET_UNSUPPORTED')
                 ) {
                   result.status = 'unsupported';

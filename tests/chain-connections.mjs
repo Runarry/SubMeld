@@ -163,7 +163,7 @@ function serverConfig(inbound) {
     route: { final: 'direct' },
   };
 }
-export async function checkChainConnections(binaries, results) {
+export async function checkChainConnections(binaries, results, render = renderInput) {
   for (const target of ['mihomo', 'singbox', 'xray']) {
     for (const exitProtocol of target === 'xray' ? ['ss'] : ['ss', 'hysteria2', 'tuic']) {
       const caseDir = join(results, 'chain-' + target + '-' + exitProtocol);
@@ -249,9 +249,10 @@ export async function checkChainConnections(binaries, results) {
           join(caseDir, 'entry'),
         );
         await entryCore.ready(entryPort);
-        const result = await renderInput({ target, items: [chain], listenPort: clientPort });
+        const result = await render({ target, items: [chain], listenPort: clientPort });
         const config = target === 'mihomo' ? parse(result.full) : JSON.parse(result.full);
         if (target === 'mihomo') config['log-level'] = 'debug';
+        if (target === 'singbox') config.log = { level: 'debug' };
         client = await start(binaries[target], target, config, join(caseDir, 'client'));
         await client.ready(clientPort, true);
         await socksRequest(clientPort, destination.address().port);

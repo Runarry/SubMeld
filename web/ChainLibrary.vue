@@ -1,360 +1,245 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ApiError } from './api';
-import NodeTestSummary from './NodeTestSummary.vue';
-import { useNodeTests } from './nodeTests';
-import type { TestSubject } from '../server/shared/node-tests';
-import ModalDialog from './ui/ModalDialog.vue';
-import ListPagination from './ui/ListPagination.vue';
-import StatusBadge from './ui/StatusBadge.vue';
+import { onMounted, ref } from 'vue';
 import {
-  chainConfigSchema,
   chainListSchema,
   chainSchema,
+  chainConfigSchema,
   type Chain,
   type ChainConfig,
 } from '../server/shared/chains';
-import { nodeListSchema, type NodeSummary } from '../server/shared/contracts';
-
+import { nodeRefSchema, type NodeView } from '../server/shared/resources';
+import type { TestSubject } from '../server/shared/node-tests';
+import NodePicker from './NodePicker.vue';
+import ModalDialog from './ui/ModalDialog.vue';
+import NodeTestSummary from './NodeTestSummary.vue';
+import { useNodeTests } from './nodeTests';
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
-  refreshKey: number;
-  disabled: boolean;
 }>();
 const rows = ref<Chain[]>([]),
   page = ref(0),
   total = ref(0),
   busy = ref(false),
-  message = ref('');
-const selected = ref<string[]>([]);
-const subject = (chain: Chain): TestSubject => ({
-  kind: 'chain',
-  id: chain.id,
-  revision: chain.revision,
-  entryRevision: chain.entry.revision,
-  exitRevision: chain.exit.revision,
-});
-const testing = useNodeTests(() => rows.value.map(subject), props.api);
-const selectedSubjects = () =>
-  rows.value.filter((chain) => selected.value.includes(chain.id)).map(subject);
-const form = ref<ChainConfig | null>(null),
+  message = ref(''),
   baseline = ref<Chain | null>(null),
-  conflict = ref(false);
-const nodePage = ref(0),
-  nodeTotal = ref(0),
-  candidates = ref<NodeSummary[]>([]);
-const known = ref<Record<string, NodeSummary>>({});
-const locked = computed(() => busy.value || props.disabled);
-const options = computed(() => {
-  const values = new Map(candidates.value.map((node) => [node.id, node]));
-  for (const id of [form.value?.entryNodeId, form.value?.exitNodeId])
-    if (id && known.value[id]) values.set(id, known.value[id]);
-  return [...values.values()];
+  deleting = ref<Chain | null>(null);
+const form = ref<{
+  name: string;
+  enabled: boolean;
+  entry: ChainConfig['entry'] | null;
+  exit: ChainConfig['exit'] | null;
+} | null>(null);
+const refOf = (n: NodeView) =>
+  nodeRefSchema.parse({
+    resourceId: n.resourceId,
+    revision: n.revision,
+    snapshotHash: n.snapshotHash,
+    nodeIndex: n.nodeIndex,
+  });
+const subject = (c: Chain): TestSubject => ({
+  kind: 'chain',
+  id: c.id,
+  revision: c.revision,
+  entry: refOf(c.entryNode!),
+  exit: refOf(c.exitNode!),
 });
-const pathText = computed(
-  () =>
-    '本机 → ' +
-    (known.value[form.value?.entryNodeId ?? '']?.name ?? '前置代理') +
-    ' → ' +
-    (known.value[form.value?.exitNodeId ?? '']?.name ?? '出口代理') +
-    ' → 目标',
+const testing = useNodeTests(
+  () => rows.value.filter((c) => c.entryNode && c.exitNode).map(subject),
+  props.api,
 );
-let alive = true,
-  epoch = 0,
-  listTicket = 0;
-onBeforeUnmount(() => {
-  alive = false;
-  epoch++;
-  listTicket++;
-});
-async function act(action: () => Promise<void>) {
-  if (locked.value) return;
+async function act(fn: () => Promise<void>) {
+  if (busy.value) return;
   busy.value = true;
   message.value = '';
   try {
-    await action();
-  } catch (error) {
-    if (!alive) return;
-    message.value = error instanceof Error ? error.message : '操作失败。';
-    if (error instanceof ApiError && error.status === 409) conflict.value = true;
+    await fn();
+  } catch (e) {
+    message.value = e instanceof Error ? e.message : '操作失败。';
   } finally {
-    if (alive) busy.value = false;
+    busy.value = false;
   }
 }
-async function refresh() {
-  const ticket = ++listTicket;
-  const result = chainListSchema.parse(await props.api('/api/chains?page=' + page.value));
-  if (!alive || ticket !== listTicket) return;
-  rows.value = result.chains;
-  selected.value = selected.value.filter((id) => rows.value.some((chain) => chain.id === id));
-  total.value = result.total;
-  if (!rows.value.length && page.value) {
-    page.value--;
-    await refresh();
-  }
+async function load() {
+  const data = chainListSchema.parse(await props.api('/api/chains?page=' + page.value));
+  rows.value = data.chains;
+  total.value = data.total;
 }
-async function loadCandidates() {
-  const current = epoch;
-  const result = nodeListSchema.parse(await props.api('/api/nodes?page=' + nodePage.value));
-  if (!alive || current !== epoch) return;
-  candidates.value = result.nodes;
-  nodeTotal.value = result.total;
-  for (const node of result.nodes) known.value[node.id] = node;
-}
-function close() {
-  epoch++;
-  form.value = null;
+function create() {
   baseline.value = null;
-  conflict.value = false;
-}
-async function startNew() {
-  await act(async () => {
-    epoch++;
-    baseline.value = null;
-    conflict.value = false;
-    form.value = { name: '', enabled: true, entryNodeId: '', exitNodeId: '' };
-    nodePage.value = 0;
-    await loadCandidates();
-  });
-}
-async function edit(id: string) {
-  await act(async () => {
-    const current = ++epoch;
-    const chain = chainSchema.parse(await props.api('/api/chains/' + id));
-    if (!alive || current !== epoch) return;
-    baseline.value = chain;
-    form.value = chainConfigSchema.strip().parse(chain);
-    known.value[chain.entry.id] = chain.entry;
-    known.value[chain.exit.id] = chain.exit;
-    conflict.value = false;
-    nodePage.value = 0;
-    await loadCandidates();
-  });
+  form.value = { name: '', enabled: true, entry: null, exit: null };
 }
 async function save() {
-  await act(async () => {
-    if (!form.value) return;
-    if (!form.value.name.trim() || !form.value.entryNodeId || !form.value.exitNodeId)
-      throw new Error('请填写链名称，并选择前置代理和出口代理。');
-    if (form.value.entryNodeId === form.value.exitNodeId)
-      throw new Error('前置代理和出口代理必须是不同的本地节点。');
-    const current = epoch;
-    const result = chainSchema.parse(
-      await props.api(
-        baseline.value ? '/api/chains/' + baseline.value.id : '/api/chains',
-        baseline.value ? { ...form.value, revision: baseline.value.revision } : form.value,
-        baseline.value ? 'PATCH' : 'POST',
-      ),
-    );
-    if (!alive || current !== epoch) return;
-    baseline.value = result;
-    form.value = chainConfigSchema.strip().parse(result);
-    known.value[result.entry.id] = result.entry;
-    known.value[result.exit.id] = result.exit;
-    conflict.value = false;
-    await refresh();
-    message.value = '链式代理已保存，可在订阅方案中添加；关联订阅已安排更新。';
-  });
+  const config = chainConfigSchema.safeParse(form.value);
+  if (!config.success) throw new Error('请填写链名称并选择两个节点。');
+  await props.api(
+    '/api/chains' + (baseline.value ? '/' + baseline.value.id : ''),
+    { ...config.data, ...(baseline.value ? { revision: baseline.value.revision } : {}) },
+    baseline.value ? 'PATCH' : 'POST',
+  );
+  form.value = null;
+  await load();
 }
-async function toggle(chain: Chain) {
-  await act(async () => {
-    await props.api(
-      '/api/chains/' + chain.id,
-      { revision: chain.revision, enabled: !chain.enabled },
-      'PATCH',
-    );
-    if (!alive) return;
-    await refresh();
-    message.value = '启用状态已更新，关联订阅旧产物已失效。';
-  });
+async function edit(c: Chain) {
+  baseline.value = chainSchema.parse(await props.api('/api/chains/' + c.id));
+  form.value = chainConfigSchema.strip().parse(baseline.value);
 }
-async function remove(chain: Chain) {
-  if (!window.confirm('删除此链式代理？关联方案将移除此链，两条本地节点会保留。')) return;
-  await act(async () => {
-    await props.api('/api/chains/' + chain.id, { revision: chain.revision }, 'DELETE');
-    if (!alive) return;
-    await refresh();
-    message.value = '链式代理已删除。';
-  });
-}
-function swap() {
-  if (form.value)
-    [form.value.entryNodeId, form.value.exitNodeId] = [
-      form.value.exitNodeId,
-      form.value.entryNodeId,
-    ];
-}
-watch(
-  () => props.refreshKey,
-  () => {
-    void refresh().catch(() => {
-      if (alive) message.value = '链式代理列表刷新失败，请重试。';
-    });
-  },
-);
-onMounted(() => {
-  void refresh().catch(() => {
-    if (alive) message.value = '链式代理列表加载失败，请重试。';
-  });
-});
+onMounted(() => void act(load));
 </script>
-
 <template>
-  <section class="chain-library" aria-label="链式代理管理">
-    <div class="page-header">
+  <section class="page">
+    <header class="page-header">
       <div>
-        <h2>链式代理</h2>
-        <p class="muted">将两个本地节点组合为一条两跳链，再加入订阅方案。原节点修改会同步生效。</p>
+        <h1>两跳链</h1>
+        <p>本机 → 前置 → 出口 → 目标。链定义保存到 Sub-Store。</p>
       </div>
-      <div class="toolbar">
-        <button
-          type="button"
-          :disabled="locked || testing.starting || !selected.length"
-          @click="testing.start(selectedSubjects())"
-        >
-          测试所选链
-        </button>
-        <button type="button" :disabled="locked" @click="act(refresh)">刷新链式代理</button>
-        <button type="button" class="primary" :disabled="locked" @click="startNew">
-          新建链式代理
-        </button>
-      </div>
-    </div>
-    <p v-if="message && !form" role="status" class="notice">{{ message }}</p>
-    <p v-if="testing.error" class="error-note">{{ testing.error }}</p>
-    <p v-if="!rows.length" class="empty-state">还没有链式代理。</p>
-    <ul v-else class="library-list">
-      <li v-for="chain in rows" :key="chain.id">
-        <input
-          v-model="selected"
-          type="checkbox"
-          :value="chain.id"
-          :disabled="locked"
-          :aria-label="'选择测试链 ' + chain.name"
-        />
-        <span class="node-name"
-          >{{ chain.name }}
-          <small>本机 → {{ chain.entry.name }} → {{ chain.exit.name }} → 目标</small>
-          <small
-            >版本 {{ chain.revision }}
-            <StatusBadge
-              :tone="!chain.enabled ? 'off' : chain.available ? 'ok' : 'error'"
-              :label="!chain.enabled ? '禁用' : chain.available ? '启用' : '成员已停用'"
-            />
-          </small>
+      <button class="primary" @click="create">添加两跳链</button>
+    </header>
+    <p v-if="message" role="status" class="notice">{{ message }}</p>
+    <p v-if="testing.error" role="alert">{{ testing.error }}</p>
+    <div class="panel">
+      <p v-if="!rows.length">尚未创建两跳链。</p>
+      <article v-for="chain in rows" :key="chain.id" class="chain-row">
+        <div>
+          <h2>{{ chain.name }}</h2>
+          <p>{{ chain.entry.nodeName }} → {{ chain.exit.nodeName }}</p>
+          <p v-if="chain.error" role="alert">{{ chain.error }}</p>
+          <p v-else>{{ chain.enabled ? '已启用' : '已停用' }}</p>
           <NodeTestSummary
+            v-if="chain.entryNode && chain.exitNode"
             :results="testing.forSubject(subject(chain))"
             @show="testing.show([subject(chain)])"
           />
-        </span>
-        <div class="toolbar">
-          <button
-            type="button"
-            :disabled="locked || testing.starting"
+        </div>
+        <div class="actions">
+          <button :disabled="busy" @click="act(() => edit(chain))">配置</button
+          ><button
+            :disabled="!chain.entryNode || !chain.exitNode || testing.starting"
             @click="testing.start([subject(chain)])"
           >
-            测试整条链
-          </button>
-          <button type="button" :disabled="locked" @click="edit(chain.id)">编辑链</button>
-          <button type="button" :disabled="locked" @click="toggle(chain)">
-            {{ chain.enabled ? '禁用链' : '启用链' }}
-          </button>
-          <button type="button" class="danger linkish" :disabled="locked" @click="remove(chain)">
-            删除链
-          </button>
+            测试整链</button
+          ><button class="danger" :disabled="busy" @click="deleting = chain">删除</button>
         </div>
-      </li>
-    </ul>
-    <ListPagination
-      :page="page"
-      :total="total"
-      :disabled="locked"
-      prev-label="上一页链"
-      next-label="下一页链"
-      @turn="
-        (delta) =>
-          act(async () => {
-            page += delta;
-            await refresh();
-          })
-      "
-    />
-    <ModalDialog
-      v-if="form"
-      :label="baseline ? '编辑链式代理' : '新建链式代理'"
-      :dismissible="!locked"
-      @close="close"
+      </article>
+    </div>
+    <div class="pagination">
+      <button
+        :disabled="page === 0 || busy"
+        @click="
+          page--;
+          act(load);
+        "
+      >
+        上一页</button
+      ><span>{{ page + 1 }}</span
+      ><button
+        :disabled="(page + 1) * 25 >= total || busy"
+        @click="
+          page++;
+          act(load);
+        "
+      >
+        下一页
+      </button>
+    </div>
+    <ModalDialog v-if="form" label="配置两跳链" wide :dismissible="!busy" @close="form = null"
+      ><h2>配置两跳链</h2>
+      <form id="chain-form" class="chain-form" @submit.prevent="act(save)">
+        <label>链名称<input v-model="form.name" required maxlength="512" /></label
+        ><label><input v-model="form.enabled" type="checkbox" />启用</label>
+        <div class="pickers">
+          <NodePicker v-model="form.entry" label="前置" :api="api" /><NodePicker
+            v-model="form.exit"
+            label="出口"
+            :api="api"
+          />
+        </div>
+        <p>成员按所属订阅和精确名称更新；名称消失或重复时生成会报错，需要重新选择。</p>
+        <p v-if="message" role="alert">{{ message }}</p>
+      </form>
+      <template #footer
+        ><button :disabled="busy" @click="form = null">取消</button
+        ><button form="chain-form" type="submit" class="primary" :disabled="busy">
+          保存链
+        </button></template
+      ></ModalDialog
     >
-      <fieldset :disabled="locked" class="library-editor">
-        <legend>{{ baseline ? '编辑链式代理' : '新建链式代理' }}</legend>
-        <p v-if="message" role="status" class="notice">{{ message }}</p>
-        <p v-if="conflict" class="warning-note">
-          服务器已有更新，当前编辑已保留。重新载入会替换未保存内容。
-        </p>
-        <button v-if="conflict && baseline" type="button" @click="edit(baseline.id)">
-          重新载入链版本
-        </button>
-        <label>链名称<input v-model="form.name" maxlength="512" /></label>
-        <label class="check-label"
-          ><input v-model="form.enabled" type="checkbox" />启用链式代理</label
-        >
-        <div class="field-pair">
-          <label
-            >前置代理<select v-model="form.entryNodeId" aria-label="前置代理">
-              <option value="">请选择前置节点</option>
-              <option v-for="node in options" :key="node.id" :value="node.id">
-                {{ node.name }} · {{ node.protocol.toUpperCase()
-                }}{{ node.enabled ? '' : '（已停用）' }}
-              </option>
-            </select></label
-          >
-          <label
-            >出口代理<select v-model="form.exitNodeId" aria-label="出口代理">
-              <option value="">请选择出口节点</option>
-              <option v-for="node in options" :key="node.id" :value="node.id">
-                {{ node.name }} · {{ node.protocol.toUpperCase()
-                }}{{ node.enabled ? '' : '（已停用）' }}
-              </option>
-            </select></label
-          >
-        </div>
-        <ListPagination
-          :page="nodePage"
-          :total="nodeTotal"
-          :disabled="locked"
-          prev-label="上一页候选节点"
-          next-label="下一页候选节点"
-          @turn="
-            (delta) =>
-              act(async () => {
-                nodePage += delta;
-                await loadCandidates();
-              })
+    <ModalDialog v-if="deleting" label="删除两跳链" :dismissible="!busy" @close="deleting = null"
+      ><h2>删除 {{ deleting.name }}</h2>
+      <p>引用此链的输出方案将提示成员缺失，需要重新配置。</p>
+      <template #footer
+        ><button @click="deleting = null">取消</button
+        ><button
+          class="danger"
+          :disabled="busy"
+          @click="
+            act(async () => {
+              if (deleting) {
+                await api('/api/chains/' + deleting.id, { revision: deleting.revision }, 'DELETE');
+                deleting = null;
+                await load();
+              }
+            })
           "
-        />
-        <div class="toolbar">
-          <button type="button" @click="swap">交换两跳顺序</button>
-          <button type="button" @click="act(loadCandidates)">刷新候选节点</button>
-        </div>
-        <p class="chain-path">{{ pathText }}</p>
-        <p v-if="!nodeTotal" class="warning-note">
-          请先保存两个本地节点。来源中的节点可先复制到本地。
-        </p>
-        <p
-          v-if="
-            (form.entryNodeId && !known[form.entryNodeId]?.enabled) ||
-            (form.exitNodeId && !known[form.exitNodeId]?.enabled)
-          "
-          class="warning-note"
         >
-          所选成员已停用，启用该成员后链才能生成。
-        </p>
-        <p class="muted">链式代理只提供 Mihomo、sing-box、Xray 配置；URI／Base64 明确排除此链。</p>
-      </fieldset>
-      <template #footer>
-        <button type="button" class="primary" :disabled="locked" @click="save">保存链式代理</button>
-        <button type="button" :disabled="locked" @click="close">关闭链编辑</button>
-      </template>
-    </ModalDialog>
+          确认删除
+        </button></template
+      ></ModalDialog
+    >
   </section>
 </template>
+<style scoped>
+.chain-row {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding: 18px 0;
+}
+.chain-row h2 {
+  font-size: 17px;
+}
+.chain-row p {
+  overflow-wrap: anywhere;
+}
+.actions,
+.pagination {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pagination {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+.chain-form {
+  display: grid;
+  gap: 14px;
+}
+.chain-form > label {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+}
+.chain-form > label input:not([type='checkbox']) {
+  flex: 1;
+  min-width: 0;
+}
+.pickers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 650px) {
+  .chain-row {
+    display: block;
+  }
+  .pickers {
+    grid-template-columns: 1fr;
+  }
+  .actions {
+    margin-top: 12px;
+  }
+}
+</style>

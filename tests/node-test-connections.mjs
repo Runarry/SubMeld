@@ -10,7 +10,7 @@ import { node, items } from './fixtures.mjs';
 import { dualPort, start } from './chain-connections.mjs';
 import { testCertificate, testKey } from './source-tls-fixture.mjs';
 
-export async function checkNodeTestConnections(binaries, results, versions) {
+export async function checkNodeTestConnections(binaries, results, versions, render = renderInput) {
   for (const target of ['mihomo', 'singbox', 'xray']) {
     const directory = join(results, 'node-test-' + target),
       sockets = new Set();
@@ -78,7 +78,8 @@ export async function checkNodeTestConnections(binaries, results, versions) {
       { signal = new AbortController().signal, path = '/probe', timeoutMs = 4000 } = {},
     ) {
       const port = await freeProbePort();
-      const full = (await renderInput({ target, items: [item], listenPort: port })).full;
+      const full = (await render({ target, items: [item], listenPort: port })).full;
+      let kernelOutput = '';
       try {
         return await runNodeProbe(
           { target, version: versions[target].version, path: binaries[target] },
@@ -87,8 +88,19 @@ export async function checkNodeTestConnections(binaries, results, versions) {
           'https://source.test:' + destination.address().port + path,
           directory,
           signal,
-          { ...options, timeoutMs },
+          {
+            ...options,
+            timeoutMs,
+            onKernelOutput: (output) => {
+              kernelOutput = output;
+            },
+          },
         );
+      } catch (error) {
+        // This fixture contains public test credentials only; production probes never log output.
+        error.fixtureKernelOutput = kernelOutput;
+        error.fixtureConfiguration = full;
+        throw error;
       } finally {
         const listener = createTcpServer();
         listener.listen(port, '127.0.0.1');

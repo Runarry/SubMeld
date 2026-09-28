@@ -28,6 +28,7 @@ type ProbeOptions = {
   validateAddress?: (address: string) => string;
   ca?: ConnectionOptions['ca'];
   timeoutMs?: number;
+  onKernelOutput?: (output: string) => void;
 };
 
 /** HTTPS can only be created over the socket returned by the loopback CONNECT tunnel. */
@@ -246,5 +247,6 @@ export async function runNodeProbe(
     await child?.stop();
     // directory is created by mkdtemp under this application's fixed temporary root.
     await rm(directory, { recursive: true, force: true });
+    options.onKernelOutput?.(child?.output ?? '');
   }
 }

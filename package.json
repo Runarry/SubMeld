@@ -21,7 +21,7 @@
     "dev": "pnpm build && pnpm cores:prepare && concurrently --kill-others --names server,web \"pnpm dev:server\" \"pnpm dev:web\"",
     "dev:server": "node --env-file-if-exists=.env --watch --import tsx server/index.ts --dev",
     "dev:web": "vite",
-    "build": "node scripts/clean-build.mjs && vite build && tsc -p tsconfig.server.json && node scripts/package-source.mjs",
+    "build": "node scripts/clean-build.mjs && vite build && node scripts/build-upstream.mjs && tsc -p tsconfig.server.json && node scripts/package-source.mjs",
     "start": "node --env-file-if-exists=.env dist/server/index.js",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

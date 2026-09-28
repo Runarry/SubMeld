@@ -1,32 +1,20 @@
 import { z } from 'zod';
-import { nodeSummarySchema } from './contracts.js';
-
+import { nodeSelectorSchema, nodeViewSchema, revisionSchema } from './resources.js';
 export const MAX_CHAINS = 100;
 export const chainConfigSchema = z.strictObject({
   name: z.string().trim().min(1).max(512),
   enabled: z.boolean().default(true),
-  entryNodeId: z.string().uuid(),
-  exitNodeId: z.string().uuid(),
+  entry: nodeSelectorSchema,
+  exit: nodeSelectorSchema,
 });
 export type ChainConfig = z.infer<typeof chainConfigSchema>;
-export const chainUpdateSchema = chainConfigSchema
-  .partial()
-  .extend({
-    enabled: z.boolean().optional(),
-    revision: z.number().int().positive(),
-  })
-  .refine((value) => Object.keys(value).length > 1);
 export const chainSchema = chainConfigSchema.extend({
   id: z.string().uuid(),
-  revision: z.number().int().positive(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  entry: nodeSummarySchema,
-  exit: nodeSummarySchema,
+  revision: revisionSchema,
   available: z.boolean(),
+  error: z.string().nullable(),
+  entryNode: nodeViewSchema.nullable(),
+  exitNode: nodeViewSchema.nullable(),
 });
 export type Chain = z.infer<typeof chainSchema>;
-export const chainListSchema = z.strictObject({
-  chains: z.array(chainSchema),
-  total: z.number().int().nonnegative(),
-});
+export const chainListSchema = z.object({ chains: z.array(chainSchema), total: z.number() });

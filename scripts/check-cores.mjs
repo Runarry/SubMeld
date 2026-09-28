@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { renderInput } from '../dist/server/converter/render.js';
+import { nativeRenderer } from '../tests/native-render-fixture.mjs';
 import { items } from '../tests/fixtures.mjs';
 import { renderFixtures } from '../tests/render-fixtures.mjs';
 import { chainFixtures } from '../tests/chain-fixtures.mjs';
@@ -30,73 +30,78 @@ function execute(binary, args) {
     );
   return result.stdout + result.stderr;
 }
-const binaries = {};
-for (const [target, lock] of Object.entries(locks)) {
-  const asset = lock.platforms[platform];
-  if (!asset)
-    throw new Error('No locked test kernel for ' + platform + '; no checks were skipped.');
-  const dir = join(cache, target + '-' + lock.version, platform);
-  await mkdir(dir, { recursive: true });
-  const archive = join(dir, asset.asset);
-  let data;
-  try {
-    data = await readFile(archive);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  if (!data) {
-    console.log('Downloading locked ' + target + ' ' + lock.version);
-    const response = await fetch(
-      'https://github.com/' + lock.repo + '/releases/download/' + lock.tag + '/' + asset.asset,
-      { signal: AbortSignal.timeout(120000) },
+const native = await nativeRenderer();
+try {
+  const binaries = {};
+  for (const [target, lock] of Object.entries(locks)) {
+    const asset = lock.platforms[platform];
+    if (!asset)
+      throw new Error('No locked test kernel for ' + platform + '; no checks were skipped.');
+    const dir = join(cache, target + '-' + lock.version, platform);
+    await mkdir(dir, { recursive: true });
+    const archive = join(dir, asset.asset);
+    let data;
+    try {
+      data = await readFile(archive);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    if (!data) {
+      console.log('Downloading locked ' + target + ' ' + lock.version);
+      const response = await fetch(
+        'https://github.com/' + lock.repo + '/releases/download/' + lock.tag + '/' + asset.asset,
+        { signal: AbortSignal.timeout(120000) },
+      );
+      if (!response.ok) throw new Error('Kernel download failed: HTTP ' + response.status);
+      data = Buffer.from(await response.arrayBuffer());
+    }
+    assert.equal(
+      createHash('sha256').update(data).digest('hex'),
+      asset.sha256,
+      'Official kernel archive digest mismatch',
     );
-    if (!response.ok) throw new Error('Kernel download failed: HTTP ' + response.status);
-    data = Buffer.from(await response.arrayBuffer());
+    await writeFile(archive, data);
+    const binary = join(dir, asset.binary);
+    // Re-extract from the verified archive, so a modified cached executable cannot pass unnoticed.
+    if (asset.asset.endsWith('.gz') && !asset.asset.endsWith('.tar.gz'))
+      await writeFile(binary, gunzipSync(data));
+    else if (asset.asset.endsWith('.zip') && process.platform !== 'win32')
+      execute('unzip', ['-o', archive, '-d', dir]);
+    else execute('tar', ['-xf', archive, '-C', dir]);
+    await access(binary);
+    if (process.platform !== 'win32') await chmod(binary, 0o700);
+    const version = execute(binary, target === 'mihomo' ? ['-v'] : ['version']);
+    assert.ok(version.includes(lock.version), target + ' version mismatch');
+    binaries[target] = binary;
+    const ordinary = items(...renderFixtures(target));
+    const generated = await native.render({
+      target,
+      items: [...ordinary, ...chainFixtures(target, ordinary.length)],
+      listenPort: 1080,
+    });
+    const config = join(results, target + (target === 'mihomo' ? '.yaml' : '.json'));
+    await writeFile(config, generated.full);
+    const args =
+      target === 'mihomo'
+        ? ['-t', '-d', results, '-f', config]
+        : target === 'singbox'
+          ? ['check', '-c', config]
+          : ['run', '-test', '-c', config];
+    execute(binary, args);
+    console.log(
+      'PASS ' +
+        target +
+        ' ' +
+        lock.version +
+        ': ' +
+        generated.counts.output +
+        ' nodes, complete configuration',
+    );
   }
-  assert.equal(
-    createHash('sha256').update(data).digest('hex'),
-    asset.sha256,
-    'Official kernel archive digest mismatch',
-  );
-  await writeFile(archive, data);
-  const binary = join(dir, asset.binary);
-  // Re-extract from the verified archive, so a modified cached executable cannot pass unnoticed.
-  if (asset.asset.endsWith('.gz') && !asset.asset.endsWith('.tar.gz'))
-    await writeFile(binary, gunzipSync(data));
-  else if (asset.asset.endsWith('.zip') && process.platform !== 'win32')
-    execute('unzip', ['-o', archive, '-d', dir]);
-  else execute('tar', ['-xf', archive, '-C', dir]);
-  await access(binary);
-  if (process.platform !== 'win32') await chmod(binary, 0o700);
-  const version = execute(binary, target === 'mihomo' ? ['-v'] : ['version']);
-  assert.ok(version.includes(lock.version), target + ' version mismatch');
-  binaries[target] = binary;
-  const ordinary = items(...renderFixtures(target));
-  const generated = await renderInput({
-    target,
-    items: [...ordinary, ...chainFixtures(target, ordinary.length)],
-    listenPort: 1080,
-  });
-  const config = join(results, target + (target === 'mihomo' ? '.yaml' : '.json'));
-  await writeFile(config, generated.full);
-  const args =
-    target === 'mihomo'
-      ? ['-t', '-d', results, '-f', config]
-      : target === 'singbox'
-        ? ['check', '-c', config]
-        : ['run', '-test', '-c', config];
-  execute(binary, args);
-  console.log(
-    'PASS ' +
-      target +
-      ' ' +
-      lock.version +
-      ': ' +
-      generated.counts.output +
-      ' nodes, complete configuration',
-  );
+
+  await checkChainConnections(binaries, results, native.render);
+
+  await checkNodeTestConnections(binaries, results, locks, native.render);
+} finally {
+  native.close();
 }
-
-await checkChainConnections(binaries, results);
-
-await checkNodeTestConnections(binaries, results, locks);

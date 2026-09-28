@@ -986,7 +986,7 @@ summary {
     padding: 12px;
   }
   .modal-dialog {
-    max-height: 100%;
+    max-height: calc(100dvh - 52px - var(--bottom-nav) - 24px);
   }
   .address-row {
     grid-template-columns: 1fr;

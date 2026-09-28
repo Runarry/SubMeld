@@ -36,23 +36,14 @@ test('new settings initialize once, preserve password hashes and enforce single 
     assert.equal(reopened.getPasswordHash(), hash);
     reopened.close();
     const db = new Database(join(dir.path, 'submeld-v2.sqlite'));
-    assert.equal(db.pragma('user_version', { simple: true }), 1);
+    assert.equal(db.pragma('user_version', { simple: true }), 2);
     assert.deepEqual(
       db
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
         .all()
         .map((r) => r.name)
         .sort(),
-      [
-        'settings',
-        'nodes',
-        'sources',
-        'subscriptions',
-        'subscription_inputs',
-        'artifacts',
-        'chains',
-        'node_test_results',
-      ].sort(),
+      ['settings', 'node_test_results'].sort(),
     );
     db.close();
     assert.equal(
@@ -126,4 +117,45 @@ test('HTTP is only available with explicit loopback development configuration', 
     loadConfig(true, { PUBLIC_ORIGIN: 'http://127.0.0.1:5173', DATA_DIR: 'data' }).development,
     true,
   );
+});
+
+test('empty v2 business definitions upgrade while preserving account settings and legacy test records', async () => {
+  const dir = temporary();
+  let settings;
+  try {
+    const hash = await hashPassword('migration-test-only');
+    const db = new Database(join(dir.path, 'submeld-v2.sqlite'));
+    db.exec(
+      'CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE nodes(id TEXT PRIMARY KEY); CREATE TABLE sources(id TEXT PRIMARY KEY); CREATE TABLE chains(id TEXT PRIMARY KEY); CREATE TABLE subscriptions(id TEXT PRIMARY KEY); CREATE TABLE subscription_inputs(id TEXT); CREATE TABLE artifacts(id TEXT); CREATE TABLE node_test_results(key TEXT PRIMARY KEY,node_id TEXT REFERENCES nodes(id),result_json TEXT NOT NULL); PRAGMA user_version=1;',
+    );
+    db.prepare('INSERT INTO settings VALUES (?,?)').run('admin_password_hash', hash);
+    db.prepare('INSERT INTO node_test_results VALUES (?,NULL,?)').run(
+      'legacy-reference',
+      '{"legacy":true}',
+    );
+    db.close();
+    settings = openSettings(dir.path, true);
+    assert.equal(settings.getPasswordHash(), hash);
+    settings.close();
+    settings = undefined;
+    const upgraded = new Database(join(dir.path, 'submeld-v2.sqlite'), { readonly: true });
+    assert.equal(upgraded.pragma('user_version', { simple: true }), 2);
+    assert.equal(
+      upgraded
+        .prepare('SELECT result_json FROM node_test_results WHERE key=?')
+        .get('legacy-reference').result_json,
+      '{"legacy":true}',
+    );
+    assert.deepEqual(
+      upgraded
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .all()
+        .map((r) => r.name),
+      ['node_test_results', 'settings'],
+    );
+    upgraded.close();
+  } finally {
+    settings?.close();
+    dir.cleanup();
+  }
 });

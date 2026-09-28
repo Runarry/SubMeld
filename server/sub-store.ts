@@ -6,7 +6,10 @@ export const upstreamRecordSchema = z.object({ name: z.string().min(1) }).catcha
 export type UpstreamRecord = z.infer<typeof upstreamRecordSchema>;
 export const upstreamIdentitySchema = z.object({
   id: z.string().uuid(),
-  kind: z.enum(['node', 'source']),
+  role: z.enum(['chain', 'plan', 'output', 'template', 'runtime']).optional(),
+  version: z.number().int().optional(),
+  parent: z.string().optional(),
+  format: z.string().optional(),
 });
 export const identityKey = '_submeld';
 
@@ -90,10 +93,43 @@ export class SubStoreClient {
       );
     return envelope.data.data;
   }
-  async records(type: 'sub' | 'collection') {
+  async records(type: 'sub' | 'collection' | 'file') {
     return z
       .array(upstreamRecordSchema)
-      .parse(await this.api(type === 'sub' ? '/api/subs' : '/api/collections'));
+      .parse(
+        await this.api(
+          type === 'sub' ? '/api/subs' : type === 'file' ? '/api/wholeFiles' : '/api/collections',
+        ),
+      );
+  }
+  async preview(type: 'sub' | 'collection', resource: UpstreamRecord, force = false) {
+    return z
+      .object({
+        original: z.array(z.record(z.string(), z.unknown())),
+        processed: z.array(z.record(z.string(), z.unknown())),
+      })
+      .parse(
+        await this.api('/api/preview/' + type, {
+          ...resource,
+          ...(force ? { noCache: true } : {}),
+        }),
+      );
+  }
+  async tokens(name: string) {
+    return z
+      .array(z.object({ token: z.string(), name: z.string(), type: z.string() }))
+      .parse(await this.api('/api/tokens?type=file&name=' + encodeURIComponent(name)));
+  }
+  async revoke(name: string) {
+    for (const item of await this.tokens(name))
+      await this.api(
+        '/api/token/' +
+          encodeURIComponent(item.token) +
+          '?type=file&name=' +
+          encodeURIComponent(name),
+        undefined,
+        'DELETE',
+      );
   }
   async convert(
     data: string,

@@ -6,7 +6,7 @@ import { loadConfig } from './config.js';
 import { openSettings } from './database.js';
 import { Auth } from './auth.js';
 import { Converter } from './converter/pool.js';
-import { Publisher } from './publisher.js';
+
 import { SubStoreClient } from './sub-store.js';
 import { KernelManager } from './kernels.js';
 import { NodeTester } from './node-tests.js';
@@ -37,12 +37,6 @@ async function main() {
     settings.close();
     throw error;
   }
-  const publisher = new Publisher(
-    settings.subscriptions,
-    settings.nodes,
-    settings.sources,
-    converter,
-  );
 
   const kernels = new KernelManager(config.dataDir);
   const tester = new NodeTester(settings.nodeTests, kernels, converter, config.dataDir);
@@ -56,19 +50,16 @@ async function main() {
       tester,
       config,
       auth,
-      converter,
+
       nodes: settings.nodes,
       chains: settings.chains,
-      sources: settings.sources,
+
       subscriptions: settings.subscriptions,
-      publisher,
     });
-    publisher.start();
   } catch (error) {
     await tester.close();
     await kernels.close();
 
-    await publisher.close();
     await converter.close();
     auth.close();
     settings.close();
@@ -87,7 +78,6 @@ async function main() {
     await tester.close();
     await kernels.close();
 
-    await publisher.close();
     await converter.close();
     auth.close();
     settings.close();

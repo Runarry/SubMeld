@@ -19,7 +19,6 @@ import {
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
   subjects: TestSubject[];
-  settingsOnly?: boolean;
 }>();
 const batch = ref<TestBatch | null>(null),
   kernels = ref<KernelStatus[]>([]),
@@ -131,11 +130,9 @@ onBeforeUnmount(() => {
   <section class="library node-tests-page" aria-label="节点测试">
     <div class="page-header">
       <div>
-        <h2 v-if="settingsOnly">测试与内核设置</h2>
-        <h1 v-else>节点测试</h1>
+        <h1>节点测试</h1>
         <p class="muted">
-          从部署 SubMeld 的主机，经真实内核访问 HTTPS
-          地址。请在本地节点、来源节点或链列表中选择测试对象。
+          从部署 SubMeld 的主机，经真实内核访问 HTTPS 地址。请在节点或两跳链列表中选择测试对象。
         </p>
       </div>
     </div>
@@ -148,7 +145,10 @@ onBeforeUnmount(() => {
       <button
         type="button"
         :disabled="busy || url === DEFAULT_PROBE_URL"
-        @click="url = DEFAULT_PROBE_URL"
+        @click="
+          url = DEFAULT_PROBE_URL;
+          message = '';
+        "
       >
         使用默认测试地址
       </button>
@@ -187,7 +187,7 @@ onBeforeUnmount(() => {
         </article>
       </div>
     </section>
-    <section v-if="!settingsOnly" aria-label="测试进度">
+    <section aria-label="测试进度">
       <div class="page-header">
         <h2>测试结果</h2>
         <div class="toolbar">
@@ -241,7 +241,7 @@ onBeforeUnmount(() => {
           v-for="result in results"
           :key="
             result.subject.kind +
-            result.subject.id +
+            (result.subject.kind === 'node' ? result.subject.resourceId : result.subject.id) +
             ('nodeIndex' in result.subject ? result.subject.nodeIndex : '') +
             result.core
           "

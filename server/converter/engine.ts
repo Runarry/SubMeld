@@ -53,7 +53,7 @@ export async function produceUpstream(
   proxies: unknown[],
   target: string,
   type?: string,
-  client = new SubStoreClient(),
+  client: Pick<SubStoreClient, 'convert'> = new SubStoreClient(),
   signal?: AbortSignal,
 ): Promise<unknown> {
   return client.convert(
@@ -66,7 +66,7 @@ export async function produceUpstream(
 
 export async function parseInput(
   input: unknown,
-  client = new SubStoreClient(),
+  client: Pick<SubStoreClient, 'convert'> = new SubStoreClient(),
   signal?: AbortSignal,
 ): Promise<ParseResult> {
   const request = parseRequestSchema.safeParse(input);
@@ -135,7 +135,7 @@ export function prepareItems(input: unknown) {
 }
 export async function produceInput(
   input: unknown,
-  client = new SubStoreClient(),
+  client: Pick<SubStoreClient, 'convert'> = new SubStoreClient(),
   signal?: AbortSignal,
 ): Promise<ProduceResult> {
   const { items, included, diagnostics } = prepareItems(input);

@@ -1,3 +1,5 @@
+import { createServer } from 'node:net';
+import { once } from 'node:events';
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +11,11 @@ const lock = JSON.parse(readFileSync('upstreams.lock.json', 'utf8'));
 const name = 'submeld-test-' + randomUUID();
 const docker = (args) =>
   execFileSync('docker', args, { encoding: 'utf8', windowsHide: true, timeout: 120000 }).trim();
+const reservation = createServer();
+reservation.listen(0, '127.0.0.1');
+await once(reservation, 'listening');
+const reservedPort = reservation.address().port;
+await new Promise((resolve) => reservation.close(resolve));
 let started = false;
 try {
   docker([
@@ -20,7 +27,8 @@ try {
     '--label',
     'submeld.purpose=isolated-test',
     '-p',
-    '127.0.0.1::3000',
+    '127.0.0.1:' + reservedPort + ':3000',
+    ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
     '-e',
     'SUB_STORE_BACKEND_API_HOST=0.0.0.0',
     '-e',
@@ -60,7 +68,13 @@ try {
       );
     });
   if (mode === 'test' || mode === 'all')
-    await run(['--test', '--test-concurrency=1', 'tests/*.test.mjs']);
+    await run([
+      '--test',
+      '--test-concurrency=1',
+      ...(mode === 'test' && process.argv.length > 3
+        ? process.argv.slice(3)
+        : ['tests/*.test.mjs']),
+    ]);
   if (mode === 'cores' || mode === 'all') await run(['scripts/check-cores.mjs']);
   if (mode === 'browser')
     await run(['node_modules/@playwright/test/cli.js', 'test', ...process.argv.slice(3)]);
