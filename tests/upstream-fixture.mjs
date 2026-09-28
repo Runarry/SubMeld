@@ -41,10 +41,14 @@ export async function fixture(t, options = {}) {
     dataDir: directory,
     development: true,
     subStoreUrl: client.origin,
-    telegramBot: '',
+    miaospeedUrl: process.env.MIAOSPEED_URL ?? '',
+    miaospeedToken: process.env.MIAOSPEED_TOKEN ?? '',
+    miaospeedBridgeHost: process.env.MIAOSPEED_BRIDGE_HOST ?? 'host.docker.internal',
   };
   const app = createApp({ ...store, tester, auth, config, webRoot: resolve('dist/web') });
+  const cleanups = [];
   t.after(async () => {
+    for (const cleanup of cleanups.reverse()) await cleanup();
     await tester?.close();
     await converter.close?.();
     auth.close();
@@ -73,7 +77,19 @@ export async function fixture(t, options = {}) {
       headers: { ...headers, Cookie: cookie },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-  return { ...store, client, converter, tester, auth, app, request, cookie, directory, config };
+  return {
+    ...store,
+    client,
+    converter,
+    tester,
+    auth,
+    app,
+    request,
+    cookie,
+    directory,
+    config,
+    beforeClose: (cleanup) => cleanups.push(cleanup),
+  };
 }
 export async function waitFor(fn, timeout = 15000) {
   const end = Date.now() + timeout;

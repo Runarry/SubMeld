@@ -34,7 +34,8 @@ test('unified batch testing includes excluded originals and retains results and 
       await checkbox.check();
     await expect(page.locator('.selection-bar')).toContainText('已选 2');
     await page.getByRole('button', { name: '测试所选', exact: true }).click();
-    await page.getByRole('button', { name: '查看测试进度', exact: true }).click();
+    await page.getByRole('button', { name: '三内核检查', exact: true }).click();
+    await page.getByRole('button', { name: '开始三内核检查', exact: true }).click();
     await expect(page.getByRole('progressbar', { name: '测试进度' })).toBeVisible();
     await expect
       .poll(async () => (await api(page, '/api/node-tests/current')).batch.state, {
@@ -76,8 +77,11 @@ test('batch cancellation remains available after navigation', async ({ page }, i
       .first()
       .getByRole('button', { name: '测试', exact: true })
       .click();
+    await page.getByRole('button', { name: '三内核检查', exact: true }).click();
+    await page.getByRole('button', { name: '开始三内核检查', exact: true }).click();
     await page.getByRole('button', { name: '输出方案', exact: true }).click();
-    await page.getByRole('button', { name: '节点测试', exact: true }).click();
+    await page.getByRole('button', { name: '测试中心', exact: true }).click();
+    await page.getByRole('button', { name: '三内核检查', exact: true }).click();
     await page.getByRole('button', { name: '取消测试', exact: true }).click();
     await expect
       .poll(async () => (await api(page, '/api/node-tests/current')).batch.state)

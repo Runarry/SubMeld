@@ -2,14 +2,12 @@
 import { ref, onMounted } from 'vue';
 import { z } from 'zod';
 const props = defineProps<{ api: (path: string) => Promise<unknown> }>();
-const emit = defineEmits<{ navigate: [view: 'library' | 'koipy'] }>();
-const links = ref<{ subStore: string; telegram: string | null }>({ subStore: '/', telegram: null });
+const emit = defineEmits<{ navigate: [view: 'library' | 'tests'] }>();
+const links = ref<{ subStore: string }>({ subStore: '/' });
 const error = ref('');
 onMounted(async () => {
   try {
-    links.value = z
-      .object({ subStore: z.string(), telegram: z.string().nullable() })
-      .parse(await props.api('/api/integrations'));
+    links.value = z.object({ subStore: z.string() }).parse(await props.api('/api/integrations'));
   } catch {
     error.value = '入口信息暂不可用。';
   }
@@ -20,7 +18,7 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1>订阅与测试</h1>
-        <p>用 Sub-Store 管理订阅，用 Koipy 在 Telegram 测速。</p>
+        <p>用 Sub-Store 管理订阅，在测试中心检查节点与两跳链的质量。</p>
       </div>
     </header>
     <div class="panel">
@@ -30,13 +28,11 @@ onMounted(async () => {
       <button type="button" @click="emit('navigate', 'library')">查看 Sub-Store 节点</button>
     </div>
     <div class="panel">
-      <h2>Koipy</h2>
-      <p>将普通节点的 Mihomo 分享链接发给自己的机器人，按 Koipy 指令测试并查看结果。</p>
-      <a v-if="links.telegram" :href="links.telegram" target="_blank" rel="noreferrer"
-        >打开 Telegram 机器人</a
-      >
-      <p v-else>机器人入口尚未配置。</p>
-      <button type="button" @click="emit('navigate', 'koipy')">配置 Koipy</button>
+      <h2>综合测试</h2>
+      <p>
+        查看上下行速度、延迟、丢包、解锁与入口/出口拓扑。也可临时粘贴节点或上传配置，无需保存为订阅。
+      </p>
+      <button type="button" @click="emit('navigate', 'tests')">打开测试中心</button>
     </div>
     <p v-if="error" role="alert">{{ error }}</p>
   </section>

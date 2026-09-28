@@ -3,10 +3,9 @@
     "image": "xream/sub-store@sha256:7b724d57b1ac60d608211b3f16210f870818648b62ab5a9fa0512617ea7e6fc5",
     "backendVersion": "2.42.2"
   },
-  "koipy": {
-    "image": "koipy/koipy@sha256:af5a79268fc348ebe3e1fc5b022c1bece24371e3da80f15e1c29e813a3dccc39"
-  },
   "miaospeed": {
-    "image": "airportr/miaospeed@sha256:16c7181c35f2f43f55bfa2b14dc73b43feb5bf7eaea6cfa21a716a31a60b6659"
+    "image": "airportr/miaospeed@sha256:16c7181c35f2f43f55bfa2b14dc73b43feb5bf7eaea6cfa21a716a31a60b6659",
+    "version": "4.7.6",
+    "apiVersion": 3
   }
 }

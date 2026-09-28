@@ -2,7 +2,7 @@ import { UpstreamFiles } from './upstream-files.js';
 import { UpstreamResources } from './upstream-resources.js';
 import { SubStoreClient } from './sub-store.js';
 import { frontendWorkerBoundary } from './frontend-worker.js';
-import type { KoipySettingsStore } from './koipy.js';
+import { type MiaospeedTester, validateSpeedSettings } from './miaospeed.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,9 +26,10 @@ import { AppError, publicError } from './errors.js';
 import { readJson } from './input.js';
 import { MAX_BYTES } from './shared/contracts.js';
 import { revisionSchema } from './shared/resources.js';
+import { scriptConfigSchema } from './shared/miaospeed.js';
 
 export type AppOptions = {
-  koipy: KoipySettingsStore;
+  miaospeed?: MiaospeedTester;
   resources: UpstreamResources;
   webRoot?: string;
   tester?: NodeTester;
@@ -39,7 +40,7 @@ export type AppOptions = {
   auth: Auth;
 };
 export function createApp({
-  koipy,
+  miaospeed,
   resources,
   webRoot,
   tester,
@@ -60,6 +61,7 @@ export function createApp({
     '/api/node-tests',
     '/api/kernels',
     '/api/integrations',
+    '/api/miaospeed',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -85,6 +87,7 @@ export function createApp({
         '/api/node-tests/',
         '/api/kernels/',
         '/api/integrations/',
+        '/api/miaospeed/',
       ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
@@ -126,16 +129,72 @@ export function createApp({
   app.get('/api/integrations', (c) => {
     if (!auth.valid(getCookie(c, cookieName)))
       throw new AppError('UNAUTHENTICATED', '请先登录。', 401);
-    const username = koipy.username(config.telegramBot);
     return c.json({
       subStore: '/?api=' + encodeURIComponent(config.publicOrigin + '/upstream/sub-store'),
-      telegram: username ? 'https://t.me/' + username : null,
     });
   });
-  app.get('/api/integrations/koipy', (c) => c.json(koipy.get(config.telegramBot)));
-  app.patch('/api/integrations/koipy', async (c) =>
-    c.json(koipy.update(await readJson(c.req.raw, 32 * 1024))),
+  const speed = () => {
+    if (!miaospeed) throw new AppError('TEST_UNAVAILABLE', '综合测试服务尚未就绪。', 503);
+    return miaospeed;
+  };
+  app.get('/api/miaospeed/status', (c) => c.json(speed().status()));
+  app.post('/api/miaospeed/status/check', async (c) => {
+    await empty(c.req.raw);
+    return c.json(await speed().check());
+  });
+  app.get('/api/miaospeed/settings', (c) => c.json(speed().store.settings()));
+  app.patch('/api/miaospeed/settings', async (c) =>
+    c.json(speed().store.updateSettings(validateSpeedSettings(await readJson(c.req.raw, 8192)))),
   );
+  app.post('/api/miaospeed/preview', async (c) =>
+    c.json(await speed().input.preview(await readJson(c.req.raw, 26 * 1024 * 1024)), 201),
+  );
+  app.post('/api/miaospeed/tests', async (c) =>
+    c.json(await speed().start(await readJson(c.req.raw, MAX_BYTES)), 202),
+  );
+  app.get('/api/miaospeed/tests/current', async (c) => c.json(await speed().current()));
+  app.get('/api/miaospeed/tests/:id', async (c) => c.json(await speed().report(c.req.param('id'))));
+  app.post('/api/miaospeed/tests/:id/cancel', async (c) => {
+    await empty(c.req.raw);
+    return c.json(speed().cancel(c.req.param('id')));
+  });
+  app.get('/api/miaospeed/reports', (c) =>
+    c.json(speed().store.list(listPage(c.req.query('page')))),
+  );
+  app.get('/api/miaospeed/reports/:id', async (c) =>
+    c.json(await speed().report(c.req.param('id'))),
+  );
+  app.delete('/api/miaospeed/reports/:id', async (c) => {
+    await empty(c.req.raw);
+    return c.json(speed().store.remove(c.req.param('id')));
+  });
+  app.get('/api/miaospeed/scripts', async (c) => {
+    await resources.sync();
+    return c.json(speed().scripts.list());
+  });
+  app.post('/api/miaospeed/scripts/initialize', async (c) => {
+    await empty(c.req.raw);
+    return c.json(await speed().scripts.initialize());
+  });
+  app.post('/api/miaospeed/scripts', async (c) =>
+    c.json(await speed().scripts.put(await readJson(c.req.raw, MAX_BYTES)), 201),
+  );
+  app.patch('/api/miaospeed/scripts/:id', async (c) =>
+    c.json(await speed().scripts.put(await readJson(c.req.raw, MAX_BYTES), c.req.param('id'))),
+  );
+  app.delete('/api/miaospeed/scripts/:id', async (c) =>
+    c.json(await speed().scripts.remove(c.req.param('id'), await requestRevision(c.req.raw))),
+  );
+  app.post('/api/miaospeed/scripts/:id/restore', async (c) => {
+    const revision = await requestRevision(c.req.raw);
+    await resources.sync();
+    const old = speed()
+      .scripts.list()
+      .scripts.find((s) => s.id === c.req.param('id'));
+    if (!old) throw new AppError('NOT_FOUND', '脚本已不存在。', 404);
+    const data = scriptConfigSchema.strip().parse(old);
+    return c.json(await speed().scripts.put({ ...data, revision }, old.id, true));
+  });
   const supportFiles = new UpstreamFiles(resources);
   app.get('/api/integrations/files', async (c) => {
     await resources.sync();

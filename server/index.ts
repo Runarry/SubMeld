@@ -10,6 +10,7 @@ import { Converter } from './converter/pool.js';
 import { SubStoreClient } from './sub-store.js';
 import { KernelManager } from './kernels.js';
 import { NodeTester } from './node-tests.js';
+import { MiaospeedTester } from './miaospeed.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -22,7 +23,7 @@ async function main() {
       throw new Error('数据目录不能位于网页目录内。');
   }
   const client = new SubStoreClient(config.subStoreUrl);
-  const settings = openSettings(config.dataDir, config.development, client, config.koipyConfigPath);
+  const settings = openSettings(config.dataDir, config.development, client);
   const passwordHash = settings.getPasswordHash();
   if (!passwordHash) {
     settings.close();
@@ -39,12 +40,28 @@ async function main() {
   }
 
   const kernels = new KernelManager(config.dataDir);
-  const tester = new NodeTester(settings.nodeTests, kernels, converter, config.dataDir);
+  const tester = new NodeTester(
+    settings.nodeTests,
+    kernels,
+    converter,
+    config.dataDir,
+    undefined,
+    settings.testActivity,
+  );
+  const miaospeed = new MiaospeedTester(
+    settings.miaospeedStore,
+    settings.miaospeedScripts,
+    settings.miaospeedInput,
+    kernels,
+    converter,
+    settings.testActivity,
+    config,
+  );
   let app: ReturnType<typeof createApp>;
   try {
     await kernels.initialize();
     app = createApp({
-      koipy: settings.koipy,
+      miaospeed,
       webRoot,
       resources: settings.resources,
       tester,
@@ -57,6 +74,7 @@ async function main() {
       subscriptions: settings.subscriptions,
     });
   } catch (error) {
+    await miaospeed.close();
     await tester.close();
     await kernels.close();
 
@@ -75,6 +93,7 @@ async function main() {
     closing = true;
     server.close();
     if ('closeAllConnections' in server) server.closeAllConnections();
+    await miaospeed.close();
     await tester.close();
     await kernels.close();
 

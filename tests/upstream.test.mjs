@@ -47,7 +47,7 @@ test('unified local deletion preserves other fields and operations; SQLite has n
       .all()
       .map((r) => r.name)
       .sort(),
-    ['node_test_results', 'settings'],
+    ['node_test_results', 'settings', 'speed_reports', 'speed_results'],
   );
   db.close();
   f.close();

@@ -27,7 +27,6 @@ before(async () => {
   const webRoot = fileURLToPath(new URL('../dist/web/', import.meta.url));
   server = serve({
     fetch: createApp({
-      koipy: settings.koipy,
       webRoot,
       resources: settings.resources,
       config,

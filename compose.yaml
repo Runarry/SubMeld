@@ -6,13 +6,13 @@ services:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN}
       DATA_DIR: /data
       SUB_STORE_URL: http://sub-store:3000/gateway
-      KOIPY_BOT_USERNAME: ${KOIPY_BOT_USERNAME:-}
-      KOIPY_CONFIG_PATH: /integrations/koipy/config.yaml
+      MIAOSPEED_URL: ws://miaospeed:8765/miaospeed
+      MIAOSPEED_TOKEN: ${MIAOSPEED_TOKEN:?Set MIAOSPEED_TOKEN}
+      MIAOSPEED_BRIDGE_HOST: submeld
     ports:
       - '127.0.0.1:3000:3000'
     volumes:
       - submeld-v2-data:/data
-      - ./runtime-v2/koipy:/integrations/koipy
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m,mode=1777
@@ -22,7 +22,7 @@ services:
     pids_limit: 64
     restart: unless-stopped
     init: true
-    depends_on: [sub-store]
+    depends_on: [sub-store, miaospeed]
     healthcheck:
       test:
         [
@@ -46,12 +46,6 @@ services:
     volumes:
       - sub-store-v2-data:/opt/app/data
     restart: unless-stopped
-  koipy:
-    image: koipy/koipy@sha256:af5a79268fc348ebe3e1fc5b022c1bece24371e3da80f15e1c29e813a3dccc39
-    volumes:
-      - ./runtime-v2/koipy/config.yaml:/app/config.yaml
-    depends_on: [miaospeed]
-    restart: unless-stopped
   miaospeed:
     image: airportr/miaospeed@sha256:16c7181c35f2f43f55bfa2b14dc73b43feb5bf7eaea6cfa21a716a31a60b6659
     command:
@@ -63,6 +57,7 @@ services:
         'miaospeed',
         '-token',
         '${MIAOSPEED_TOKEN:?Set MIAOSPEED_TOKEN}',
+        '-upload',
       ]
     restart: unless-stopped
 volumes:

@@ -1,0 +1,22 @@
+{
+  "repo": "CloudPassenger/miaospeed-scripts",
+  "version": "v1.0.0",
+  "archiveSha256": "0d6812b7c159a652e770194eaa426fedd56ace27e4419423e02d58b7041a32f8",
+  "indexSha256": "faebf0e16aa05e96831af724f367e42d75b796f8c6fc38c8fb89e6943d828be7",
+  "scripts": [
+    "youtube",
+    "netflix",
+    "disneyplus",
+    "chatgpt",
+    "claude",
+    "copilot",
+    "tiktok",
+    "spotify",
+    "wikipedia",
+    "bilibili",
+    "bilibilimainland",
+    "viu",
+    "ipquality",
+    "ipquality-v6"
+  ]
+}

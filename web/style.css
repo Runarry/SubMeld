@@ -1077,3 +1077,246 @@ summary {
     grid-template-columns: 1fr;
   }
 }
+/* Comprehensive diagnostics */
+.test-center {
+  min-width: 0;
+}
+.eyebrow {
+  color: var(--muted, #64748b);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+}
+.test-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0 24px;
+}
+.test-card,
+.report-panel {
+  border: 1px solid #dce3eb;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 18px 0;
+  background: #fff;
+  min-width: 0;
+}
+.test-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px 18px;
+  margin: 16px 0;
+}
+.test-options label,
+.test-preview > label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.test-options input[type='checkbox'],
+.test-preview input[type='checkbox'],
+.test-editor input[type='checkbox'] {
+  width: auto;
+  flex-shrink: 0;
+}
+.test-settings-grid,
+.test-launch {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+  align-items: end;
+}
+.test-center label > input:not([type='checkbox']),
+.test-center label > textarea,
+.test-center label > select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+}
+.test-center textarea {
+  width: 100%;
+  max-width: 100%;
+}
+.test-center details > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-weight: 600;
+}
+.test-preview,
+.test-picker {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #dce3eb;
+}
+.test-preview > label {
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+.test-preview small {
+  flex-basis: 100%;
+  margin-left: 22px;
+}
+.report-state {
+  display: inline-block;
+  border-radius: 20px;
+  background: #eaf0f6;
+  padding: 7px 13px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.report-toolbar {
+  margin: 18px 0;
+  align-items: end;
+}
+.report-scroll {
+  overflow: auto;
+  max-height: 650px;
+  margin: 16px 0;
+  border: 1px solid #dce3eb;
+  border-radius: 8px;
+}
+.report-scroll table {
+  border-collapse: collapse;
+  font-size: 13px;
+  width: 100%;
+}
+.report-scroll th,
+.report-scroll td {
+  min-width: 155px;
+  max-width: 240px;
+  padding: 12px;
+  border: 1px solid #e1e7ed;
+  text-align: left;
+}
+.report-scroll thead th {
+  background: #edf2f7;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  white-space: nowrap;
+}
+.report-scroll tbody th {
+  background: #f8fafc;
+}
+.report-scroll small {
+  display: block;
+  font-weight: 400;
+  margin-top: 5px;
+  color: #586574;
+}
+.report-scroll td > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.measurement-measured {
+  background: #e9f5ee;
+  color: #183529;
+}
+.measurement-unknown,
+.measurement-unsupported {
+  background: #f0f2f5;
+  color: #566272;
+}
+.measurement-failed,
+.measurement-target_error {
+  background: #fff0ec;
+  color: #873f29;
+}
+.text-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #175ca5;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.test-detail {
+  border-top: 1px solid #dce3eb;
+  margin-top: 20px;
+  padding-top: 16px;
+}
+.measurement-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 14px;
+}
+.measurement-grid article {
+  border: 1px solid #dce3eb;
+  border-radius: 8px;
+  padding: 14px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.measurement-grid h4 {
+  margin-top: 0;
+}
+.measurement-grid svg {
+  width: 100%;
+  color: #2676bb;
+}
+.sample-values {
+  max-height: 100px;
+  overflow: auto;
+  font-size: 12px;
+  color: #637185;
+}
+.test-history,
+.test-script-list {
+  list-style: none;
+  padding: 0;
+}
+.test-history li,
+.test-script-list li {
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  border-bottom: 1px solid #dce3eb;
+  padding: 18px 0;
+  overflow-wrap: anywhere;
+}
+.test-script-list small {
+  word-break: break-all;
+}
+.test-editor {
+  display: grid;
+  gap: 14px;
+  margin: 20px 0;
+  padding: 18px;
+  background: #edf2f7;
+  border-radius: 10px;
+}
+.test-editor textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  .test-card,
+  .report-panel {
+    padding: 12px;
+  }
+  .test-tabs {
+    gap: 6px;
+  }
+  .test-tabs button {
+    flex: 1 0 40%;
+  }
+  .test-options,
+  .test-settings-grid,
+  .test-launch,
+  .measurement-grid {
+    grid-template-columns: 1fr;
+  }
+  .test-history li,
+  .test-script-list li {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .test-center .page-header {
+    flex-wrap: wrap;
+  }
+}

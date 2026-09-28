@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { KernelManager } from '../dist/server/kernels.js';
 import { NodeTester } from '../dist/server/node-tests.js';
+import { MiaospeedTester } from '../dist/server/miaospeed.js';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
@@ -52,9 +53,24 @@ const tester = new NodeTester(
     await delay(700, undefined, { signal });
     return { latencyMs: 24.5, httpStatus: 204 };
   },
+  settings.testActivity,
+);
+const miaospeed = new MiaospeedTester(
+  settings.miaospeedStore,
+  settings.miaospeedScripts,
+  settings.miaospeedInput,
+  kernels,
+  converter,
+  settings.testActivity,
+  {
+    dataDir: directory,
+    miaospeedUrl: process.env.MIAOSPEED_URL,
+    miaospeedToken: process.env.MIAOSPEED_TOKEN,
+    miaospeedBridgeHost: 'host.docker.internal',
+  },
 );
 const app = createApp({
-  koipy: settings.koipy,
+  miaospeed,
   resources: settings.resources,
   tester,
   config: {
@@ -62,7 +78,9 @@ const app = createApp({
     dataDir: directory,
     development: true,
     subStoreUrl: process.env.SUB_STORE_URL,
-    telegramBot: '',
+    miaospeedUrl: process.env.MIAOSPEED_URL,
+    miaospeedToken: process.env.MIAOSPEED_TOKEN,
+    miaospeedBridgeHost: 'host.docker.internal',
   },
   webRoot: fileURLToPath(new URL('../dist/web/', import.meta.url)),
   auth,
@@ -98,6 +116,7 @@ async function close() {
   server.close();
   server.closeAllConnections();
   await tester.close();
+  await miaospeed.close();
   await kernels.close();
 
   await converter.close();

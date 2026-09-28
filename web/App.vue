@@ -1,26 +1,24 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onBeforeUnmount, ref, provide } from 'vue';
 import HomePage from './HomePage.vue';
-import KoipyPage from './KoipyPage.vue';
+import TestCenter from './TestCenter.vue';
 import SupportFiles from './SupportFiles.vue';
 import LoginView from './LoginView.vue';
 import NodeLibrary from './NodeLibrary.vue';
-import NodeTestsPage from './NodeTestsPage.vue';
 import { testActionsKey } from './nodeTests';
-import { testBatchSchema, type TestSubject } from '../server/shared/node-tests';
+import { type TestSubject } from '../server/shared/node-tests';
 import ChainLibrary from './ChainLibrary.vue';
 import SubscriptionLibrary from './SubscriptionLibrary.vue';
 
 import { ApiError, request } from './api';
 
-type View = 'home' | 'library' | 'chains' | 'subscriptions' | 'tests' | 'koipy' | 'supportFiles';
+type View = 'home' | 'library' | 'chains' | 'subscriptions' | 'tests' | 'supportFiles';
 const nav = [
   { view: 'home' as const, hash: 'home', label: '服务入口' },
   { view: 'library' as const, hash: 'nodes', label: '节点' },
   { view: 'chains' as const, hash: 'chains', label: '两跳链' },
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
-  { view: 'tests' as const, hash: 'tests', label: '节点测试' },
-  { view: 'koipy' as const, hash: 'koipy', label: 'Koipy 管理' },
+  { view: 'tests' as const, hash: 'tests', label: '测试中心' },
   { view: 'supportFiles' as const, hash: 'support-files', label: '配套文件' },
 ];
 const authenticated = ref(false);
@@ -31,18 +29,16 @@ const busy = ref('');
 const message = ref('');
 const testMessage = ref('');
 const testSubjects = ref<TestSubject[]>([]);
+const testInitialTab = ref<'comprehensive' | 'cores'>('comprehensive');
 provide(testActionsKey, {
   async start(subjects) {
-    const batch = testBatchSchema.parse(await api('/api/node-tests', { subjects }));
-    testSubjects.value = [];
-    testMessage.value =
-      '已开始测试 ' +
-      subjects.length +
-      ' 项，共 ' +
-      batch.total +
-      ' 组内核结果；离开页面后继续运行。';
+    testInitialTab.value = 'comprehensive';
+    testSubjects.value = subjects;
+    testMessage.value = '';
+    setView('tests');
   },
   show(subjects = []) {
+    testInitialTab.value = 'cores';
     testSubjects.value = subjects;
     testMessage.value = '';
     setView('tests');
@@ -51,7 +47,7 @@ provide(testActionsKey, {
 
 function parseHash(): View {
   const key = location.hash.replace(/^#\/?/, '');
-  if (key === 'koipy') return 'koipy';
+  if (key === 'koipy') return 'tests';
   if (key === 'support-files' || key === 'tools') return 'supportFiles';
   if (key === 'tests') return 'tests';
   if (key === 'chains') return 'chains';
@@ -197,9 +193,13 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
         </button>
       </p>
       <HomePage v-if="view === 'home'" :api="api" @navigate="setView" />
-      <KoipyPage v-if="view === 'koipy'" :api="api" />
       <SupportFiles v-if="view === 'supportFiles'" :api="api" />
-      <NodeTestsPage v-if="view === 'tests'" :api="api" :subjects="testSubjects" />
+      <TestCenter
+        v-if="view === 'tests'"
+        :api="api"
+        :subjects="testSubjects"
+        :initial-tab="testInitialTab"
+      />
       <NodeLibrary v-if="view === 'library'" :api="api" />
       <ChainLibrary v-if="view === 'chains'" :api="api" />
       <SubscriptionLibrary v-if="view === 'subscriptions'" :api="api" />

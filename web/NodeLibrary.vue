@@ -163,8 +163,8 @@ onMounted(() => void act(() => load()));
     <div class="selection-bar">
       <span>{{ total }} 个节点 · 已选 {{ chosen.length }}</span
       ><button
-        :disabled="!chosen.some((n) => n.testable) || testing.starting"
-        @click="testing.start(chosen.filter((n) => n.testable).map(subject))"
+        :disabled="!chosen.length || testing.starting"
+        @click="testing.start(chosen.map(subject))"
       >
         测试所选</button
       ><button
@@ -191,7 +191,9 @@ onMounted(() => void act(() => load()));
             {{ node.protocol }} · {{ node.resourceName
             }}{{ node.available ? '' : ' · 已被处理规则排除' }}
           </p>
-          <p v-if="!node.testable" class="muted">{{ node.testReason }}</p>
+          <p v-if="!node.testable" class="muted">
+            三内核检查：{{ node.testReason }} 综合测试将按 miaospeed 能力检查。
+          </p>
           <NodeTestSummary
             :results="testing.forSubject(subject(node))"
             @show="testing.show([subject(node)])"
@@ -207,11 +209,7 @@ onMounted(() => void act(() => load()));
             "
           >
             查看</button
-          ><button
-            :disabled="!node.testable || testing.starting"
-            @click="testing.start([subject(node)])"
-          >
-            测试</button
+          ><button :disabled="testing.starting" @click="testing.start([subject(node)])">测试</button
           ><button
             :disabled="busy || node.deletion === 'unavailable'"
             class="danger"

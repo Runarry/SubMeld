@@ -30,10 +30,12 @@ const sources = [
   'web',
   'scripts',
   'tests',
-  'deploy',
   'upstreams.lock.json',
+  'miaospeed-scripts.lock.json',
   'docs',
 ];
+if (existsSync('dist/diagnostics/manifest.json'))
+  sources.push('dist/diagnostics/manifest.json', 'dist/diagnostics/source.tar.gz');
 if (existsSync('dist/kernel-sources/manifest.json'))
   sources.push(
     'dist/kernel-sources/manifest.json',

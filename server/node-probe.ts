@@ -187,7 +187,7 @@ export function freeProbePort(): Promise<number> {
     });
   });
 }
-async function portReady(port: number, signal: AbortSignal) {
+export async function portReady(port: number, signal: AbortSignal) {
   return new Promise<boolean>((resolve) => {
     const socket = createConnection({ host: '127.0.0.1', port });
     const finish = (ready: boolean) => {

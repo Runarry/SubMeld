@@ -11,6 +11,7 @@ import {
 import type { NodeTestStore } from './node-test-store.js';
 import type { KernelManager } from './kernels.js';
 import { freeProbePort, runNodeProbe } from './node-probe.js';
+import { TestActivity } from './test-activity.js';
 
 type TestConverter = Pick<Converter, 'run' | 'isAvailable' | 'onAvailable'>;
 export class NodeTester {
@@ -24,6 +25,7 @@ export class NodeTester {
     private converter: TestConverter,
     private dataDir: string,
     private probe: typeof runNodeProbe = runNodeProbe,
+    private activity = new TestActivity(),
   ) {}
   current(page = 0) {
     if (!this.batch) return { batch: null };
@@ -51,8 +53,16 @@ export class NodeTester {
       throw new AppError('INVALID_REQUEST', '请选择 1～2,000 个不重复的已保存测试对象。', 400);
     const subjects = parsed.data.subjects;
     const selection = this.store.selection(subjects);
-    const lease = this.kernels.snapshot(),
+    const releaseActivity = this.activity.acquire('三内核连通性');
+    let lease: ReturnType<KernelManager['snapshot']>;
+    let url: string;
+    try {
+      lease = this.kernels.snapshot();
       url = this.store.settings().url;
+    } catch (error) {
+      releaseActivity();
+      throw error;
+    }
     const batch: TestBatch = {
       id: randomUUID(),
       state: 'running',
@@ -178,6 +188,7 @@ export class NodeTester {
       })
       .finally(async () => {
         await lease.release();
+        releaseActivity();
         if (batch.state !== 'failed') batch.state = signal.aborted ? 'cancelled' : 'completed';
         batch.finishedAt = new Date().toISOString();
         batch.current = null;

@@ -9,13 +9,11 @@ import { createNodeStore } from './nodes.js';
 import { createChainStore } from './chains.js';
 import { createSubscriptionStore } from './subscriptions.js';
 import { createNodeTestStore } from './node-test-store.js';
-import { KoipySettingsStore } from './koipy.js';
-export function openSettings(
-  dataDir: string,
-  development: boolean,
-  client = new SubStoreClient(),
-  koipyConfigPath = join(dataDir, 'koipy/config.yaml'),
-) {
+import { TestActivity } from './test-activity.js';
+import { MiaospeedStore } from './miaospeed-store.js';
+import { MiaospeedScripts } from './miaospeed-scripts.js';
+import { MiaospeedInput } from './miaospeed-input.js';
+export function openSettings(dataDir: string, development: boolean, client = new SubStoreClient()) {
   if (process.platform === 'win32' && !development)
     throw new Error('生产数据权限需要 Linux 容器；Windows 仅支持显式开发模式。');
   if (process.platform !== 'win32') process.umask(0o077);
@@ -31,11 +29,13 @@ export function openSettings(
     lock.close();
     throw new Error('数据目录正在使用，请先停止应用。');
   }
+  let input: MiaospeedInput | undefined;
   let db: Database.Database | undefined,
     closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
+    input?.close();
     try {
       db?.close();
     } finally {
@@ -48,7 +48,7 @@ export function openSettings(
     db.pragma('journal_mode = WAL');
     db.pragma('busy_timeout = 3000');
     const version = db.pragma('user_version', { simple: true });
-    if (![0, 1, 2].includes(Number(version))) throw new Error('增强数据库版本不受支持。');
+    if (![0, 1, 2, 3].includes(Number(version))) throw new Error('增强数据库版本不受支持。');
     if (version === 1) {
       const count = z
         .object({ n: z.number() })
@@ -68,7 +68,7 @@ export function openSettings(
       )();
     }
     db.exec(
-      'CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS node_test_results(key TEXT PRIMARY KEY,result_json TEXT NOT NULL); PRAGMA user_version=2;',
+      'CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS node_test_results(key TEXT PRIMARY KEY,result_json TEXT NOT NULL); PRAGMA user_version=3;',
     );
     if (process.platform !== 'win32')
       for (const file of readdirSync(dataDir))
@@ -80,13 +80,17 @@ export function openSettings(
     const nodes = createNodeStore(resources),
       chains = createChainStore(resources, files),
       subscriptions = createSubscriptionStore(resources, files);
+    input = new MiaospeedInput(resources, chains);
     return {
       resources,
       files,
       nodes,
       chains,
       subscriptions,
-      koipy: new KoipySettingsStore(database, koipyConfigPath),
+      testActivity: new TestActivity(),
+      miaospeedStore: new MiaospeedStore(database),
+      miaospeedScripts: new MiaospeedScripts(resources),
+      miaospeedInput: input,
       nodeTests: createNodeTestStore(database, resources, chains),
       getPasswordHash(): string | undefined {
         const row: unknown = database

@@ -36,14 +36,14 @@ test('new settings initialize once, preserve password hashes and enforce single 
     assert.equal(reopened.getPasswordHash(), hash);
     reopened.close();
     const db = new Database(join(dir.path, 'submeld-v2.sqlite'));
-    assert.equal(db.pragma('user_version', { simple: true }), 2);
+    assert.equal(db.pragma('user_version', { simple: true }), 3);
     assert.deepEqual(
       db
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
         .all()
         .map((r) => r.name)
         .sort(),
-      ['settings', 'node_test_results'].sort(),
+      ['settings', 'node_test_results', 'speed_reports', 'speed_results'].sort(),
     );
     db.close();
     assert.equal(
@@ -139,7 +139,7 @@ test('empty v2 business definitions upgrade while preserving account settings an
     settings.close();
     settings = undefined;
     const upgraded = new Database(join(dir.path, 'submeld-v2.sqlite'), { readonly: true });
-    assert.equal(upgraded.pragma('user_version', { simple: true }), 2);
+    assert.equal(upgraded.pragma('user_version', { simple: true }), 3);
     assert.equal(
       upgraded
         .prepare('SELECT result_json FROM node_test_results WHERE key=?')
@@ -151,7 +151,7 @@ test('empty v2 business definitions upgrade while preserving account settings an
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .all()
         .map((r) => r.name),
-      ['node_test_results', 'settings'],
+      ['node_test_results', 'settings', 'speed_reports', 'speed_results'],
     );
     upgraded.close();
   } finally {

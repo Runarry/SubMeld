@@ -1,17 +1,16 @@
 # SubMeld · 订融
 
-SubMeld 使用独立 Sub-Store 保存全部代理配置，并提供统一节点管理、两跳链、输出方案、三内核测试和 Koipy 配置入口。Sub-Store 负责实际转换、文件脚本执行、缓存和分享；SubMeld 不维护另一份可编辑节点库，不构建内嵌 Sub-Store。
+SubMeld 使用独立 Sub-Store 保存全部代理配置，提供统一节点管理、两跳链、输出方案和网页测试中心。综合测试直接对接 AirportR miaospeed；保留 Mihomo、sing-box、Xray 三内核 HTTPS 检查。无需 Koipy、Telegram 或激活码。
 
 ## 当前架构
 
-2026-09-27 所有者确认上游化重构，随后确认统一存储与流程精简。本基线优先于历史文档中的单容器、内嵌转换、节点分类和预生成发布要求。
+2026-09-27 所有者确认上游化重构与统一存储，2026-09-28 确认直接封装 miaospeed。本基线优先于历史文档中的单容器、内嵌转换、节点分类、Koipy 和预生成发布要求。
 
-| 服务      | 职责                                                                        |
-| --------- | --------------------------------------------------------------------------- |
-| Sub-Store | 原生前端、节点订阅、组合订阅、链与方案文件、模板、脚本执行、按需生成与分享  |
-| Koipy     | Telegram 普通节点测速与结果展示                                             |
-| miaospeed | Koipy 的实际测试后端，基于 Mihomo                                           |
-| SubMeld   | 登录与代理入口、统一增查删、链与方案表单、三内核实测、内核更新及 Koipy 配置 |
+| 服务      | 职责                                                                       |
+| --------- | -------------------------------------------------------------------------- |
+| Sub-Store | 原生前端、节点订阅、组合订阅、链与方案文件、模板、脚本执行、按需生成与分享 |
+| miaospeed | AirportR 4.7.6，API v3，基于 Mihomo 的综合检测，启用上下行测速             |
+| SubMeld   | 登录与代理入口、统一管理、链与方案、网页测试中心、脚本与报告、三内核检查   |
 
 根路径是 Sub-Store 原生前端，`/submeld/` 是 SubMeld。管理 API 经登录与同源校验，普通和增强输出均使用上游原生分享令牌。原生 Service Worker 保留自己的离线缓存，SubMeld 页面和 API 直接访问服务端。
 
@@ -52,28 +51,36 @@ Mihomo 与 sing-box 经上游转换及链式字段输出；Xray 使用随项目�
 
 在方案页面创建或撤销分享，令牌由 Sub-Store 保存与验证。原生 `/share/file/*`、订阅和组合分享经同源代理转发。上游停机时输出不可用；不会返回 SubMeld 缓存的旧配置。分享遵循原生 GET 行为，HEAD 仍由上游决定。
 
-### 测试与 Koipy
+### 测试中心
 
 三内核测试保留批次进度、取消、最近结果、官方内核检查与手动更新。节点引用使用资源 UUID、快照摘要和位置；链测试同时固定两个成员的快照。内容变化或上游状态无法确认时，不保存迟到结果。处理规则排除的原始节点仍可测试。
 
-默认 HTTPS 目标为 `https://cp.cloudflare.com/generate_204`。DNS 失败、198.18.0.0/15 Fake-IP、非公网目标标为“测试目标异常”，不能据此判断节点失效。可在“节点测试”页更改测试地址；不会放行 Fake-IP。
+综合测试覆盖延迟采样、最大延迟、抖动、丢包、HTTP 状态、上下行平均/峰值/逐秒速度、UDP/NAT、入口/出口拓扑和测速劫持检测。普通节点使用 Sub-Store 无保存转换生成完整 Mihomo 节点，保留原生协议字段；不能完整转换的节点在原位置显示原因。
 
-Koipy 管理页配置机器人用户名、激活码、Bot Token、管理员 ID、代理和 miaospeed 后端。直接写共享原生配置文件，保留其他后端和自定义字段；已保存的凭据不回传，留空保留，显式清除才删除。保存后按提示手动重启 Koipy。
+两跳链综合测试每批次选择一个执行内核，默认 Mihomo，也可选择 sing-box 或 Xray。内核启动带随机认证的临时 SOCKS 入口，miaospeed 经该入口检测完整链。入口拓扑单独取真实前置节点地址，出口与性能经整链测得；报告记录内核和版本。Compose 不发布临时链端口。
 
-给 Koipy 发送其可访问的普通节点 Mihomo 原生分享链接。Telegram 测试结果留在 Koipy；整链与 sing-box／Xray 实测由网页提供。
+预置 16 个脚本：YouTube、Netflix、Disney+、ChatGPT/OpenAI、Claude、Copilot、TikTok、Spotify、Wikipedia、Bilibili 国际及大陆、Viu、IPv4/IPv6 质量与风险、DNS 地区、SSH 22。前 14 项固定 [CloudPassenger/miaospeed-scripts v1.0.0](https://github.com/CloudPassenger/miaospeed-scripts/releases/tag/v1.0.0)，发布包及索引校验值见 [miaospeed-scripts.lock.json](miaospeed-scripts.lock.json)，构建附带原始来源和源码；后两项由 SubMeld 实现。脚本可添加、编辑、启停及按批次选择，保存在 Sub-Store 原生文件。初始化只补齐缺失项，恢复内置版本检查 revision。
+
+综合测试与三内核检查同时只运行一个批次。可取消并保留部分结果；后端断线停止，重启后未结束报告标记中断。报告支持筛选、排序、延迟/速度曲线、IP/ASN 详情、手动删除、当前页 PNG 与全部筛选结果 CSV。对象变化后保留历史快照并标为过期，不覆盖当前有效结果。
+
+4.7.6 没有中断已执行宏的 API。取消后立即停止后续节点并关闭临时链入口；当前普通节点探测结束前保留批次锁，页面显示“正在取消”。断线后不再提交节点，后端已发出的请求仍可能运行到自身超时。
+
+临时测试支持文本、订阅 URL、配置文件。先预览和筛选，使用 Sub-Store 无保存接口；节点凭据仅保存在内存，预览闲置 30 分钟过期，任务结束清除副本。历史临时报告重测需重新输入。
+
+默认 HTTPS 目标为 `https://cp.cloudflare.com/generate_204`；其他参数沿用锁定后端的有效默认值：上下行 3 秒、各 1 线程，Ping 1 次、重试 3 次、请求超时 5000 毫秒。4.7.6 的上行单次超时使用时长整除 2，因此上行时长至少 2 秒。DNS 失败、198.18.0.0/15 Fake-IP、非公网目标单独标为目标异常；缺失矩阵、异常响应或无法确定的平台结果为未知，不表示节点失效或解锁成功。
 
 ## 数据与兼容
 
 SQLite 仅保存账号、运行设置和测试结果，节点及配置预览在内存中。测试需要的临时凭据配置会在进程结束后清理。没有第二份可编辑节点凭据库。
 
-保留现有 Sub-Store 数据、UUID、登录和 Koipy 配置。本次当前环境没有已保存的旧链或增强方案；允许升级空业务定义的 v2 本地库，重建索引。旧测试引用不作为新快照的有效结果，需要重新测试。若旧库仍有链或方案则拒绝自动搬迁，保留原库并提示使用新目录；不实现通用旧配置或旧分享地址迁移。
+保留现有 Sub-Store 数据、UUID、登录、旧测试数据及旧 Koipy 配置文件/目录。SQLite 增量增加报告和结果表；仅保存展示字段，不保存后端回显的节点载荷、订阅 URL 或凭据。旧业务库的兼容规则保持不变，不实现通用旧链或旧分享地址迁移。共享链配置版本为 `upstream-native-4`。
 
 含旧版 `submeld.sqlite` 的目录仍拒绝打开，不删除、覆盖或迁移旧目录。旧 `#/sources`、`#/library` 和 `#/workbench` 书签进入统一节点页；旧来源和转换管理 API 已移除。
 
 ## 本地运行
 
 1. `pnpm install --frozen-lockfile`，复制 `.env.example` 为 `.env`。
-2. `docker compose -f compose.dev.yaml up -d`，上游仅绑定回环 39091。
+2. 设置随机 `MIAOSPEED_TOKEN`，`docker compose -f compose.dev.yaml up -d`；Sub-Store 与 miaospeed 分别绑定回环 39091、39092。
 3. 应用停止时运行 `pnpm admin:init --dev`，初始化密码；已有账号不重复初始化。
 4. `pnpm dev`，访问 `http://127.0.0.1:5173/submeld/`。
 
@@ -81,25 +88,24 @@ SQLite 仅保存账号、运行设置和测试结果，节点及配置预览在�
 
 停止开发上游使用 `docker compose -f compose.dev.yaml stop`；不要用 `down -v` 清理需要保留的数据。
 
+`MIAOSPEED_URL`、`MIAOSPEED_TOKEN` 仅供服务端使用。`MIAOSPEED_BRIDGE_HOST` 必须是 miaospeed 容器可达的开发主机地址。Windows Docker Desktop 请设为主机局域网 IPv4：`host.docker.internal` 的 TCP 转发可能让 Mihomo 返回回环 UDP 地址。测试容器在 Windows 自动选择首个非回环 IPv4，也可通过 `SUBMELD_TEST_BRIDGE_HOST` 明确指定。完整 Compose 环境使用 `submeld` 服务名。
+
 ## Linux 容器部署
 
-四服务配置见 [compose.yaml](compose.yaml)。仅 SubMeld 的 3000 端口绑定宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。
+三服务配置见 [compose.yaml](compose.yaml)。仅 SubMeld 的 3000 端口绑定宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。
 
 1. 准备私有 `.env`，设置实际 HTTPS PUBLIC_ORIGIN 和随机 MIAOSPEED_TOKEN。
-2. 可通过 `node --env-file=.env deploy/configure-koipy.mjs` 初始化 `runtime-v2/koipy/config.yaml`。已有文件不会被覆盖。也可先创建共享目录，再通过网页填写配置。
-3. Linux 下使容器用户 UID 1000 可写共享配置目录。
-4. `docker compose build submeld`。
-5. 新安装运行 `docker compose run --rm --no-deps submeld node dist/server/cli.js init`。
-6. `docker compose up -d sub-store submeld`，登录配置 Koipy；核对 miaospeed Token 后运行 `docker compose up -d miaospeed koipy`。
-7. 后续网页修改 Koipy 配置，执行 `docker compose restart koipy` 生效。
+2. `docker compose build submeld`。
+3. 新安装运行 `docker compose run --rm --no-deps submeld node dist/server/cli.js init`；已有账号不重复初始化。
+4. `docker compose up -d sub-store miaospeed submeld`。
 
-KOIPY_CONFIG_PATH 指向共享原生文件；Compose 不使用环境变量覆盖网页保存的 Koipy 凭据，也不挂载 Docker socket。备份时停止服务并保存 Sub-Store 卷、本地账号与测试数据卷、Koipy 配置及私有环境配置。
+网页不接触 miaospeed Token，不挂载 Docker socket。备份时停止服务并保存 Sub-Store 卷、账号与测试报告卷、私有环境配置；已有 Koipy 配置目录保留。旧 `#/koipy` 链接进入测试中心。
 
 密码重置需先停止 SubMeld：开发使用 `pnpm admin:reset-password --dev`，容器使用 `docker compose run --rm --no-deps submeld node dist/server/cli.js reset-password`。
 
 ## 接口与验证
 
-`/api/nodes` 负责统一节点管理；`/api/chains`、`/api/subscriptions` 适配上游文件；`/api/node-tests`、`/api/kernels` 保留测试与内核管理。`/api/integrations/koipy` 管理原生配置，`/api/integrations/files` 管理配套文件更新。上游原生管理使用 `/upstream/sub-store/*`。
+`/api/nodes` 负责统一节点管理；`/api/chains`、`/api/subscriptions` 适配上游文件；`/api/node-tests`、`/api/kernels` 保留三内核检查。`/api/miaospeed/{preview,tests,reports,scripts,settings,status}` 提供综合测试；`/api/integrations/files` 管理配套文件更新。上游原生管理使用 `/upstream/sub-store/*`。
 
 | 命令                 | 内容                                                                 |
 | -------------------- | -------------------------------------------------------------------- |
@@ -109,15 +115,15 @@ KOIPY_CONFIG_PATH 指向共享原生文件；Compose 不使用环境变量覆盖
 | `pnpm test:browser`  | 桌面及 390px 窄屏、原生页面、统一管理与增强流程                      |
 | `pnpm cores:prepare` | 准备锁定内核与官方源码                                               |
 
-测试自动创建隔离官方 Sub-Store 容器，随机选择并固定测试期间的回环端口，不挂个人数据卷，结束后停止容器。依赖 Docker；缺失或失败不会模拟通过。镜像构建不运行依赖容器的验收。Windows 浏览器可设置 PLAYWRIGHT_CHANNEL=msedge。
+测试自动创建隔离官方 Sub-Store 和 miaospeed 容器，随机回环端口，不挂个人数据卷，结束后停止容器。依赖 Docker；缺失或失败不会模拟通过。镜像构建不运行依赖容器的验收。Windows 浏览器可设置 PLAYWRIGHT_CHANNEL=msedge。
 
-配置与真实连通检查使用 Sub-Store 文件脚本生成的配置；HTTP 目标、链两端使用受控测试服务。浏览器和任务状态测试使用受控探测结果，只用于验证交互和状态，不代表公网节点或 Telegram 已验证。
+配置与真实连通检查使用 Sub-Store 文件脚本生成的配置；HTTP 目标、STUN、链两端使用受控测试服务。miaospeed 契约测试验证真实签名、进度、数值单位、三内核 TCP/UDP 两跳、认证、取消/断线、全部预置脚本执行和结果清理。浏览器旧三内核检查使用受控时延结果，仅验证交互；综合测试使用真实 miaospeed VM。
 
 2026-09-27 本轮格式、lint、严格类型和构建通过；隔离上游完整复跑通过 84 项工程测试、三内核配置检查、7 组真实链式连接和 21 项 HTTPS 场景。Edge 桌面与窄屏共 20 项浏览器回归通过。Windows 连续验收中出现过内核启动超时、QUIC 链路失败及一次超时用例返回连接错误，部分 `pnpm check` 因此失败；保留失败日志后完整复跑通过。未放宽超时或跳过用例，间歇性原因尚未确定。
 
 更新后的本地服务另外使用现有的一个 VLESS 公网节点重新完成三内核 HTTPS 实测，三次均返回 204；未修改其订阅内容、UUID 或登录密码。
 
-**需要实际环境另行验收：** 真实 Koipy 授权与 Telegram 测速、v2rayN 导入／更新／连接，以及正式 HTTPS 公网部署。旧版本的实际结果不自动延续到本架构。
+上述 2026-09-27 记录属于前一基线，不作为本次综合测试通过的依据。外部平台限制或超时如实记录；脚本执行通过不代表所有节点解锁。v2rayN 导入/更新/连接及正式 HTTPS 公网部署仍需对应环境验收。
 
 ## 原始文档与源码
 

@@ -6,7 +6,7 @@ export const upstreamRecordSchema = z.object({ name: z.string().min(1) }).catcha
 export type UpstreamRecord = z.infer<typeof upstreamRecordSchema>;
 export const upstreamIdentitySchema = z.object({
   id: z.string().uuid(),
-  role: z.enum(['chain', 'plan', 'output', 'template', 'runtime']).optional(),
+  role: z.enum(['chain', 'plan', 'output', 'template', 'runtime', 'test-script']).optional(),
   version: z.number().int().optional(),
   parent: z.string().optional(),
   format: z.string().optional(),
