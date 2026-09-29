@@ -2,6 +2,7 @@ services:
   submeld:
     build: .
     image: submeld:2.0.0
+    dns: [223.5.5.5, 1.1.1.1]
     environment:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN}
       DATA_DIR: /data
@@ -48,6 +49,7 @@ services:
     restart: unless-stopped
   miaospeed:
     image: airportr/miaospeed@sha256:16c7181c35f2f43f55bfa2b14dc73b43feb5bf7eaea6cfa21a716a31a60b6659
+    dns: [223.5.5.5, 1.1.1.1]
     command:
       [
         'server',
