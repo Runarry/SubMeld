@@ -229,7 +229,14 @@ export class MiaospeedInput {
     }
     return JSON.stringify({ ...output, name });
   }
-  chainItem(node: CapturedNode): RenderItem {
+  bridgeItem(node: CapturedNode): RenderItem {
+    if (node.raw)
+      return {
+        nodeIndex: 0,
+        excluded: false,
+        diagnostics: [],
+        draft: rawDraft(node.raw),
+      };
     if (!node.entry || !node.exit) throw new AppError('INVALID_REQUEST', '此对象不是两跳链。', 400);
     return {
       kind: 'chain',

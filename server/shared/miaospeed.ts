@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { testSubjectSchema, DEFAULT_PROBE_URL } from './node-tests.js';
+import { testSubjectSchema, DEFAULT_PROBE_URL, coreLabels } from './node-tests.js';
 import { renderTargetSchema, MAX_BYTES, MAX_NODES } from './contracts.js';
 
 export const metricDefinitions = [
@@ -40,9 +40,11 @@ export const speedSettingsSchema = z.strictObject({
   retries: z.number().int().min(1).max(10).default(3),
   requestTimeoutMs: z.number().int().min(10).max(10000).default(5000),
   timeoutSeconds: z.number().int().min(10).max(10000).default(120),
+  nodeCore: z.enum(['native', ...renderTargetSchema.options]).default('native'),
   chainCore: renderTargetSchema.default('mihomo'),
 });
 export type SpeedSettings = z.infer<typeof speedSettingsSchema>;
+export const speedCoreLabels = { native: 'miaospeed 内置 Mihomo', ...coreLabels };
 export const temporarySubjectSchema = z.strictObject({
   kind: z.literal('temporary'),
   previewId: z.string().uuid(),
@@ -54,6 +56,9 @@ export const temporarySubjectSchema = z.strictObject({
 });
 export const speedSubjectSchema = z.union([testSubjectSchema, temporarySubjectSchema]);
 export type SpeedSubject = z.infer<typeof speedSubjectSchema>;
+export function executionCore(settings: SpeedSettings, subject: SpeedSubject) {
+  return subject.kind === 'chain' ? settings.chainCore : settings.nodeCore;
+}
 export const speedRequestSchema = z
   .strictObject({
     name: z.string().trim().min(1).max(120).default('综合测试'),

@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue';
 import {
   metricDefinitions,
   measurementText,
+  executionCore,
+  speedCoreLabels,
   type SpeedReport,
   type SpeedRow,
 } from '../server/shared/miaospeed';
@@ -98,7 +100,8 @@ async function png() {
         <h2>{{ report.name }}</h2>
         <p class="muted">
           {{ formatTime(report.createdAt) }} · miaospeed {{ report.backendVersion || '待返回' }} ·
-          链内核 {{ report.settings.chainCore }}
+          节点内核 {{ speedCoreLabels[report.settings.nodeCore] }} · 链内核
+          {{ speedCoreLabels[report.settings.chainCore] }}
         </p>
       </div>
       <span class="report-state">{{ labels[report.state] }}</span>
@@ -203,8 +206,9 @@ async function png() {
         <button type="button" @click="detail = null">关闭详情</button>
       </div>
       <p>{{ selected.message }}</p>
-      <p v-if="selected.coreVersion">
-        链执行内核：{{ report.settings.chainCore }} {{ selected.coreVersion }}
+      <p>
+        执行内核：{{ speedCoreLabels[executionCore(report.settings, selected.subject)] }}
+        {{ selected.coreVersion }}
       </p>
       <p v-if="selected.stale" class="warning-note">对象内容已变化，此报告仅代表当时的测试快照。</p>
       <div class="measurement-grid">

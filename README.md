@@ -55,9 +55,9 @@ Mihomo 与 sing-box 经上游转换及链式字段输出；Xray 使用随项目�
 
 三内核测试保留批次进度、取消、最近结果、官方内核检查与手动更新。节点引用使用资源 UUID、快照摘要和位置；链测试同时固定两个成员的快照。内容变化或上游状态无法确认时，不保存迟到结果。处理规则排除的原始节点仍可测试。
 
-综合测试覆盖延迟采样、最大延迟、抖动、丢包、HTTP 状态、上下行平均/峰值/逐秒速度、UDP/NAT、入口/出口拓扑和测速劫持检测。普通节点使用 Sub-Store 无保存转换生成完整 Mihomo 节点，保留原生协议字段；不能完整转换的节点在原位置显示原因。
+综合测试覆盖延迟采样、最大延迟、抖动、丢包、HTTP 状态、上下行平均/峰值/逐秒速度、UDP/NAT、入口/出口拓扑和测速劫持检测。普通节点默认使用 miaospeed 内置 Mihomo，通过 Sub-Store 无保存转换生成完整节点，保留原生协议字段。已保存节点和临时节点也可选择独立 Mihomo、sing-box 或 Xray，通过带随机认证的临时 SOCKS 入口测试；REALITY 兼容性问题可选择 Xray。所选内核不能完整表达的节点在原位置显示不支持，不自动换内核或直连。
 
-两跳链综合测试每批次选择一个执行内核，默认 Mihomo，也可选择 sing-box 或 Xray。内核启动带随机认证的临时 SOCKS 入口，miaospeed 经该入口检测完整链。入口拓扑单独取真实前置节点地址，出口与性能经整链测得；报告记录内核和版本。Compose 不发布临时链端口。
+两跳链综合测试单独选择执行内核，默认 Mihomo，也可选择 sing-box 或 Xray。内核启动带随机认证的临时 SOCKS 入口，miaospeed 经该入口检测完整链。桥接测试的入口拓扑单独取真实节点或前置节点地址，出口与性能经所选路径测得；报告与导出记录所选内核及独立内核版本。Compose 不发布临时测试端口。
 
 预置 16 个脚本：YouTube、Netflix、Disney+、ChatGPT/OpenAI、Claude、Copilot、TikTok、Spotify、Wikipedia、Bilibili 国际及大陆、Viu、IPv4/IPv6 质量与风险、DNS 地区、SSH 22。前 14 项固定 [CloudPassenger/miaospeed-scripts v1.0.0](https://github.com/CloudPassenger/miaospeed-scripts/releases/tag/v1.0.0)，发布包及索引校验值见 [miaospeed-scripts.lock.json](miaospeed-scripts.lock.json)，构建附带原始来源和源码；后两项由 SubMeld 实现。脚本可添加、编辑、启停及按批次选择，保存在 Sub-Store 原生文件。初始化只补齐缺失项，恢复内置版本检查 revision。
 

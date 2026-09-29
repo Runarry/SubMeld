@@ -1,4 +1,10 @@
-import { measurementText, type SpeedReport, type SpeedRow } from '../server/shared/miaospeed';
+import {
+  measurementText,
+  executionCore,
+  speedCoreLabels,
+  type SpeedReport,
+  type SpeedRow,
+} from '../server/shared/miaospeed';
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob),
     link = document.createElement('a');
@@ -8,7 +14,7 @@ function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 const title = (report: SpeedReport) =>
-  `${report.name} · ${report.createdAt} · miaospeed ${report.backendVersion ?? '未知'} · 链内核 ${report.settings.chainCore}`;
+  `${report.name} · ${report.createdAt} · miaospeed ${report.backendVersion ?? '未知'} · 节点内核 ${speedCoreLabels[report.settings.nodeCore]} · 链内核 ${speedCoreLabels[report.settings.chainCore]}`;
 function cell(input: unknown) {
   let value = String(input ?? '').replace(/\0/g, '');
   if (/^[\s]*[=+@-]/.test(value)) value = "'" + value;
@@ -27,6 +33,7 @@ export function exportCsv(
       '协议',
       '状态',
       '过期',
+      '执行内核',
       '内核版本',
       ...columns.map((c) => c.label),
       '测量明细（JSON，含原始值、单位、采样及拓扑）',
@@ -38,6 +45,7 @@ export function exportCsv(
       row.protocol,
       row.state,
       row.stale ? '是' : '否',
+      speedCoreLabels[executionCore(report.settings, row.subject)],
       row.coreVersion,
       ...columns.map((column) => {
         const metric = row.measurements.find((m) => m.id === column.id);
@@ -91,7 +99,7 @@ export async function exportPng(
     ctx.fillStyle = '#16222f';
     ctx.font = 'bold 19px sans-serif';
     ctx.fillText(
-      `${row.name} · ${row.protocol} · ${row.stale ? '内容已变化' : row.state}${row.coreVersion ? ' · ' + report.settings.chainCore + ' ' + row.coreVersion : ''}`.slice(
+      `${row.name} · ${row.protocol} · ${row.stale ? '内容已变化' : row.state} · ${speedCoreLabels[executionCore(report.settings, row.subject)]} ${row.coreVersion ?? ''}`.slice(
         0,
         140,
       ),

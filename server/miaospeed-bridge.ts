@@ -43,7 +43,7 @@ export async function freeBridgePort(bind = '0.0.0.0') {
       if (tcp.listening) await new Promise<void>((resolve) => tcp.close(() => resolve()));
     }
   }
-  throw new AppError('TEST_START_FAILED', '没有可用的 TCP/UDP 链入口端口。', 503);
+  throw new AppError('TEST_START_FAILED', '没有可用的 TCP/UDP 测试入口端口。', 503);
 }
 
 export function bridgeConfig(
@@ -148,8 +148,8 @@ export async function launchBridge(
     while (!(await portReady(port, startup, bind === '0.0.0.0' ? '127.0.0.1' : bind))) {
       signal.throwIfAborted();
       if (child.exited)
-        throw new AppError('TARGET_UNSUPPORTED', '所选内核拒绝了链或 SOCKS 配置。', 422);
-      if (startup.aborted) throw new AppError('TEST_START_TIMEOUT', '链测试内核启动超时。', 504);
+        throw new AppError('TARGET_UNSUPPORTED', '所选内核拒绝了节点或 SOCKS 配置。', 422);
+      if (startup.aborted) throw new AppError('TEST_START_TIMEOUT', '测试内核启动超时。', 504);
       await delay(40);
     }
     signal.addEventListener('abort', abort, { once: true });

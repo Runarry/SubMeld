@@ -17,6 +17,7 @@ import {
   speedRequestSchema,
   speedSettingsSchema,
   metricDefinitions,
+  executionCore,
   type SpeedSettings,
   type SpeedReport,
 } from './shared/miaospeed.js';
@@ -247,14 +248,15 @@ export class MiaospeedTester {
               }
               const name = 'sm-' + row.index;
               let payload: string;
-              if (row.subject.kind === 'chain') {
-                const binary = heldLease.binaries.get(settings.chainCore);
+              const core = executionCore(settings, row.subject);
+              if (core !== 'native') {
+                const binary = heldLease.binaries.get(core);
                 if (!binary)
-                  throw new AppError('TARGET_UNSUPPORTED', '所选链执行内核尚未安装。', 422);
+                  throw new AppError('TARGET_UNSUPPORTED', '所选执行内核尚未安装。', 422);
                 row.coreVersion = binary.version;
                 bridge = await startBridge(
                   binary,
-                  this.input.chainItem(node),
+                  this.input.bridgeItem(node),
                   this.converter,
                   this.config.dataDir,
                   this.config.miaospeedBridgeHost,
@@ -284,7 +286,14 @@ export class MiaospeedTester {
               ];
               const update = (slot: Parameters<typeof measurements>[0], version: string) => {
                 report.backendVersion = version || report.backendVersion;
-                row.measurements = measurements(slot, value.metrics, scripts);
+                // A bridge's address is internal, including in progress or cancelled reports.
+                const result = bridge
+                  ? {
+                      ...slot,
+                      Matrices: slot.Matrices?.filter((m) => m.Type !== 'GEOIP_INBOUND') ?? null,
+                    }
+                  : slot;
+                row.measurements = measurements(result, value.metrics, scripts);
                 this.store.saveRow(report.id, row);
                 this.store.save(report);
               };
@@ -305,13 +314,14 @@ export class MiaospeedTester {
                 checkedAt: new Date().toISOString(),
                 error: null,
               };
-              if (node.entry && value.metrics.includes('GEOIP_INBOUND')) {
+              const entry = node.entry ?? (bridge ? node.raw : null);
+              if (entry && value.metrics.includes('GEOIP_INBOUND')) {
                 const entryMetric = row.measurements.find((m) => m.id === 'GEOIP_INBOUND')!;
                 try {
-                  const entryPayload = await this.input.payload(node.entry, 'chain-entry', signal);
+                  const entryPayload = await this.input.payload(entry, 'node-entry', signal);
                   const entryResult = await this.client.run(
                     settings,
-                    [{ Name: 'chain-entry', Payload: entryPayload }],
+                    [{ Name: 'node-entry', Payload: entryPayload }],
                     [{ Type: 'GEOIP_INBOUND', Params: '' }],
                     [],
                     signal,
@@ -324,14 +334,16 @@ export class MiaospeedTester {
                       [],
                     )[0],
                   );
-                  entryMetric.message = '真实前置节点地址信息；出口与性能由整条链测得。';
+                  entryMetric.message = node.entry
+                    ? '真实前置节点地址信息；出口与性能由整条链测得。'
+                    : '真实节点地址信息；出口与性能经所选内核测得。';
                 } catch (error) {
                   if (signal.aborted) throw error;
                   Object.assign(entryMetric, {
                     value: null,
                     geo: [],
                     status: 'unknown',
-                    message: '无法取得真实前置节点信息。',
+                    message: '无法取得真实入口节点信息。',
                   });
                 }
               }

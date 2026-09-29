@@ -26,10 +26,10 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
   const before = await api(page, '/upstream/sub-store/api/subs');
   const raw = {
     name: '临时测试-' + info.project.name,
-    type: 'socks5',
+    type: 'ss',
     server: 'example.com',
     port: 1080,
-    username: 'fixture',
+    cipher: 'aes-128-gcm',
     password: 'browser-secret-never-in-report',
     udp: true,
   };
@@ -50,12 +50,15 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
       await box.uncheck();
     await page.getByRole('checkbox', { name: scriptName, exact: true }).check();
     await page.getByLabel('报告名称', { exact: true }).fill('浏览器验收-' + info.project.name);
+    await page.getByRole('combobox', { name: '节点执行内核', exact: true }).selectOption('xray');
     await page.getByRole('button', { name: '开始综合测试', exact: true }).click();
     await expect
       .poll(async () => (await api(page, '/api/miaospeed/tests/current')).report?.state)
       .toBe('completed');
     const report = (await api(page, '/api/miaospeed/tests/current')).report;
     expect(report.results).toHaveLength(2);
+    expect(report.settings.nodeCore).toBe('xray');
+    expect(report.results[0].coreVersion).toBeTruthy();
     expect(report.results[0].measurements[0].value).toBe('受控 VM 检测完成');
     expect(report.results[1].state).toBe('unsupported');
     expect(JSON.stringify(report)).not.toContain(raw.password);
@@ -69,6 +72,9 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     await expect(page.getByRole('region', { name: '节点检测详情', exact: true })).toContainText(
       '受控 VM 检测完成',
     );
+    await expect(page.getByRole('region', { name: '节点检测详情', exact: true })).toContainText(
+      '执行内核：Xray',
+    );
     await noOverflow(page);
     await page.screenshot({ path: info.outputPath('comprehensive-report.png'), fullPage: true });
     await page.getByLabel('筛选结果', { exact: true }).fill(raw.name);
@@ -79,6 +85,8 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     const contents = await readFile(info.outputPath('report.csv'), 'utf8');
     expect(contents).toContain(raw.name);
     expect(contents).toContain('4.7.6');
+    expect(contents).toContain('Xray');
+    expect(contents).toContain(report.results[0].coreVersion);
     expect(contents).not.toContain(raw.password);
     expect(contents).not.toContain('无效节点');
     const pngDownload = page.waitForEvent('download');
@@ -92,6 +100,15 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     await expect(page.getByRole('region', { name: '综合测试报告', exact: true })).toContainText(
       report.name,
     );
+    await page.getByRole('button', { name: '使用此报告配置重测', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: '节点执行内核', exact: true })).toHaveValue(
+      'xray',
+    );
+    await page.getByText('测试参数', { exact: true }).click();
+    await page.getByRole('button', { name: '保存为默认参数', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: '默认测试参数已保存' })).toBeVisible();
+    expect((await api(page, '/api/miaospeed/settings')).nodeCore).toBe('xray');
+    await page.getByRole('button', { name: '历史报告', exact: true }).click();
     await historyRow.getByRole('button', { name: '删除报告', exact: true }).click();
     await expect(historyRow).toHaveCount(0);
 

@@ -14,6 +14,7 @@ import {
   metricIds,
   scriptsSchema,
   speedSettingsSchema,
+  speedCoreLabels,
   speedPreviewSchema,
   speedReportSchema,
   reportListSchema,
@@ -554,6 +555,12 @@ onBeforeUnmount(() => {
           <div class="test-launch">
             <label>报告名称<input v-model="name" maxlength="120" /></label
             ><label
+              >节点执行内核<select v-model="settings.nodeCore">
+                <option v-for="(label, core) in speedCoreLabels" :key="core" :value="core">
+                  {{ label }}
+                </option>
+              </select></label
+            ><label
               >链执行内核<select v-model="settings.chainCore">
                 <option v-for="(label, core) in coreLabels" :key="core" :value="core">
                   {{ label }}
@@ -574,7 +581,8 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <p class="muted">
-            每个节点的下行 {{ settings.downloadSeconds }} 秒、上行
+            节点执行内核适用于已保存节点和临时节点；REALITY 节点可选择 Xray。 每个节点的下行
+            {{ settings.downloadSeconds }} 秒、上行
             {{ settings.uploadSeconds }} 秒（仅执行勾选项）。取消后保留已完成结果。
           </p>
         </section></template

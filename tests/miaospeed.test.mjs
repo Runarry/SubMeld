@@ -299,6 +299,170 @@ test(
   },
 );
 
+test(
+  'selected cores test saved and temporary nodes over TCP/UDP and clean up on cancellation',
+  { timeout: 180000 },
+  async (t) => {
+    const f = await fixture(t),
+      kernels = new KernelManager(f.directory);
+    await kernels.initialize();
+    const lease = kernels.snapshot();
+    const net = await controlledNetwork(
+      lease.binaries.get('singbox').path,
+      join(f.directory, 'network'),
+    );
+    const tester = new MiaospeedTester(
+      f.miaospeedStore,
+      f.miaospeedScripts,
+      f.miaospeedInput,
+      kernels,
+      f.converter,
+      f.testActivity,
+      {
+        ...f.config,
+        miaospeedBridgeBind: isIPv4(f.config.miaospeedBridgeHost)
+          ? f.config.miaospeedBridgeHost
+          : '0.0.0.0',
+      },
+      async () => {}, // Only this isolated fixture permits its controlled loopback targets.
+    );
+    f.beforeClose(async () => {
+      await tester.close();
+      await net.close();
+      await lease.release();
+      await kernels.close();
+    });
+    const requests = [];
+    const settings = { ...net.settings, pingUrl: 'https://fixture.example/ping' };
+    const run = tester.client.run.bind(tester.client);
+    tester.client.run = (...args) => {
+      requests.push(args[1].map((node) => JSON.parse(node.Payload)));
+      // Map the accepted API URL to the controlled HTTP fixture only at the real backend boundary.
+      args[0] = {
+        ...args[0],
+        pingUrl: `http://127.0.0.1:${net.port}${new URL(args[0].pingUrl).pathname}`,
+      };
+      return run(...args);
+    };
+    const raw = toUpstream(net.chain.entry);
+    const resource = await f.nodes.create({
+      name: 'single-core-node',
+      source: 'local',
+      content: JSON.stringify(raw),
+    });
+    const saved = subject((await f.nodes.list(resource.id)).nodes[0]);
+    const metrics = [
+      'TEST_HTTP_CODE',
+      'SPEED_AVERAGE',
+      'USPEED_AVERAGE',
+      'UDP_TYPE',
+      'GEOIP_INBOUND',
+    ];
+    const finished = async (id) => {
+      await waitFor(
+        () => f.miaospeedStore.get(id).state !== 'running' && !f.testActivity.current(),
+        45000,
+      );
+      return f.miaospeedStore.get(id);
+    };
+    for (const core of ['mihomo', 'singbox', 'xray']) {
+      const before = { ...net.counts };
+      requests.length = 0;
+      const report = await tester.start({
+        subjects: [saved],
+        metrics,
+        scripts: [],
+        settings: { ...settings, nodeCore: core },
+      });
+      assert.throws(() => f.testActivity.acquire('three-core'), /测试/);
+      const result = await finished(report.id);
+      const row = result.results[0];
+      assert.equal(result.settings.nodeCore, core);
+      assert.equal(row.coreVersion, lease.binaries.get(core).version);
+      for (const metric of metrics.filter((id) => id !== 'GEOIP_INBOUND'))
+        assert.equal(
+          row.measurements.find((m) => m.id === metric).status,
+          'measured',
+          core + ': ' + JSON.stringify(row),
+        );
+      assert.equal(row.measurements.find((m) => m.id === 'TEST_HTTP_CODE').value, '204, 204, 204');
+      assert.ok(net.counts.download > before.download);
+      assert.ok(net.counts.upload > before.upload);
+      assert.ok(net.counts.stun > before.stun);
+      assert.equal(requests[0][0].type, 'socks5');
+      assert.equal(requests[1][0].server, raw.server, 'Entry topology must use the real node');
+      assert.equal(requests[1][0].port, raw.port);
+      assert.equal(requests[1][0].type, raw.type);
+      assert.equal(
+        await portReady(
+          requests[0][0].port,
+          AbortSignal.timeout(1000),
+          f.config.miaospeedBridgeHost === 'host.docker.internal'
+            ? '127.0.0.1'
+            : f.config.miaospeedBridgeHost,
+        ),
+        false,
+      );
+      assert.deepEqual(await readdir(join(f.directory, 'node-test-tmp')), []);
+      assert.ok(!JSON.stringify(result).includes(raw.password));
+    }
+    const preview = await f.miaospeedInput.preview({ kind: 'text', content: JSON.stringify(raw) });
+    const ref = { kind: 'temporary', previewId: preview.id, nodeIndex: 0 };
+    const temporary = await tester.start({
+      subjects: [ref],
+      metrics: ['TEST_HTTP_CODE'],
+      scripts: [],
+      settings: { ...settings, nodeCore: 'xray' },
+    });
+    assert.throws(() => f.miaospeedInput.capture(ref), /过期/);
+    const temporaryResult = await finished(temporary.id);
+    assert.equal(temporaryResult.results[0].measurements[0].value, '204, 204, 204');
+    assert.equal(temporaryResult.results[0].coreVersion, lease.binaries.get('xray').version);
+    const unsupported = await f.miaospeedInput.preview({
+      kind: 'text',
+      content: JSON.stringify({ ...raw, udp: false }),
+    });
+    requests.length = 0;
+    const rejected = await tester.start({
+      subjects: [{ kind: 'temporary', previewId: unsupported.id, nodeIndex: 0 }],
+      metrics: ['TEST_HTTP_CODE'],
+      scripts: [],
+      settings: { ...settings, nodeCore: 'xray' },
+    });
+    assert.equal((await finished(rejected.id)).results[0].state, 'unsupported');
+    assert.equal(requests.length, 0, 'Unsupported parameters must not silently fall back');
+    const beforeHang = net.counts.http;
+    const running = await tester.start({
+      subjects: [saved],
+      metrics: ['TEST_HTTP_CODE'],
+      scripts: [],
+      settings: {
+        ...settings,
+        nodeCore: 'xray',
+        pingUrl: 'https://fixture.example/hang',
+        requestTimeoutMs: 10000,
+      },
+    });
+    await waitFor(() => net.counts.http > beforeHang);
+    const port = requests[0][0].port;
+    tester.cancel(running.id);
+    const cancelled = await finished(running.id);
+    assert.equal(cancelled.state, 'cancelled');
+    assert.equal(cancelled.results[0].state, 'cancelled');
+    assert.equal(
+      await portReady(
+        port,
+        AbortSignal.timeout(1000),
+        f.config.miaospeedBridgeHost === 'host.docker.internal'
+          ? '127.0.0.1'
+          : f.config.miaospeedBridgeHost,
+      ),
+      false,
+    );
+    assert.deepEqual(await readdir(join(f.directory, 'node-test-tmp')), []);
+  },
+);
+
 test('native temporary parsing, script revisions, sanitized reports and interrupted recovery', async (t) => {
   const f = await fixture(t);
   const raw = {
@@ -390,7 +554,16 @@ test('native temporary parsing, script revisions, sanitized reports and interrup
     saved.state = 'running';
     saved.results[0].state = 'running';
     f.miaospeedStore.create(saved);
+    const metadata = JSON.parse(
+      db.prepare('SELECT metadata FROM speed_reports WHERE id=?').get(saved.id).metadata,
+    );
+    delete metadata.settings.nodeCore;
+    db.prepare('UPDATE speed_reports SET metadata=? WHERE id=?').run(
+      JSON.stringify(metadata),
+      saved.id,
+    );
     const recovery = new MiaospeedStore(db);
+    assert.equal(recovery.get(saved.id).settings.nodeCore, 'native');
     assert.equal(recovery.get(saved.id).state, 'interrupted');
     assert.equal(recovery.get(saved.id).results[0].state, 'cancelled');
     recovery.remove(saved.id);
