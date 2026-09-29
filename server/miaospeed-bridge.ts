@@ -17,17 +17,17 @@ import type { Converter } from './converter/pool.js';
 
 // A SOCKS bridge needs both TCP and UDP on its advertised interfaces. Windows
 // may allow a loopback TCP reservation while excluding the same UDP port.
-export async function freeBridgePort() {
+export async function freeBridgePort(bind = '0.0.0.0') {
   for (let attempt = 0; attempt < 20; attempt++) {
     const tcp = createServer(),
       udp = createSocket('udp4');
     let udpBound = false;
     try {
-      tcp.listen(randomInt(20000, 49000), '0.0.0.0');
+      tcp.listen(randomInt(20000, 49000), bind);
       await once(tcp, 'listening');
       const address = tcp.address();
       if (!address || typeof address === 'string') throw new Error('No bridge address');
-      udp.bind(address.port, '0.0.0.0');
+      udp.bind(address.port, bind);
       await once(udp, 'listening');
       udpBound = true;
       return address.port;
@@ -97,15 +97,16 @@ export async function startBridge(
   dataDir: string,
   host: string,
   signal: AbortSignal,
+  bind = '0.0.0.0',
 ) {
-  const port = await freeBridgePort();
+  const port = await freeBridgePort(bind);
   const rendered = renderResultSchema.parse(
     await converter.run(
       { kind: 'render', input: { target: binary.target, listenPort: port, items: [item] } },
       signal,
     ),
   );
-  return launchBridge(binary, rendered.full, port, dataDir, host, signal);
+  return launchBridge(binary, rendered.full, port, dataDir, host, signal, bind);
 }
 export async function launchBridge(
   binary: KernelBinary,
@@ -114,6 +115,7 @@ export async function launchBridge(
   dataDir: string,
   host: string,
   signal: AbortSignal,
+  bind = '0.0.0.0',
 ) {
   const username = 'submeld',
     password = randomBytes(24).toString('hex');
@@ -133,7 +135,7 @@ export async function launchBridge(
   };
   try {
     const configPath = join(directory, binary.target === 'mihomo' ? 'config.yaml' : 'config.json');
-    await writeFile(configPath, bridgeConfig(binary.target, full, port, username, password), {
+    await writeFile(configPath, bridgeConfig(binary.target, full, port, username, password, bind), {
       mode: 0o600,
     });
     signal.throwIfAborted();
@@ -143,7 +145,7 @@ export async function launchBridge(
       directory,
     );
     const startup = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
-    while (!(await portReady(port, startup))) {
+    while (!(await portReady(port, startup, bind === '0.0.0.0' ? '127.0.0.1' : bind))) {
       signal.throwIfAborted();
       if (child.exited)
         throw new AppError('TARGET_UNSUPPORTED', '所选内核拒绝了链或 SOCKS 配置。', 422);

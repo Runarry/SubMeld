@@ -176,6 +176,55 @@ test('login creates an HttpOnly Strict cookie and production adds Secure and __H
   assert.match(pr.headers.get('set-cookie'), /^__Host-submeld-session=/);
   assert.match(pr.headers.get('set-cookie'), /; Secure/);
 });
+
+test('opt-in production HTTP sessions authenticate and logout without weakening origin checks', async () => {
+  const publicOrigin = 'http://192.168.5.12:3012';
+  const http = createApp({
+    resources: settings.resources,
+    config: { ...config, development: false, publicOrigin },
+    auth: new Auth(hash),
+    nodes: settings.nodes,
+    chains: settings.chains,
+    subscriptions: settings.subscriptions,
+  });
+  const headers = {
+    Origin: publicOrigin,
+    'Content-Type': 'application/json',
+    'X-SubMeld-Request': '1',
+  };
+  const login = await http.request(publicOrigin + '/api/auth/login', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ password }),
+  });
+  assert.equal(login.status, 200);
+  const set = login.headers.get('set-cookie');
+  assert.match(set, /^submeld-session=/);
+  assert.match(set, /HttpOnly/);
+  assert.match(set, /SameSite=Strict/);
+  assert.doesNotMatch(set, /Secure|__Host-|Domain=/);
+  headers.Cookie = set.split(';')[0];
+  assert.equal((await http.request(publicOrigin + '/api/auth/me', { headers })).status, 200);
+  assert.equal(
+    (
+      await http.request(publicOrigin + '/api/auth/logout', {
+        method: 'POST',
+        headers: { ...headers, Origin: 'http://other.example' },
+        body: '{}',
+      })
+    ).status,
+    403,
+  );
+  const logout = await http.request(publicOrigin + '/api/auth/logout', {
+    method: 'POST',
+    headers,
+    body: '{}',
+  });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get('set-cookie'), /^submeld-session=;/);
+  assert.doesNotMatch(logout.headers.get('set-cookie'), /Secure|__Host-/);
+  assert.equal((await http.request(publicOrigin + '/api/auth/me', { headers })).status, 401);
+});
 test('HTTP node addition uses native storage and rejects malformed management payloads', async () => {
   const saved = await post('/api/nodes', {
     name: 'api-import',

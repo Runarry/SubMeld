@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { createApp } from '../dist/server/app.js';
+import { loadConfig } from '../dist/server/config.js';
 import { openSettings } from '../dist/server/database.js';
 import { hashPassword, Auth } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
@@ -109,12 +110,41 @@ const server = serve({
   hostname: '127.0.0.1',
   port: 3210,
 });
+const httpConfig = loadConfig(false, {
+  ...process.env,
+  PUBLIC_ORIGIN: 'http://submeld-http.test:3211',
+  PORT: '3211',
+  ALLOW_HTTP: 'true',
+  DATA_DIR: directory,
+});
+const httpApp = createApp({
+  miaospeed,
+  resources: settings.resources,
+  tester,
+  config: httpConfig,
+  webRoot: fileURLToPath(new URL('../dist/web/', import.meta.url)),
+  auth,
+  nodes: settings.nodes,
+  chains: settings.chains,
+  subscriptions: settings.subscriptions,
+});
+const httpServer = serve({
+  fetch: (request) => {
+    if (request.method === 'POST' && new URL(request.url).pathname === '/api/auth/login')
+      clock += 300001;
+    return httpApp.fetch(request);
+  },
+  hostname: '127.0.0.1',
+  port: httpConfig.port,
+});
 let closed = false;
 async function close() {
   if (closed) return;
   closed = true;
-  server.close();
-  server.closeAllConnections();
+  for (const listener of [server, httpServer]) {
+    listener.close();
+    listener.closeAllConnections();
+  }
   await tester.close();
   await miaospeed.close();
   await kernels.close();

@@ -3,6 +3,10 @@ import { test } from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { isIPv4 } from 'node:net';
+import { networkInterfaces } from 'node:os';
+import { createSocket } from 'node:dgram';
+import { once } from 'node:events';
 import { fixture, waitFor, subject } from './upstream-fixture.mjs';
 import { controlledNetwork } from './miaospeed-fixture.mjs';
 import { KernelManager } from '../dist/server/kernels.js';
@@ -37,6 +41,24 @@ test(
       join(f.directory, 'network'),
     );
     const backend = new MiaospeedClient(process.env.MIAOSPEED_URL, process.env.MIAOSPEED_TOKEN);
+    const bridgeBind = isIPv4(process.env.MIAOSPEED_BRIDGE_HOST)
+      ? process.env.MIAOSPEED_BRIDGE_HOST
+      : execFileSync(
+          'docker',
+          [
+            'inspect',
+            process.env.SUBMELD_TEST_MIAOSPEED_CONTAINER,
+            '--format',
+            '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}',
+          ],
+          { encoding: 'utf8', windowsHide: true },
+        ).trim();
+    assert.ok(
+      Object.values(networkInterfaces())
+        .flat()
+        .some((ip) => ip?.address === bridgeBind),
+    );
+    assert.notEqual(bridgeBind, '127.0.0.1');
     f.beforeClose(async () => {
       await net.close();
       await lease.release();
@@ -113,7 +135,7 @@ test(
         name: 'chain-' + core,
         inputs: [{ kind: 'chain', id: chain.id }],
         formats: [core],
-        listenPort: await freeBridgePort(),
+        listenPort: await freeBridgePort(bridgeBind),
       });
       const full = (await f.subscriptions.artifact(plan.id, core)).content;
       const port = plan.listenPort,
@@ -125,8 +147,22 @@ test(
         f.directory,
         process.env.MIAOSPEED_BRIDGE_HOST,
         abort.signal,
+        bridgeBind,
       );
       try {
+        assert.equal(await portReady(port, AbortSignal.timeout(1000), bridgeBind), true);
+        assert.equal(
+          await portReady(port, AbortSignal.timeout(1000)),
+          false,
+          core + ' must not listen on an unselected interface',
+        );
+        const otherInterface = createSocket('udp4');
+        try {
+          otherInterface.bind(port, '127.0.0.1');
+          await once(otherInterface, 'listening');
+        } finally {
+          otherInterface.close();
+        }
         const before = { ...net.counts };
         const output = await backend.run(
           net.settings,
@@ -193,7 +229,7 @@ test(
         await bridge.close();
       }
       assert.equal(
-        await portReady(port, AbortSignal.timeout(1000)),
+        await portReady(port, AbortSignal.timeout(1000), bridgeBind),
         false,
         'Cancelled core must release its listener',
       );

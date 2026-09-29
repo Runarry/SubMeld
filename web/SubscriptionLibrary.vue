@@ -182,9 +182,30 @@ function protocols(group: (typeof targetGroups)[number], event: Event) {
       .map((v) => v.trim())
       .filter(Boolean);
 }
-async function copy(url: string) {
-  await navigator.clipboard.writeText(url);
-  message.value = '已复制分享地址。';
+async function copy(url: string, event: Event) {
+  const input = (event.currentTarget as HTMLElement).closest('.share-row')?.querySelector('input');
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+      message.value = '已复制分享地址。';
+      return;
+    }
+  } catch {
+    // The browser may deny Clipboard API access even on HTTPS.
+  }
+  if (input) {
+    input.focus();
+    input.select();
+    try {
+      if (document.execCommand('copy')) {
+        message.value = '已复制分享地址。';
+        return;
+      }
+    } catch {
+      // Keep the visible link selected for manual copying.
+    }
+  }
+  message.value = '无法自动复制，请从分享地址输入框手动复制。';
 }
 onMounted(() => void act(load));
 </script>
@@ -347,7 +368,7 @@ onMounted(() => void act(load));
                 :value="url"
                 readonly
                 :aria-label="outputLabels[format] + ' 分享地址'" /></label
-            ><button :disabled="busy" @click="act(() => copy(url))">复制</button>
+            ><button :disabled="busy" @click="act(() => copy(url, $event))">复制</button>
           </div>
         </div>
         <textarea v-if="preview" :value="preview" readonly rows="12" aria-label="生成结果" />

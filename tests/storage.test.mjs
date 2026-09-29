@@ -104,7 +104,7 @@ test('maintenance CLI initializes and resets through stdin only when stopped', a
     dir.cleanup();
   }
 });
-test('HTTP is only available with explicit loopback development configuration', () => {
+test('HTTP requires loopback development or an explicit production opt-in', () => {
   assert.throws(() =>
     loadConfig(false, { PUBLIC_ORIGIN: 'http://127.0.0.1:3000', DATA_DIR: 'data' }),
   );
@@ -117,6 +117,30 @@ test('HTTP is only available with explicit loopback development configuration', 
     loadConfig(true, { PUBLIC_ORIGIN: 'http://127.0.0.1:5173', DATA_DIR: 'data' }).development,
     true,
   );
+  const env = { PUBLIC_ORIGIN: 'http://192.168.5.12:3012', DATA_DIR: 'data' };
+  assert.throws(() => loadConfig(false, env));
+  assert.throws(() => loadConfig(false, { ...env, ALLOW_HTTP: 'false' }));
+  const configured = loadConfig(false, { ...env, ALLOW_HTTP: 'true', PORT: '3012' });
+  assert.equal(configured.publicOrigin, env.PUBLIC_ORIGIN);
+  assert.equal(configured.development, false);
+  assert.equal(configured.port, 3012);
+  assert.throws(() =>
+    loadConfig(false, { ...env, ALLOW_HTTP: 'true', PUBLIC_ORIGIN: 'ftp://192.168.5.12' }),
+  );
+});
+
+test('listener configuration validates ports and the IPv4 chain bind address', () => {
+  const env = { PUBLIC_ORIGIN: 'https://submeld.example', DATA_DIR: 'data' };
+  assert.equal(loadConfig(false, env).port, 3000);
+  assert.equal(loadConfig(false, env).miaospeedBridgeBind, '0.0.0.0');
+  assert.equal(
+    loadConfig(false, { ...env, MIAOSPEED_BRIDGE_BIND: '172.26.12.2' }).miaospeedBridgeBind,
+    '172.26.12.2',
+  );
+  for (const PORT of ['', '0', '65536', '3012.5', '3e3', 'invalid'])
+    assert.throws(() => loadConfig(false, { ...env, PORT }));
+  for (const MIAOSPEED_BRIDGE_BIND of ['', 'submeld', '::1', '999.1.1.1'])
+    assert.throws(() => loadConfig(false, { ...env, MIAOSPEED_BRIDGE_BIND }));
 });
 
 test('empty v2 business definitions upgrade while preserving account settings and legacy test records', async () => {

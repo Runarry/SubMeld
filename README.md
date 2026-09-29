@@ -92,12 +92,16 @@ SQLite 仅保存账号、运行设置和测试结果，节点及配置预览在�
 
 ## Linux 容器部署
 
-三服务配置见 [compose.yaml](compose.yaml)。仅 SubMeld 的 3000 端口绑定宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。
+三服务配置见 [compose.yaml](compose.yaml)。SubMeld 默认将 3000 端口绑定宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。`PORT` 可设置为其他 1–65535 端口，监听、端口映射及健康检查同步使用该端口。
 
 1. 准备私有 `.env`，设置实际 HTTPS PUBLIC_ORIGIN 和随机 MIAOSPEED_TOKEN。
 2. `docker compose build submeld`。
 3. 新安装运行 `docker compose run --rm --no-deps submeld node dist/server/cli.js init`；已有账号不重复初始化。
 4. `docker compose up -d sub-store miaospeed submeld`。
+
+可信局域网可显式设置 `ALLOW_HTTP=true`，并将 `PUBLIC_ORIGIN` 设置为实际的 `http://内网IP:端口`。该模式仍以生产方式运行，保留登录和同源检查；会话 Cookie 使用普通名称及 HttpOnly、SameSite=Strict，HTTP 不设置 Secure。密码、会话与订阅内容经局域网明文传输。HTTPS 配置仍使用原有安全 Cookie。分享地址支持 HTTP 浏览器的复制回退，复制失败时保留可选取的地址。
+
+macvlan 部署应复用已配置的外部网络，仅将 SubMeld 加入局域网；Sub-Store 和 miaospeed 保留在项目自己的 bridge 网络。将 `MIAOSPEED_BRIDGE_BIND` 设置为 SubMeld 在该 bridge 网络上的固定 IPv4，使三内核临时 SOCKS 的 TCP/UDP 仅监听内部地址；`MIAOSPEED_BRIDGE_HOST` 则填写 miaospeed 可达的该地址或服务名。macvlan 不需要发布宿主机端口。持久化数据可通过绑定挂载放在项目目录，SubMeld 数据目录需允许容器的 node 用户（UID 1000）读写。
 
 网页不接触 miaospeed Token，不挂载 Docker socket。备份时停止服务并保存 Sub-Store 卷、账号与测试报告卷、私有环境配置；已有 Koipy 配置目录保留。旧 `#/koipy` 链接进入测试中心。
 

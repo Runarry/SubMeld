@@ -51,7 +51,9 @@ export function createApp({
   subscriptions,
 }: AppOptions) {
   const app = new Hono();
-  const cookieName = config.development ? 'submeld-session' : '__Host-submeld-session';
+  const secureCookie = config.publicOrigin.startsWith('https:');
+  const cookieName =
+    !config.development && secureCookie ? '__Host-submeld-session' : 'submeld-session';
   const writes = new Set([
     '/api/auth/login',
     '/api/auth/logout',
@@ -269,7 +271,7 @@ export function createApp({
     auth.logout(getCookie(context, cookieName));
     setCookie(context, cookieName, token, {
       httpOnly: true,
-      secure: !config.development || config.publicOrigin.startsWith('https:'),
+      secure: secureCookie,
       sameSite: 'Strict',
       path: '/',
       maxAge: 86400,
@@ -283,7 +285,7 @@ export function createApp({
     auth.logout(getCookie(context, cookieName));
     deleteCookie(context, cookieName, {
       path: '/',
-      secure: !config.development || config.publicOrigin.startsWith('https:'),
+      secure: secureCookie,
       httpOnly: true,
       sameSite: 'Strict',
     });

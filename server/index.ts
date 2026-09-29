@@ -84,8 +84,8 @@ async function main() {
     throw error;
   }
   const hostname = config.development ? '127.0.0.1' : '0.0.0.0';
-  const server = serve({ fetch: app.fetch, hostname, port: 3000 }, () =>
-    console.info('SubMeld started on port 3000.'),
+  const server = serve({ fetch: app.fetch, hostname, port: config.port }, () =>
+    console.info('SubMeld started on port ' + config.port + '.'),
   );
   let closing = false;
   const shutdown = async () => {

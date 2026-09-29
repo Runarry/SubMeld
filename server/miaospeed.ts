@@ -98,7 +98,7 @@ export class MiaospeedTester {
     private activity: TestActivity,
     private config: Pick<
       Config,
-      'dataDir' | 'miaospeedUrl' | 'miaospeedToken' | 'miaospeedBridgeHost'
+      'dataDir' | 'miaospeedUrl' | 'miaospeedToken' | 'miaospeedBridgeHost' | 'miaospeedBridgeBind'
     >,
     private targetCheck = validateTargets,
   ) {
@@ -259,6 +259,7 @@ export class MiaospeedTester {
                   this.config.dataDir,
                   this.config.miaospeedBridgeHost,
                   signal,
+                  this.config.miaospeedBridgeBind,
                 );
                 payload = bridge.payload;
               } else payload = await this.input.payload(node.raw!, name, signal);
