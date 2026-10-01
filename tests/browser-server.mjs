@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { KernelManager } from '../dist/server/kernels.js';
 import { NodeTester } from '../dist/server/node-tests.js';
 import { MiaospeedTester } from '../dist/server/miaospeed.js';
+import { TelegramService } from '../dist/server/telegram.js';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
@@ -70,8 +71,25 @@ const miaospeed = new MiaospeedTester(
     miaospeedBridgeHost: 'host.docker.internal',
   },
 );
+// Browser tests exercise real settings APIs while Telegram stays completely local.
+const telegram = new TelegramService(settings.telegramStore, miaospeed, {
+  client: () => ({
+    async call(method, _body, signal) {
+      if (method === 'getMe') return { id: 90001, is_bot: true, username: 'submeld_test_bot' };
+      if (method === 'getWebhookInfo') return { url: '' };
+      if (method === 'getUpdates') {
+        await delay(30000, undefined, { signal });
+        return [];
+      }
+      throw new Error('Browser fixture must not send Telegram messages');
+    },
+    async close() {},
+  }),
+});
+telegram.start();
 const app = createApp({
   miaospeed,
+  telegram,
   resources: settings.resources,
   tester,
   config: {
@@ -119,6 +137,7 @@ const httpConfig = loadConfig(false, {
 });
 const httpApp = createApp({
   miaospeed,
+  telegram,
   resources: settings.resources,
   tester,
   config: httpConfig,
@@ -145,6 +164,7 @@ async function close() {
     listener.close();
     listener.closeAllConnections();
   }
+  await telegram.close();
   await tester.close();
   await miaospeed.close();
   await kernels.close();

@@ -64,7 +64,8 @@ export class MiaospeedInput {
     for (const [id, value] of this.previews)
       if (value.expires <= this.now()) this.previews.delete(id);
   }
-  async preview(input: unknown): Promise<SpeedPreview> {
+  async preview(input: unknown, signal?: AbortSignal): Promise<SpeedPreview> {
+    signal?.throwIfAborted();
     const value = previewInputSchema.parse(input);
     const nodes: CapturedNode[] = [];
     if (value.kind === 'url') {
@@ -76,12 +77,14 @@ export class MiaospeedInput {
         { name: 'temporary-' + randomUUID(), source: 'remote', url: value.url, process: [] },
         true,
       );
+      signal?.throwIfAborted();
       for (const raw of parsed.original) nodes.push(this.describe(raw));
     } else {
       const list = entries(value.content);
       if (list.length > MAX_NODES)
         throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数量超过 2,000。', 413);
       for (const [index, entry] of list.entries()) {
+        signal?.throwIfAborted();
         try {
           const parsed = await this.resources.client.convert(
             typeof entry === 'string' ? entry : JSON.stringify(entry),
@@ -105,6 +108,7 @@ export class MiaospeedInput {
         }
       }
     }
+    signal?.throwIfAborted();
     if (!nodes.length || nodes.length > MAX_NODES)
       throw new AppError('INPUT_LIMIT_EXCEEDED', '请选择包含 1～2,000 个节点的输入。', 400);
     const id = randomUUID(),

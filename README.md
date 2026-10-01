@@ -1,6 +1,6 @@
 # SubMeld · 订融
 
-SubMeld 使用独立 Sub-Store 保存全部代理配置，提供统一节点管理、两跳链、输出方案和网页测试中心。综合测试直接对接 AirportR miaospeed；保留 Mihomo、sing-box、Xray 三内核 HTTPS 检查。无需 Koipy、Telegram 或激活码。
+SubMeld 使用独立 Sub-Store 保存全部代理配置，提供统一节点管理、两跳链、输出方案和网页测试中心。综合测试直接对接 AirportR miaospeed；保留 Mihomo、sing-box、Xray 三内核 HTTPS 检查。可选 Telegram 机器人入口默认关闭，无需 Koipy 或激活码。
 
 ## 当前架构
 
@@ -69,9 +69,30 @@ Mihomo 与 sing-box 经上游转换及链式字段输出；Xray 使用随项目�
 
 默认 HTTPS 目标为 `https://cp.cloudflare.com/generate_204`；其他参数沿用锁定后端的有效默认值：上下行 3 秒、各 1 线程，Ping 1 次、重试 3 次、请求超时 5000 毫秒。4.7.6 的上行单次超时使用时长整除 2，因此上行时长至少 2 秒。DNS 失败、198.18.0.0/15 Fake-IP、非公网目标单独标为目标异常；缺失矩阵、异常响应或无法确定的平台结果为未知，不表示节点失效或解锁成功。
 
+### Telegram 测速
+
+在测试中心的“Telegram”栏目保存 Bot Token、Telegram 数字用户 ID 白名单和独立测试预设，再启用机器人。用户私聊 `/start` 可查看自己的 ID。支持可选 HTTP/HTTPS 代理及代理认证，代理仅用于 Telegram 收发消息和文件，不影响 Sub-Store、miaospeed 或测试流量。设置读取不返回 Token 或代理认证信息；留空保留原值，显式清除才删除。Token 与运行设置存放在现有私有 SQLite 数据目录中。
+
+SubMeld 使用 Bot API 长轮询，无需公网 Webhook 或新增容器。一个机器人只交给一个服务运行；已有 Webhook 或另一实例占用时显示错误，不自动移除旧 Webhook。停用机器人不影响网页测试入口。
+
+白名单用户发送节点文本、单个 HTTP(S) 订阅地址或 UTF-8 配置文件即可排队，无需再次确认。每份输入最多 4 MiB、2,000 个节点，沿用 Sub-Store 临时解析。机器人预设初始复制网页保存的参数并选中全部指标与启用脚本，保存后独立管理。每个任务固定提交时的参数、指标和脚本选择；开始时读取脚本当前版本，脚本已删除或停用会明确失败。
+
+Telegram 任务按提交顺序等待现有综合测试／三内核检查的共享锁。排队超过 30 分钟会清除临时输入并要求重发；网页发起测试仍沿用忙碌提示。节点文本、订阅地址和文件内容不写入 SQLite。服务重启后未完成任务标记中断并通知重发，已经生成的历史报告保留。停用机器人会取消其任务；移除用户白名单会取消该用户任务并停止回传。更换为另一个机器人后，不向新机器人发送旧任务报告。
+
+机器人命令：
+
+- `/start`、`/help`：查看自己的 ID 和使用说明。
+- `/status`：查看自己最近的任务和排队状态。
+- `/cancel <任务号>`：取消自己的任务，也可点击任务消息中的取消按钮。运行中取消保留部分结果，后端实际结束前继续持有测速锁。
+- `/result <任务号>`：再次获取自己的结果，回传失败时继续补发尚未确认发送的部分。
+
+进度消息最多每 5 秒更新一次。完成、取消或失败后回复真实状态；有报告时发送分页 PNG 和完整 CSV。图片分组展示所选指标与脚本结论，CSV 保留采样、拓扑、错误明细和内核版本。容器包含中文及 Emoji 字体。未知、目标异常或不支持不会显示为测速成功或平台解锁。
+
+测速状态与回传状态分别记录。暂时断网或限流会重试回传，最多自动尝试五次，之后可在网页或通过 `/result` 补发；补发不重复测速。发送成功回执之前连接中断时，重试可能重复发送同一附件。真实 Telegram 收发验收需要在网页配置专用机器人；本地协议夹具不代表公网 Telegram 验收通过。
+
 ## 数据与兼容
 
-SQLite 仅保存账号、运行设置和测试结果，节点及配置预览在内存中。测试需要的临时凭据配置会在进程结束后清理。没有第二份可编辑节点凭据库。
+SQLite 仅保存账号、运行设置、测试结果及 Telegram 任务归属／回传元数据，节点及配置预览在内存中。测试需要的临时凭据配置会在进程结束后清理。没有第二份可编辑节点凭据库。
 
 保留现有 Sub-Store 数据、UUID、登录、旧测试数据及旧 Koipy 配置文件/目录。SQLite 增量增加报告和结果表；仅保存展示字段，不保存后端回显的节点载荷、订阅 URL 或凭据。旧业务库的兼容规则保持不变，不实现通用旧链或旧分享地址迁移。共享链配置版本为 `upstream-native-4`。
 
@@ -109,7 +130,7 @@ macvlan 部署应复用已配置的外部网络，仅将 SubMeld 加入局域网
 
 ## 接口与验证
 
-`/api/nodes` 负责统一节点管理；`/api/chains`、`/api/subscriptions` 适配上游文件；`/api/node-tests`、`/api/kernels` 保留三内核检查。`/api/miaospeed/{preview,tests,reports,scripts,settings,status}` 提供综合测试；`/api/integrations/files` 管理配套文件更新。上游原生管理使用 `/upstream/sub-store/*`。
+`/api/nodes` 负责统一节点管理；`/api/chains`、`/api/subscriptions` 适配上游文件；`/api/node-tests`、`/api/kernels` 保留三内核检查。`/api/miaospeed/{preview,tests,reports,scripts,settings,status}` 提供综合测试；`/api/telegram/{settings,status,check,tasks}` 管理可选机器人与任务，任务支持 `cancel`、`resend`；`/api/integrations/files` 管理配套文件更新。上游原生管理使用 `/upstream/sub-store/*`。
 
 | 命令                 | 内容                                                                 |
 | -------------------- | -------------------------------------------------------------------- |

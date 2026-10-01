@@ -5,6 +5,7 @@ import {
   type SpeedReport,
   type SpeedRow,
 } from '../server/shared/miaospeed';
+import { reportCsv, reportTitle } from '../server/shared/report-export';
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob),
     link = document.createElement('a');
@@ -13,48 +14,13 @@ function download(blob: Blob, name: string) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
-const title = (report: SpeedReport) =>
-  `${report.name} · ${report.createdAt} · miaospeed ${report.backendVersion ?? '未知'} · 节点内核 ${speedCoreLabels[report.settings.nodeCore]} · 链内核 ${speedCoreLabels[report.settings.chainCore]}`;
-function cell(input: unknown) {
-  let value = String(input ?? '').replace(/\0/g, '');
-  if (/^[\s]*[=+@-]/.test(value)) value = "'" + value;
-  return '"' + value.replaceAll('"', '""') + '"';
-}
 export function exportCsv(
   report: SpeedReport,
   rows: SpeedRow[],
   columns: { id: string; label: string }[],
 ) {
-  const records: unknown[][] = [
-    [title(report)],
-    ['测试参数', JSON.stringify(report.settings)],
-    [
-      '节点',
-      '协议',
-      '状态',
-      '过期',
-      '执行内核',
-      '内核版本',
-      ...columns.map((c) => c.label),
-      '测量明细（JSON，含原始值、单位、采样及拓扑）',
-    ],
-  ];
-  for (const row of rows)
-    records.push([
-      row.name,
-      row.protocol,
-      row.state,
-      row.stale ? '是' : '否',
-      speedCoreLabels[executionCore(report.settings, row.subject)],
-      row.coreVersion,
-      ...columns.map((column) => {
-        const metric = row.measurements.find((m) => m.id === column.id);
-        return metric ? measurementText(metric) : row.message;
-      }),
-      JSON.stringify(row.measurements),
-    ]);
   download(
-    new Blob(['\uFEFF' + records.map((record) => record.map(cell).join(',')).join('\r\n')], {
+    new Blob([reportCsv(report, rows, columns)], {
       type: 'text/csv;charset=utf-8',
     }),
     'submeld-' + report.id + '.csv',
@@ -90,7 +56,7 @@ export async function exportPng(
   ctx.font = 'bold 24px sans-serif';
   ctx.fillText(report.name, 30, 40);
   ctx.font = '16px sans-serif';
-  ctx.fillText(title(report).slice(0, 150), 30, 72);
+  ctx.fillText(reportTitle(report).slice(0, 150), 30, 72);
   parameters.forEach((line, i) => ctx.fillText(line, 30, 102 + i * 24));
   rows.forEach((row, index) => {
     const top = headerHeight + index * rowHeight;

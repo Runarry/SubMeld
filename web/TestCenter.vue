@@ -4,6 +4,7 @@ import { z } from 'zod';
 import NodeTestsPage from './NodeTestsPage.vue';
 import TestReport from './TestReport.vue';
 import TestScripts from './TestScripts.vue';
+import TelegramSettings from './TelegramSettings.vue';
 import ListPagination from './ui/ListPagination.vue';
 import { formatTime } from './format';
 import { nodeListSchema, type NodeView, type Resource } from '../server/shared/resources';
@@ -356,6 +357,7 @@ onBeforeUnmount(() => {
           ['cores', '三内核检查'],
           ['history', '历史报告'],
           ['scripts', '检测脚本'],
+          ['telegram', 'Telegram'],
           ['backend', '后端状态'],
         ]"
         :key="item[0]"
@@ -606,7 +608,7 @@ onBeforeUnmount(() => {
             <strong>{{ item.name }}</strong>
             <p>
               {{ formatTime(item.createdAt) }} · {{ item.completed }}/{{ item.total }} ·
-              {{ item.state }}
+              {{ item.state }} · {{ item.origin === 'telegram' ? 'Telegram' : '网页' }}
             </p>
           </div>
           <div class="toolbar">
@@ -650,6 +652,17 @@ onBeforeUnmount(() => {
           selectedScripts = selectedScripts.filter((id) =>
             values.some((s) => s.id === id && s.enabled),
           );
+        }
+      "
+    />
+    <TelegramSettings
+      v-if="tab === 'telegram'"
+      :api="api"
+      :scripts="scripts"
+      @report="
+        async (id) => {
+          await viewReport(id);
+          tab = 'history';
         }
       "
     />

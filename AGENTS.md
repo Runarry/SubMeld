@@ -22,7 +22,7 @@
 - 临时文本、URL、文件使用 Sub-Store 无保存解析；预览仅在内存，闲置 30 分钟过期，任务结束清除凭据副本。报告不保存原始载荷、订阅 URL、密码或 Token。
 - 检测脚本使用带 UUID、用途及版本的 Sub-Store 文件。CloudPassenger/miaospeed-scripts v1.0.0 由 miaospeed-scripts.lock.json 校验；初始化只补缺失，更新检查 revision，不覆盖用户编辑。
 - DNS 失败、198.18.0.0/15 Fake-IP 和非公网测试目标属于目标异常，不误报节点连接失败，不放行假地址。默认 Cloudflare HTTPS 目标。
-- 保留当前 Sub-Store、登录、旧测试数据及旧 Koipy 配置文件；移除 Koipy 服务、管理页和 Telegram 接口，旧 #/koipy 转入测试中心。旧 submeld.sqlite 目录拒绝打开，不删除旧数据目录。
+- 保留当前 Sub-Store、登录、旧测试数据及旧 Koipy 配置文件；不恢复 Koipy 服务或管理页，旧 #/koipy 转入测试中心。2026-10-01 授权可选 Telegram 测速入口：白名单私聊、长轮询、独立预设、内存排队、PNG/CSV 回传，复用现有测速与批次锁。Bot Token 及运行元数据存 SQLite，节点输入只在内存，重启不恢复未完成测速；Telegram 代理不影响实际测速流量。旧 submeld.sqlite 目录拒绝打开，不删除旧数据目录。
 
 ## 改动与检查
 

@@ -171,7 +171,7 @@ export class MiaospeedTester {
       throw error;
     }
   }
-  async start(input: unknown) {
+  async start(input: unknown, origin: SpeedReport['origin'] = 'web', reportId = randomUUID()) {
     if (this.closed) throw new AppError('TEST_UNAVAILABLE', '测试服务已停止。', 503);
     const value = speedRequestSchema.parse(input),
       settings = validateSpeedSettings(value.settings);
@@ -192,7 +192,8 @@ export class MiaospeedTester {
       const captured = value.subjects.map((subject) => this.input.capture(subject));
       lease = this.kernels.snapshot();
       const report: SpeedReport = {
-        id: randomUUID(),
+        id: reportId,
+        origin,
         name: value.name,
         state: 'running',
         createdAt: new Date().toISOString(),

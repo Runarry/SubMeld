@@ -99,8 +99,10 @@ async function png() {
       <div>
         <h2>{{ report.name }}</h2>
         <p class="muted">
-          {{ formatTime(report.createdAt) }} · miaospeed {{ report.backendVersion || '待返回' }} ·
-          节点内核 {{ speedCoreLabels[report.settings.nodeCore] }} · 链内核
+          {{ formatTime(report.createdAt) }} ·
+          {{ report.origin === 'telegram' ? 'Telegram' : '网页' }} · miaospeed
+          {{ report.backendVersion || '待返回' }} · 节点内核
+          {{ speedCoreLabels[report.settings.nodeCore] }} · 链内核
           {{ speedCoreLabels[report.settings.chainCore] }}
         </p>
       </div>

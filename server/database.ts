@@ -13,6 +13,8 @@ import { TestActivity } from './test-activity.js';
 import { MiaospeedStore } from './miaospeed-store.js';
 import { MiaospeedScripts } from './miaospeed-scripts.js';
 import { MiaospeedInput } from './miaospeed-input.js';
+import { TelegramStore } from './telegram-store.js';
+import { metricIds } from './shared/miaospeed.js';
 export function openSettings(dataDir: string, development: boolean, client = new SubStoreClient()) {
   if (process.platform === 'win32' && !development)
     throw new Error('生产数据权限需要 Linux 容器；Windows 仅支持显式开发模式。');
@@ -81,6 +83,16 @@ export function openSettings(dataDir: string, development: boolean, client = new
       chains = createChainStore(resources, files),
       subscriptions = createSubscriptionStore(resources, files);
     input = new MiaospeedInput(resources, chains);
+    const miaospeedStore = new MiaospeedStore(database);
+    const miaospeedScripts = new MiaospeedScripts(resources);
+    const telegramStore = new TelegramStore(database, () => ({
+      settings: miaospeedStore.settings(),
+      metrics: [...metricIds],
+      scriptIds: miaospeedScripts
+        .list()
+        .scripts.filter((script) => script.enabled)
+        .map((script) => script.id),
+    }));
     return {
       resources,
       files,
@@ -88,8 +100,9 @@ export function openSettings(dataDir: string, development: boolean, client = new
       chains,
       subscriptions,
       testActivity: new TestActivity(),
-      miaospeedStore: new MiaospeedStore(database),
-      miaospeedScripts: new MiaospeedScripts(resources),
+      miaospeedStore,
+      miaospeedScripts,
+      telegramStore,
       miaospeedInput: input,
       nodeTests: createNodeTestStore(database, resources, chains),
       getPasswordHash(): string | undefined {

@@ -161,6 +161,7 @@ export const speedRowSchema = z.strictObject({
 export type SpeedRow = z.infer<typeof speedRowSchema>;
 export const speedReportSchema = z.strictObject({
   id: z.string().uuid(),
+  origin: z.enum(['web', 'telegram']).default('web'),
   name: z.string(),
   state: z.enum(['running', 'completed', 'cancelled', 'failed', 'interrupted']),
   createdAt: z.string(),

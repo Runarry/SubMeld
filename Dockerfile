@@ -10,7 +10,7 @@ RUN pnpm build && pnpm cores:prepare && pnpm prune --prod
 FROM node:24.6.0-bookworm-slim
 ENV NODE_ENV=production DATA_DIR=/data
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends unzip ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends unzip ca-certificates fonts-noto-cjk fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
 RUN mkdir /data && chown node:node /data && chmod 700 /data
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/node_modules ./node_modules

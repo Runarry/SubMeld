@@ -6,6 +6,7 @@ export default defineConfig({
     'node-tests.browser.mjs',
     'upstream.browser.mjs',
     'miaospeed.browser.mjs',
+    'telegram.browser.mjs',
     'lan-http.browser.mjs',
   ],
   outputDir: '.cache/browser-results',

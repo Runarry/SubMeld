@@ -11,6 +11,7 @@ import { SubStoreClient } from './sub-store.js';
 import { KernelManager } from './kernels.js';
 import { NodeTester } from './node-tests.js';
 import { MiaospeedTester } from './miaospeed.js';
+import { TelegramService } from './telegram.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -57,11 +58,13 @@ async function main() {
     settings.testActivity,
     config,
   );
+  const telegram = new TelegramService(settings.telegramStore, miaospeed);
   let app: ReturnType<typeof createApp>;
   try {
     await kernels.initialize();
     app = createApp({
       miaospeed,
+      telegram,
       webRoot,
       resources: settings.resources,
       tester,
@@ -74,6 +77,7 @@ async function main() {
       subscriptions: settings.subscriptions,
     });
   } catch (error) {
+    await telegram.close();
     await miaospeed.close();
     await tester.close();
     await kernels.close();
@@ -84,15 +88,17 @@ async function main() {
     throw error;
   }
   const hostname = config.development ? '127.0.0.1' : '0.0.0.0';
-  const server = serve({ fetch: app.fetch, hostname, port: config.port }, () =>
-    console.info('SubMeld started on port ' + config.port + '.'),
-  );
+  const server = serve({ fetch: app.fetch, hostname, port: config.port }, () => {
+    console.info('SubMeld started on port ' + config.port + '.');
+    telegram.start();
+  });
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
     closing = true;
     server.close();
     if ('closeAllConnections' in server) server.closeAllConnections();
+    await telegram.close();
     await miaospeed.close();
     await tester.close();
     await kernels.close();

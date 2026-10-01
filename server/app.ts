@@ -27,9 +27,11 @@ import { readJson } from './input.js';
 import { MAX_BYTES } from './shared/contracts.js';
 import { revisionSchema } from './shared/resources.js';
 import { scriptConfigSchema } from './shared/miaospeed.js';
+import type { TelegramService } from './telegram.js';
 
 export type AppOptions = {
   miaospeed?: MiaospeedTester;
+  telegram?: TelegramService;
   resources: UpstreamResources;
   webRoot?: string;
   tester?: NodeTester;
@@ -41,6 +43,7 @@ export type AppOptions = {
 };
 export function createApp({
   miaospeed,
+  telegram,
   resources,
   webRoot,
   tester,
@@ -64,6 +67,7 @@ export function createApp({
     '/api/kernels',
     '/api/integrations',
     '/api/miaospeed',
+    '/api/telegram',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -90,6 +94,7 @@ export function createApp({
         '/api/kernels/',
         '/api/integrations/',
         '/api/miaospeed/',
+        '/api/telegram/',
       ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
@@ -139,6 +144,39 @@ export function createApp({
     if (!miaospeed) throw new AppError('TEST_UNAVAILABLE', '综合测试服务尚未就绪。', 503);
     return miaospeed;
   };
+  const bot = () => {
+    if (!telegram) throw new AppError('TEST_UNAVAILABLE', 'Telegram 服务尚未就绪。', 503);
+    return telegram;
+  };
+  app.get('/api/telegram/settings', async (c) => c.json(await bot().settings()));
+  app.patch('/api/telegram/settings', async (c) =>
+    c.json(await bot().update(await readJson(c.req.raw, MAX_BYTES))),
+  );
+  app.get('/api/telegram/status', (c) => c.json(bot().status()));
+  app.post('/api/telegram/check', async (c) => {
+    await empty(c.req.raw);
+    return c.json(await bot().check());
+  });
+  app.get('/api/telegram/tasks', (c) =>
+    c.json(
+      bot().store.list(
+        z.coerce
+          .number()
+          .int()
+          .min(0)
+          .max(1000000)
+          .parse(c.req.query('page') ?? 0),
+      ),
+    ),
+  );
+  app.post('/api/telegram/tasks/:id/cancel', async (c) => {
+    await empty(c.req.raw);
+    return c.json(bot().cancel(c.req.param('id')));
+  });
+  app.post('/api/telegram/tasks/:id/resend', async (c) => {
+    await empty(c.req.raw);
+    return c.json(bot().resend(c.req.param('id')));
+  });
   app.get('/api/miaospeed/status', (c) => c.json(speed().status()));
   app.post('/api/miaospeed/status/check', async (c) => {
     await empty(c.req.raw);
