@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AppError } from './errors.js';
 import { type UpstreamResources, rawDraft } from './upstream-resources.js';
 import type { ChainStore } from './chains.js';
-import { byteLimit, decodeBase64, yamlObject } from './converter/input.js';
+import { inlineNodeEntries } from './inline-node-input.js';
 import { produceUpstream } from './converter/engine.js';
 import { MAX_NODES, type RenderItem } from './shared/contracts.js';
 import { previewInputSchema, type SpeedPreview, type SpeedSubject } from './shared/miaospeed.js';
@@ -21,34 +21,6 @@ export type CapturedNode = {
   entry?: Raw;
   exit?: Raw;
 };
-function entries(text: string): (string | Raw)[] {
-  byteLimit(text);
-  const content = text.trim().replace(/^\uFEFF/, '');
-  if (!content) throw new AppError('EMPTY_INPUT', '请输入节点文本或配置文件。', 400);
-  if (/^[\w-]+:\/\//.test(content))
-    return content
-      .split(/\r?\n/)
-      .map((v) => v.trim())
-      .filter((v) => v && !v.startsWith('#'));
-  if (/^[A-Za-z0-9+/=_\s-]+$/.test(content)) return entries(decodeBase64(content));
-  const parsed = yamlObject(content);
-  const list = Array.isArray(parsed)
-    ? parsed
-    : record(parsed) && Array.isArray(parsed.proxies)
-      ? parsed.proxies
-      : record(parsed) && Array.isArray(parsed.outbounds)
-        ? parsed.outbounds
-        : record(parsed) && (parsed.type || parsed.protocol)
-          ? [parsed]
-          : null;
-  if (!list)
-    throw new AppError(
-      'NO_INLINE_NODES',
-      '配置中没有内联节点；请提供节点、proxies 或 outbounds 列表。',
-      400,
-    );
-  return list.map((value) => (record(value) ? value : {}));
-}
 export class MiaospeedInput {
   private previews = new Map<string, { expires: number; nodes: CapturedNode[] }>();
   private timer: ReturnType<typeof setInterval>;
@@ -80,7 +52,7 @@ export class MiaospeedInput {
       signal?.throwIfAborted();
       for (const raw of parsed.original) nodes.push(this.describe(raw));
     } else {
-      const list = entries(value.content);
+      const list = inlineNodeEntries(value.content);
       if (list.length > MAX_NODES)
         throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数量超过 2,000。', 413);
       for (const [index, entry] of list.entries()) {

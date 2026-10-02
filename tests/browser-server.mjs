@@ -105,6 +105,7 @@ const app = createApp({
   auth,
 
   nodes: settings.nodes,
+  nodeReporting: settings.nodeReporting,
   chains: settings.chains,
 
   subscriptions: settings.subscriptions,
@@ -136,6 +137,7 @@ const httpConfig = loadConfig(false, {
   DATA_DIR: directory,
 });
 const httpApp = createApp({
+  nodeReporting: settings.nodeReporting,
   miaospeed,
   telegram,
   resources: settings.resources,

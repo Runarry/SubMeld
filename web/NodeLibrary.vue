@@ -12,6 +12,7 @@ import type { TestSubject } from '../server/shared/node-tests';
 import { useNodeTests } from './nodeTests';
 import NodeTestSummary from './NodeTestSummary.vue';
 import ModalDialog from './ui/ModalDialog.vue';
+import NodeReportingSettings from './NodeReportingSettings.vue';
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
 }>();
@@ -30,6 +31,7 @@ const form = ref<{ name: string; source: 'local' | 'remote'; content: string; ur
 );
 const detail = ref<ReturnType<typeof nodeDetailsSchema.parse> | null>(null),
   deleting = ref<NodeView[] | null>(null);
+const reporting = ref(false);
 const native = '/?api=' + encodeURIComponent(location.origin + '/upstream/sub-store');
 const key = (node: NodeView) => node.resourceId + ':' + node.nodeIndex;
 const nodeRef = (node: NodeView) =>
@@ -113,6 +115,7 @@ onMounted(() => void act(() => load()));
         <p>查看 Sub-Store 中的全部订阅节点，直接添加、删除或测试。</p>
       </div>
       <div class="actions">
+        <button :disabled="busy" @click="reporting = true">上报设置</button>
         <a :href="native">在 Sub-Store 中编辑</a
         ><button
           class="primary"
@@ -240,6 +243,7 @@ onMounted(() => void act(() => load()));
         下一页
       </button>
     </div>
+    <NodeReportingSettings v-if="reporting" :api="api" @close="reporting = false" />
     <ModalDialog v-if="form" label="添加节点或订阅" :dismissible="!busy" @close="form = null"
       ><h2>添加节点或订阅</h2>
       <form id="add-resource" class="node-form" @submit.prevent="act(save)">

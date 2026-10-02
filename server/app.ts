@@ -28,8 +28,10 @@ import { MAX_BYTES } from './shared/contracts.js';
 import { revisionSchema } from './shared/resources.js';
 import { scriptConfigSchema } from './shared/miaospeed.js';
 import type { TelegramService } from './telegram.js';
+import type { NodeReporting } from './node-reporting.js';
 
 export type AppOptions = {
+  nodeReporting?: NodeReporting;
   miaospeed?: MiaospeedTester;
   telegram?: TelegramService;
   resources: UpstreamResources;
@@ -42,6 +44,7 @@ export type AppOptions = {
   auth: Auth;
 };
 export function createApp({
+  nodeReporting,
   miaospeed,
   telegram,
   resources,
@@ -139,6 +142,36 @@ export function createApp({
     return c.json({
       subStore: '/?api=' + encodeURIComponent(config.publicOrigin + '/upstream/sub-store'),
     });
+  });
+  const reporting = () => {
+    if (!nodeReporting) throw new AppError('REPORT_UNAVAILABLE', '节点上报服务尚未就绪。', 503);
+    return nodeReporting;
+  };
+  app.get('/api/integrations/node-reporting', (c) => c.json(reporting().view()));
+  app.patch('/api/integrations/node-reporting', async (c) =>
+    c.json(reporting().update(await readJson(c.req.raw, 1024))),
+  );
+  app.post('/api/integrations/node-reporting/token', async (c) => {
+    z.strictObject({}).parse(await readJson(c.req.raw, 1024));
+    return c.json(reporting().rotateToken());
+  });
+  app.put('/api/node-reports/:machineId', async (c) => {
+    const service = reporting();
+    const authorization = c.req.header('Authorization');
+    service.authorize(authorization);
+    if (
+      !/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/i.test(
+        c.req.header('Content-Type') ?? '',
+      )
+    )
+      throw new AppError('CONTENT_TYPE_UNSUPPORTED', '请发送 application/json 请求。', 415);
+    const result = await service.report(
+      c.req.param('machineId'),
+      await readJson(c.req.raw, 26 * 1024 * 1024),
+      authorization,
+      c.req.raw.signal,
+    );
+    return c.json(result, result.action === 'created' ? 201 : 200);
   });
   const speed = () => {
     if (!miaospeed) throw new AppError('TEST_UNAVAILABLE', '综合测试服务尚未就绪。', 503);

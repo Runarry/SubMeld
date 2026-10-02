@@ -33,6 +33,54 @@ SubMeld 使用独立 Sub-Store 保存全部代理配置，提供统一节点管�
 
 原生支持但 SubMeld 尚不能完整表达的协议或参数仍会显示。测试和增强输出明确说明不支持的项目，不将其静默减少或替换成直连。
 
+### 机器节点上报
+
+在“节点 → 上报设置”生成共用 Token 并启用功能。默认关闭；Token 仅在生成或重置时显示，关闭弹窗后无法重新查看。重置后旧 Token 立即失效，所有机器需配置新 Token。停用接口保留已上报节点。
+
+每台机器自行生成并持久保存一个 UUID，每次向 `PUT /api/node-reports/<machineId>` 提交自己的**完整节点列表**。同 ID 覆盖原列表，不同 ID 分别保存；同名机器不会合并。UUID 丢失后重新生成会成为另一台机器，克隆机器时应生成新 UUID。以下 Linux 示例仅需 Python 3 和 cURL：
+
+```sh
+umask 077
+mkdir -p "$HOME/.local/state/submeld-report"
+if [ ! -s "$HOME/.local/state/submeld-report/machine-id" ]; then
+  python3 -c 'import uuid; print(uuid.uuid4())' > "$HOME/.local/state/submeld-report/machine-id"
+fi
+MACHINE_ID="$(cat "$HOME/.local/state/submeld-report/machine-id")"
+
+# 将本机完整节点内容保存为 nodes.txt；此步骤保留换行、引号和节点参数。
+python3 - <<'PY' > report.json
+import json
+from pathlib import Path
+print(json.dumps({"name": "东京服务器", "content": Path("nodes.txt").read_text(encoding="utf-8")}))
+PY
+
+# REPORT_TOKEN 由机器自己的私有环境配置提供，不要写入共享脚本或日志。
+curl --fail-with-body --request PUT \
+  "https://submeld.example/api/node-reports/$MACHINE_ID" \
+  --header "Authorization: Bearer $REPORT_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data-binary @report.json
+```
+
+请求体仅含 `name`（必填、最多 512 字符）和 `content`。内容支持多行节点链接、Base64，以及 Sub-Store 可解析的含内联节点的 YAML/JSON；每份最多 4 MiB、2,000 个节点。JSON 节点列表请使用 `{"proxies":[...]}`；固定上游的本地订阅解析器不支持裸 JSON 数组，会拒绝该格式。不抓取配置中的远程订阅或 provider。空内容、无法解析的项目或整份解析数量不一致会拒绝整次更新，保留旧列表。上报成功只表示内容已保存，不表示节点连通性测试通过。
+
+首次成功返回 `201`，之后返回 `200`，响应示例为 `{"machineId":"机器 UUID","action":"updated","nodeCount":2}`。`action` 可为 `created`、`updated` 或 `unchanged`。完全相同的内容与名称不重复写入，不改变资源版本；并发提交以最后成功写入的内容为准。断线或上游错误后使用同一 ID 重试，即使上次已写入但响应丢失，也不会另建订阅。
+
+| HTTP 状态    | 含义                                                     |
+| ------------ | -------------------------------------------------------- |
+| `400`        | UUID、请求结构、名称无效或列表为空；启用前尚未生成 Token |
+| `401`        | 上报 Token 缺失、错误或已被重置                          |
+| `403`        | 上报功能已停用                                           |
+| `409`        | UUID／内部名称冲突，或目标订阅已变成远程／混合来源       |
+| `413`        | 请求正文、解码内容或节点数量超限                         |
+| `415`        | 非 JSON 请求或使用了压缩请求体                           |
+| `422`        | 内容无法完整解析，不保存部分节点                         |
+| `502`／`503` | 上游请求失败或不可用；保留同一 ID 后重试                 |
+
+每台机器对应一个 Sub-Store 本地订阅，UUID 不变，原生订阅重命名和处理操作会保留。上报只更新节点原文和显示名称；网页手动修改的节点内容会被下次有效上报覆盖。同名节点的新连接参数自动生效；移除或改名后，引用它的链会明确失效，旧测试结果不能覆盖新内容的结果。上报周期由机器自行安排，离线记录持续保留。
+
+上报接口仅使用专用 Bearer Token，不需要 Cookie、`Origin` 或 `X-SubMeld-Request`。Token 不能调用管理接口；设置和生成 Token 的管理接口仍要求网页登录及同源校验。SQLite 仅保存启停设置和 Token 摘要，节点原文与身份标记仍只存 Sub-Store。
+
 ### 两跳链与输出方案
 
 两跳路径为本机 → 前置 → 出口 → 目标。可直接选择订阅或组合中的节点，无需复制。成员按资源 UUID 与精确节点名称引用：资源重命名保留关联，同名节点的新地址和凭据自动生效；节点消失、重名或 UUID 丢失时必须重新选择。

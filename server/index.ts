@@ -72,6 +72,7 @@ async function main() {
       auth,
 
       nodes: settings.nodes,
+      nodeReporting: settings.nodeReporting,
       chains: settings.chains,
 
       subscriptions: settings.subscriptions,
