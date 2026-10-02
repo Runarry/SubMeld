@@ -80,6 +80,12 @@ export function renderFixtures(target) {
     hy.protocolOptions.obfs = '';
     hy.protocolOptions.obfsPassword = '';
     result.push(hy);
+    const hopping = node('hysteria2');
+    hopping.name = 'HY2 hopping' + (target === 'mihomo' ? ' with certificate pin' : '');
+    hopping.protocolOptions.ports = '20120,20122-20200';
+    hopping.protocolOptions.hopInterval = 30;
+    if (target === 'mihomo') hopping.protocolOptions.pinSHA256 = 'ab'.repeat(32);
+    result.push(hopping);
   }
   result.unshift(reality);
   return result;

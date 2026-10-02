@@ -14,11 +14,12 @@ import { byteLimit, preflight, splitInput } from './input.js';
 import { SubStoreClient } from '../sub-store.js';
 import { record } from './model.js';
 import type { NodeDraft } from '../shared/contracts.js';
+import { hysteriaUri } from './hysteria2.js';
 
 // The pinned upstream decodes TUIC passwords twice. Adapt only the API input,
 // never the stored/public URI; remove when a verified upstream release fixes it.
 function parserInput(raw: string) {
-  if (!raw.startsWith('tuic://')) return raw;
+  if (!raw.startsWith('tuic://')) return hysteriaUri(raw);
   const url = new URL(raw);
   url.password = encodeURIComponent(url.password);
   return url.href;

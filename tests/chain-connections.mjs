@@ -4,7 +4,7 @@ import { createServer as createTcpServer, createConnection } from 'node:net';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { randomInt } from 'node:crypto';
+import { randomInt, X509Certificate } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -196,6 +196,14 @@ export async function checkChainConnections(binaries, results, render = renderIn
           chain.exit.protocolOptions.obfs = '';
           chain.exit.protocolOptions.obfsPassword = '';
           chain.exit.tls.insecure = true;
+          chain.exit.protocolOptions.ports = exitPort + '-' + exitPort;
+          chain.exit.port = await udpPort();
+          if (target === 'mihomo')
+            chain.exit.protocolOptions.pinSHA256 = new X509Certificate(
+              testCertificate,
+            ).fingerprint256
+              .replaceAll(':', '')
+              .toLowerCase();
         }
         if (exitProtocol === 'tuic') {
           chain.exit.tls.alpn = ['h3'];
@@ -267,6 +275,22 @@ export async function checkChainConnections(binaries, results, render = renderIn
         );
         await client.stop();
         client = undefined;
+        if (target === 'mihomo' && exitProtocol === 'hysteria2') {
+          const wrongPin = structuredClone(chain);
+          wrongPin.exit.protocolOptions.pinSHA256 = 'ab'.repeat(32);
+          const rejected = await render({ target, items: [wrongPin], listenPort: clientPort });
+          client = await start(
+            binaries[target],
+            target,
+            parse(rejected.full),
+            join(caseDir, 'wrong-pin'),
+          );
+          await client.ready(clientPort, true);
+          await assert.rejects(socksRequest(clientPort, destination.address().port));
+          assert.equal(hits, 1, 'Wrong HY2 certificate pin must fail even with insecure enabled');
+          await client.stop();
+          client = undefined;
+        }
         await entryCore.stop();
         entryCore = undefined;
         // A fresh client avoids retaining a QUIC session or pooled connection after removal.

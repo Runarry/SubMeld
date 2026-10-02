@@ -7,6 +7,39 @@ import { SubStoreClient } from '../dist/server/sub-store.js';
 import { Converter } from '../dist/server/converter/pool.js';
 import { node, items, UUID, TEST_PASSWORD } from './fixtures.mjs';
 import { renderFixtures } from './render-fixtures.mjs';
+import { checkedDraft } from '../dist/server/converter/normalized.js';
+
+test('HY2 pinning remains intact for Mihomo and fails explicitly only on incompatible targets', async () => {
+  const client = new SubStoreClient(),
+    pin = 'ab'.repeat(32);
+  const raw = (
+    await client.convert(
+      'hysteria2://test-only@example.com:20120?mport=20120-20200&insecure=1&sni=example.com&pinSHA256=' +
+        pin +
+        '#HY2',
+      'JSON',
+      true,
+    )
+  )[0];
+  const draft = checkedDraft(raw);
+  const before = structuredClone(raw);
+  const output = parse((await renderInput({ target: 'mihomo', items: items(draft) })).nodes)
+    .proxies[0];
+  assert.equal(output.ports, '20120-20200');
+  assert.equal(output.fingerprint, pin);
+  assert.equal(output['skip-cert-verify'], true);
+  assert.deepEqual(raw, before);
+  await assert.rejects(renderInput({ target: 'singbox', items: items(draft) }), (error) =>
+    error.diagnostics.some((d) => d.code === 'TARGET_UNSUPPORTED' && /pinSHA256/.test(d.message)),
+  );
+  await assert.rejects(renderInput({ target: 'xray', items: items(draft) }), (error) =>
+    error.diagnostics.some((d) => d.code === 'TARGET_UNSUPPORTED' && /Hysteria2/.test(d.message)),
+  );
+  draft.protocolOptions.pinSHA256 = '';
+  const singbox = JSON.parse((await renderInput({ target: 'singbox', items: items(draft) })).nodes)
+    .outbounds[0];
+  assert.deepEqual(singbox.server_ports, ['20120:20200']);
+});
 test('foreground conversion waits behind publication and cancelled waiters do not block later work', async () => {
   const client = new SubStoreClient();
   const convert = client.convert.bind(client);

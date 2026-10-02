@@ -66,7 +66,13 @@ export const draftSchema = z.discriminatedUnion('protocol', [
     ...base,
     protocol: z.literal('hysteria2'),
     auth: z.strictObject({ password: authText }),
-    protocolOptions: z.strictObject({ obfs: z.enum(['', 'salamander']), obfsPassword: authText }),
+    protocolOptions: z.strictObject({
+      obfs: z.enum(['', 'salamander']),
+      obfsPassword: authText,
+      ports: z.string().max(4096).default(''),
+      hopInterval: z.number().int().positive().nullable().default(null),
+      pinSHA256: z.string().max(64).default(''),
+    }),
   }),
   z.strictObject({
     ...base,
@@ -180,7 +186,13 @@ export function blankDraft(protocol: Protocol): NodeDraft {
         ...common,
         protocol,
         auth: { password: '' },
-        protocolOptions: { obfs: '', obfsPassword: '' },
+        protocolOptions: {
+          obfs: '',
+          obfsPassword: '',
+          ports: '',
+          hopInterval: null,
+          pinSHA256: '',
+        },
       };
     case 'tuic':
       return {

@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { domainToASCII } from 'node:url';
+import { certificatePin, hysteriaPortRanges } from './hysteria2.js';
 import {
   blankDraft,
   diagnostic,
@@ -64,6 +65,17 @@ export function validateDraft(node: NodeDraft, i: number): Diagnostic[] {
     !node.protocolOptions.obfsPassword
   )
     fail('protocolOptions.obfsPassword', 'Salamander 需要混淆密码。');
+  if (node.protocol === 'hysteria2') {
+    try {
+      hysteriaPortRanges(node.protocolOptions.ports);
+    } catch {
+      fail('protocolOptions.ports', '跳跃端口必须是 1～65535 内的端口或递增范围，用逗号分隔。');
+    }
+    if (node.protocolOptions.hopInterval !== null && !node.protocolOptions.ports)
+      fail('protocolOptions.hopInterval', '跳跃间隔需要同时设置跳跃端口。');
+    if (node.protocolOptions.pinSHA256 && !/^[\da-f]{64}$/.test(node.protocolOptions.pinSHA256))
+      fail('protocolOptions.pinSHA256', '证书 SHA-256 必须是 64 位十六进制指纹。');
+  }
   if (
     node.tls.mode === 'none' &&
     (node.tls.insecure || node.tls.serverName || node.tls.alpn.length || node.tls.fingerprint)
@@ -114,7 +126,9 @@ export function validateDraft(node: NodeDraft, i: number): Diagnostic[] {
       diagnostic(
         i,
         'INSECURE_TLS',
-        '此节点明确关闭证书验证，将按原值保留。',
+        node.protocol === 'hysteria2' && node.protocolOptions.pinSHA256
+          ? '此节点跳过证书链验证，仍按 pinSHA256 固定校验服务端证书。'
+          : '此节点明确关闭证书验证，将按原值保留。',
         'tls.insecure',
         'warning',
       ),
@@ -176,7 +190,13 @@ export function fromUpstream(value: unknown, index: number): NodeDraft {
       break;
     case 'hysteria2':
       auth = { password: string(value.password) };
-      protocolOptions = { obfs: value.obfs ?? '', obfsPassword: string(value['obfs-password']) };
+      protocolOptions = {
+        obfs: value.obfs ?? '',
+        obfsPassword: string(value['obfs-password']),
+        ports: value.ports ?? '',
+        hopInterval: value['hop-interval'] ?? null,
+        pinSHA256: certificatePin(string(value['tls-fingerprint'] ?? value.fingerprint)),
+      };
       break;
     case 'tuic':
       auth = { uuid: string(value.uuid), password: string(value.password) };
@@ -209,9 +229,15 @@ export function toUpstream(draft: NodeDraft): Record<string, unknown> {
     if (draft.protocolOptions.flow) proxy.flow = draft.protocolOptions.flow;
     proxy['packet-encoding'] = draft.protocolOptions.packetEncoding;
   }
-  if (draft.protocol === 'hysteria2' && draft.protocolOptions.obfs) {
-    proxy.obfs = draft.protocolOptions.obfs;
-    proxy['obfs-password'] = draft.protocolOptions.obfsPassword;
+  if (draft.protocol === 'hysteria2') {
+    if (draft.protocolOptions.obfs) {
+      proxy.obfs = draft.protocolOptions.obfs;
+      proxy['obfs-password'] = draft.protocolOptions.obfsPassword;
+    }
+    if (draft.protocolOptions.ports) proxy.ports = draft.protocolOptions.ports;
+    if (draft.protocolOptions.hopInterval !== null)
+      proxy['hop-interval'] = draft.protocolOptions.hopInterval;
+    if (draft.protocolOptions.pinSHA256) proxy['tls-fingerprint'] = draft.protocolOptions.pinSHA256;
   }
   if (draft.protocol === 'tuic') {
     proxy['congestion-controller'] = draft.protocolOptions.congestionControl;

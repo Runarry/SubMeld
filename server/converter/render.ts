@@ -16,6 +16,7 @@ import { record, fromUpstream, toUpstream, validateDraft } from './model.js';
 import { produceUpstream } from './engine.js';
 import { xrayOutbound } from './xray.js';
 import { basicConfig, SELECTOR } from '../templates/basic.js';
+import { hysteriaPortRanges } from './hysteria2.js';
 function at(value: unknown, path: string): unknown {
   for (const part of path.split('.')) value = record(value) ? value[part] : undefined;
   return value;
@@ -64,6 +65,16 @@ function checkSingbox(value: Record<string, unknown>, node: NodeDraft) {
   if (node.protocol === 'hysteria2') {
     check('obfs.type', node.protocolOptions.obfs, '');
     if (node.protocolOptions.obfs) check('obfs.password', node.protocolOptions.obfsPassword);
+    check(
+      'server_ports',
+      hysteriaPortRanges(node.protocolOptions.ports).map(([start, end]) => start + ':' + end),
+      [],
+    );
+    check(
+      'hop_interval',
+      node.protocolOptions.hopInterval === null ? null : node.protocolOptions.hopInterval + 's',
+      null,
+    );
   }
   if (node.protocol === 'tuic') {
     check('congestion_control', node.protocolOptions.congestionControl, 'cubic');
@@ -191,9 +202,17 @@ export async function renderInput(
     ) {
       report(
         'TARGET_UNSUPPORTED',
-        node.tls.insecure
-          ? '锁定 Xray 版本不支持关闭证书验证；请使用其他目标或明确修改节点。'
-          : '本项目 Xray 目标尚不支持 Hysteria2／TUIC，请明确排除或选择其他目标。',
+        !['ss', 'vmess', 'vless', 'trojan'].includes(node.protocol)
+          ? '本项目 Xray 目标尚不支持 Hysteria2／TUIC，请选择 Mihomo 或其他支持此协议的目标。'
+          : '锁定 Xray 版本不支持关闭证书验证；请使用其他目标或明确修改节点。',
+      );
+      return;
+    }
+    if (target === 'singbox' && node.protocol === 'hysteria2' && node.protocolOptions.pinSHA256) {
+      report(
+        'TARGET_UNSUPPORTED',
+        '当前 sing-box 转换路径无法保留 HY2 的 pinSHA256 证书固定校验；请使用 Mihomo 或 miaospeed 内置 Mihomo。',
+        'protocolOptions.pinSHA256',
       );
       return;
     }

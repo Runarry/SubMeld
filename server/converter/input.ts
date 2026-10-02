@@ -9,6 +9,7 @@ import {
   type Diagnostic,
 } from '../shared/contracts.js';
 import { record } from './model.js';
+import { certificatePin, hysteriaPortRanges, hysteriaUri } from './hysteria2.js';
 
 export function byteLimit(text: string) {
   if (Buffer.byteLength(text) > MAX_BYTES)
@@ -214,6 +215,17 @@ const queryFields = new Set([
   'reduce_rtt',
 ]);
 const commonTlsQuery = ['sni', 'alpn', 'fp', 'allowInsecure'];
+const hysteriaQuery = [
+  'sni',
+  'peer',
+  'insecure',
+  'obfs',
+  'obfs-password',
+  'mport',
+  'pinSHA256',
+  'hop-interval',
+];
+const hysteriaFields = new Set(['ports', 'hop-interval', 'tls-fingerprint', 'fingerprint']);
 const queryByProtocol: Record<string, Set<string>> = {
   ss: new Set(),
   vless: new Set([
@@ -229,8 +241,8 @@ const queryByProtocol: Record<string, Set<string>> = {
     'serviceName',
   ]),
   trojan: new Set([...commonTlsQuery, 'type', 'path', 'host', 'serviceName']),
-  hysteria2: new Set(['sni', 'peer', 'insecure', 'obfs', 'obfs-password']),
-  hy2: new Set(['sni', 'peer', 'insecure', 'obfs', 'obfs-password']),
+  hysteria2: new Set(hysteriaQuery),
+  hy2: new Set(hysteriaQuery),
   tuic: new Set([
     'sni',
     'alpn',
@@ -310,7 +322,7 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
         ]);
         if (Object.keys(data).some((k) => !keys.has(k))) warning();
       } else {
-        const url = new URL(entry);
+        const url = new URL(hysteriaUri(entry));
         const params = url.searchParams;
         if (params.get('security') === 'reality' && !params.get('pbk')) fail('tls.publicKey');
         if (params.has('security') && !['vless', 'vmess'].includes(scheme)) fail('tls.mode');
@@ -325,7 +337,12 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
             diagnostics.push(diagnostic(i, 'DUPLICATE_PARAMETER', 'URI 含重复参数。'));
           seen.add(key);
           if (scheme === 'vless' && key === 'packetEncoding' && val === 'xudp') continue;
-          if (unsupportedFields.has(key)) fail();
+          if (
+            ['hysteria2', 'hy2'].includes(scheme) &&
+            ['mport', 'pinSHA256', 'hop-interval'].includes(key)
+          )
+            continue;
+          if (unsupportedFields.has(key)) fail(key);
           else if (queryFields.has(key) && !queryByProtocol[scheme]?.has(key)) fail();
           else if (!queryFields.has(key)) warning();
           if (key === 'obfs' && !['none', 'salamander', ''].includes(val))
@@ -350,8 +367,23 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
         if (scheme === 'ss' && params.size) fail('protocolOptions');
         if (scheme === 'hysteria2' || scheme === 'hy2') {
           if (params.has('alpn') || params.has('fp')) fail('tls');
-          const authority = entry.split('://')[1]?.split(/[/?#]/)[0]?.split('@').at(-1) ?? '';
-          if (/:[\d,;-]+$/.test(authority) && !/:\d+$/.test(authority)) fail('port');
+          try {
+            if (params.has('mport')) {
+              if (!params.get('mport')) throw new Error('Empty port list');
+              hysteriaPortRanges(params.get('mport')!);
+            }
+            if (params.has('pinSHA256')) {
+              if (!params.get('pinSHA256')) throw new Error('Empty certificate pin');
+              certificatePin(params.get('pinSHA256')!);
+            }
+            if (
+              params.has('hop-interval') &&
+              (!params.get('mport') || !/^[1-9]\d*$/.test(params.get('hop-interval')!))
+            )
+              throw new Error('Invalid hop interval');
+          } catch {
+            fail('protocolOptions');
+          }
         }
       }
     } catch {
@@ -363,12 +395,44 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
     for (const key of Object.keys(entry))
       if (
         unsupportedFields.has(key) &&
+        !(entry.type === 'hysteria2' && hysteriaFields.has(key)) &&
         !(key === 'packet-encoding' && entry.type === 'vless' && entry[key] === 'xudp') &&
         entry[key] !== undefined &&
         entry[key] !== false &&
         entry[key] !== ''
       )
-        fail();
+        fail(key);
+    if (entry.type === 'hysteria2') {
+      for (const key of ['ports', 'tls-fingerprint', 'fingerprint']) {
+        if (entry[key] === undefined) continue;
+        try {
+          if (typeof entry[key] !== 'string') throw new Error('Expected text');
+          if (key === 'ports') hysteriaPortRanges(entry[key]);
+          else certificatePin(entry[key]);
+        } catch {
+          fail(key);
+        }
+      }
+      if (entry['tls-fingerprint'] && entry.fingerprint) {
+        try {
+          if (
+            certificatePin(String(entry['tls-fingerprint'])) !==
+            certificatePin(String(entry.fingerprint))
+          )
+            fail('tls-fingerprint');
+        } catch {
+          fail('tls-fingerprint');
+        }
+      }
+      if (
+        entry['hop-interval'] !== undefined &&
+        (!entry.ports ||
+          typeof entry['hop-interval'] !== 'number' ||
+          !Number.isSafeInteger(entry['hop-interval']) ||
+          entry['hop-interval'] <= 0)
+      )
+        fail('hop-interval');
+    }
     for (const key of [
       'name',
       'server',
@@ -475,7 +539,15 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
       'reduce-rtt',
       'udp',
     ]);
-    if (Object.keys(entry).some((k) => !allowed.has(k) && !unsupportedFields.has(k))) warning();
+    if (
+      Object.keys(entry).some(
+        (k) =>
+          !allowed.has(k) &&
+          !unsupportedFields.has(k) &&
+          !(entry.type === 'hysteria2' && hysteriaFields.has(k)),
+      )
+    )
+      warning();
   }
   // Avoid unbounded/repetitive diagnostics for a single hostile item.
   return diagnostics.slice(0, 32);

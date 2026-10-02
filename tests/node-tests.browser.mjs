@@ -15,6 +15,40 @@ async function source(page, name) {
     content: JSON.stringify({ proxies: [a, b].map(toUpstream) }),
   });
 }
+
+test('HY2 mport and certificate pins remain selectable with per-core compatibility results', async ({
+  page,
+}, info) => {
+  await login(page);
+  const resource = await api(page, '/api/nodes', {
+    name: 'HY2-' + info.project.name,
+    source: 'local',
+    content:
+      'hysteria2://test-only@example.com:20120?sni=example.com&insecure=1&mport=20120-20200&pinSHA256=' +
+      'ab'.repeat(32) +
+      '#HY2-test',
+  });
+  try {
+    await page.getByRole('button', { name: '节点', exact: true }).click();
+    await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
+    await expect(page.locator('.node-row')).toHaveCount(1);
+    await expect(page.locator('.node-row')).not.toContainText('连接字段无法');
+    await page.locator('.node-row').getByRole('button', { name: '测试', exact: true }).click();
+    await page.getByRole('button', { name: '三内核检查', exact: true }).click();
+    await page.getByRole('button', { name: '开始三内核检查', exact: true }).click();
+    await expect
+      .poll(async () => (await api(page, '/api/node-tests/current')).batch?.state)
+      .toBe('completed');
+    const results = (await api(page, '/api/node-tests/current')).batch.results;
+    expect(results.find((r) => r.core === 'mihomo').status).toBe('passed');
+    expect(results.find((r) => r.core === 'singbox').message).toContain('pinSHA256');
+    expect(results.find((r) => r.core === 'xray').message).toContain('Hysteria2');
+    await expect(page.locator('.test-results > li')).toHaveCount(3);
+    await noOverflow(page);
+  } finally {
+    await cleanup(page, { resource });
+  }
+});
 test('unified batch testing includes excluded originals and retains results and settings', async ({
   page,
 }, info) => {

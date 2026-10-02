@@ -18,6 +18,50 @@ export async function add(f, drafts = [node('ss')], name = 'imported') {
 function plan(inputs, formats = [...outputFormats]) {
   return { ...newSubscription(), name: 'native-output', inputs, formats };
 }
+
+test('HY2 hopping selections survive upstream random ports and native artifacts retain the certificate pin', async (t) => {
+  const f = await fixture(t),
+    pin = 'ab'.repeat(32);
+  const content =
+    'hysteria2://test-only@example.com:20120-20200?sni=example.com&insecure=1&pinSHA256=' +
+    pin +
+    '#HY2';
+  const resource = await f.nodes.create({ name: 'HY2', source: 'local', content });
+  const list = await f.nodes.list(resource.id);
+  assert.equal(list.nodes[0].testable, true, list.nodes[0].testReason);
+  const reference = ref(list.nodes[0]);
+  for (let i = 0; i < 3; i++) {
+    await f.miaospeedInput.refresh([{ kind: 'node', ...reference }]);
+    const captured = f.miaospeedInput.capture({ kind: 'node', ...reference });
+    const payload = JSON.parse(await f.miaospeedInput.payload(captured.raw, 'HY2-test'));
+    assert.equal(payload.ports, '20120-20200');
+    assert.equal(payload.fingerprint, pin);
+  }
+  const saved = await f.subscriptions.create(
+    plan([{ kind: 'resource', id: resource.id }], ['uri', 'base64', 'mihomo', 'mihomo-proxies']),
+  );
+  for (const format of ['uri', 'base64', 'mihomo', 'mihomo-proxies']) {
+    const output = (await f.subscriptions.artifact(saved.id, format)).content;
+    if (format === 'uri' || format === 'base64') {
+      const url = new URL(format === 'base64' ? Buffer.from(output, 'base64').toString() : output);
+      assert.equal(url.searchParams.get('mport'), '20120-20200');
+      assert.equal(url.searchParams.get('pinSHA256'), pin);
+    } else {
+      const proxy = parse(output).proxies[0];
+      assert.equal(proxy.ports, '20120-20200');
+      assert.equal(proxy.fingerprint, pin);
+    }
+  }
+  await f.client.api(
+    '/api/sub/' + resource.upstreamName,
+    { content: content.replace('20120-20200', '30120-30200') },
+    'PATCH',
+  );
+  await f.miaospeedInput.refresh([{ kind: 'node', ...reference }]);
+  assert.throws(() => f.miaospeedInput.capture({ kind: 'node', ...reference }), {
+    code: 'REVISION_CONFLICT',
+  });
+});
 test('unified local deletion preserves other fields and operations; SQLite has no proxy configuration', async (t) => {
   const f = await fixture(t);
   const a = node('ss'),

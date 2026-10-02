@@ -3,6 +3,67 @@ import { test } from 'node:test';
 import { parseInput, produceInput } from '../dist/server/converter/engine.js';
 import { MAX_BYTES } from '../dist/server/shared/contracts.js';
 import { node, items, UUID, TEST_PASSWORD } from './fixtures.mjs';
+
+test('HY2 mport and multi-port authorities retain port hopping and certificate pins through URI and Base64', async () => {
+  const pin = 'ab'.repeat(32);
+  for (const authority of [
+    '[2001:db8::1]:20120?mport=20120-20200&',
+    '[2001:db8::1]:20120-20200?',
+  ]) {
+    for (const scheme of ['hysteria2', 'hy2']) {
+      const text =
+        scheme +
+        '://test-only@' +
+        authority +
+        'sni=example.com&insecure=1&pinSHA256=' +
+        pin +
+        '#HY2';
+      const parsed = await parseInput({ format: 'uri', text });
+      assert.equal(parsed.counts.output, 1, JSON.stringify(parsed.items[0].diagnostics));
+      const draft = parsed.items[0].draft;
+      assert.equal(draft.port, 20120);
+      assert.equal(draft.protocolOptions.ports, '20120-20200');
+      assert.equal(draft.protocolOptions.pinSHA256, pin);
+      const output = await produceInput({ items: parsed.items });
+      const url = new URL(output.uri);
+      assert.equal(url.searchParams.get('mport'), '20120-20200');
+      assert.equal(url.searchParams.get('pinSHA256'), pin);
+      assert.deepEqual(
+        (await parseInput({ format: 'base64', text: output.base64 })).items[0].draft,
+        draft,
+      );
+    }
+  }
+});
+
+test('HY2 malformed hopping, conflicting ranges and invalid certificate pins are rejected', async () => {
+  for (const parameters of [
+    'mport=0-20',
+    'mport=20120-65536',
+    'mport=20200-20120',
+    'mport=20120,,20121',
+    'mport=',
+    'pinSHA256=not-a-sha256',
+    'pinSHA256=',
+    'mport=20120-20200&hop-interval=0',
+  ]) {
+    const parsed = await parseInput({
+      format: 'uri',
+      text: 'hysteria2://test-only@example.com:20120?' + parameters + '#HY2',
+    });
+    assert.equal(parsed.counts.output, 0, parameters);
+  }
+  const conflict = await parseInput({
+    format: 'uri',
+    text: 'hy2://test-only@example.com:20120-20200?mport=30120-30200#HY2',
+  });
+  assert.equal(conflict.counts.output, 0);
+  const duplicate = await parseInput({
+    format: 'uri',
+    text: 'hy2://test-only@example.com:20120-20200?mport=20120-20200&mport=30120-30200#HY2',
+  });
+  assert.equal(duplicate.counts.output, 0);
+});
 for (const protocol of ['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic']) {
   for (const transport of ['vmess', 'vless', 'trojan'].includes(protocol)
     ? ['tcp', 'ws', 'grpc']

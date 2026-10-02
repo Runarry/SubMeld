@@ -19,6 +19,7 @@ import {
 } from './shared/resources.js';
 import type { NodeDraft } from './shared/contracts.js';
 import { MAX_BYTES } from './shared/contracts.js';
+import { hysteriaPortRanges } from './converter/hysteria2.js';
 
 export const hash = (value: unknown) =>
   createHash('sha256')
@@ -56,6 +57,20 @@ const cleanRaw = (raw: RawNode) =>
         ].includes(key),
     ),
   );
+
+function snapshotNode(raw: RawNode) {
+  if (raw.type === 'hysteria2' && typeof raw.ports === 'string' && raw.ports) {
+    try {
+      // Sub-Store picks a random port for multi-port URIs. `ports` controls the
+      // actual connection; retain it and every other field in the snapshot.
+      const ranges = hysteriaPortRanges(raw.ports);
+      return { ...raw, port: ranges[0]![0] };
+    } catch {
+      // Invalid ranges must not hide changes to the ordinary connection port.
+    }
+  }
+  return raw;
+}
 
 /** Upstream records and preview credentials stay in memory. No editable node database. */
 export class UpstreamResources {
@@ -139,7 +154,10 @@ export class UpstreamResources {
     const data = await this.client.preview(resource.type, entry.record, force);
     if (this.resource(id).revision !== resource.revision)
       throw new AppError('REVISION_CONFLICT', '读取期间订阅已修改，请重试。', 409);
-    const snapshotHash = hash(data);
+    const snapshotHash = hash({
+      original: data.original.map(snapshotNode),
+      processed: data.processed.map(snapshotNode),
+    });
     const rows: Snapshot['rows'] = [];
     const counts = new Map<number, number>();
     for (const raw of data.processed)
