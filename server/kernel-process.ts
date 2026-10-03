@@ -2,11 +2,11 @@ import { spawn } from 'node:child_process';
 import { AppError } from './errors.js';
 
 /** Fixed executable/argument arrays only. Child output never reaches application logs. */
-export function startProcess(binary: string, args: string[], cwd?: string) {
+export function startProcess(binary: string, args: string[], cwd?: string, input?: string) {
   const child = spawn(binary, args, {
     cwd,
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
       HTTP_PROXY: '',
@@ -17,14 +17,22 @@ export function startProcess(binary: string, args: string[], cwd?: string) {
       all_proxy: '',
     },
   });
+  child.stdin?.on('error', () => {
+    /* A cancelled child may close stdin first. */
+  });
+  child.stdin?.end(input);
   let output = '',
+    stdout = '',
     failed = false,
     ended = false;
   const append = (chunk: Buffer) => {
     output = (output + chunk.toString('utf8')).slice(-65536);
   };
-  child.stdout.on('data', append);
-  child.stderr.on('data', append);
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout = (stdout + chunk.toString('utf8')).slice(-65536);
+    append(chunk);
+  });
+  child.stderr?.on('data', append);
   child.on('error', () => {
     failed = true;
   });
@@ -40,6 +48,9 @@ export function startProcess(binary: string, args: string[], cwd?: string) {
     },
     get output() {
       return output;
+    },
+    get stdout() {
+      return stdout;
     },
     done,
     async stop() {

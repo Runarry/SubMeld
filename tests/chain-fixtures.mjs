@@ -23,7 +23,8 @@ export function chainFixtures(target, start = 0) {
     ['vless', 'trojan'],
     ['vmess', 'vless'],
   ];
-  if (target !== 'xray') pairs.push(['hysteria2', 'ss'], ['ss', 'hysteria2'], ['ss', 'tuic']);
+  pairs.push(['hysteria2', 'ss'], ['ss', 'hysteria2']);
+  if (target !== 'xray') pairs.push(['ss', 'tuic']);
   return pairs.map(([entry, exit], index) => {
     const item = chainItem(entry, exit, start + index);
     item.name += ' ' + index;

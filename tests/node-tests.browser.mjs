@@ -15,6 +15,17 @@ async function source(page, name) {
     content: JSON.stringify({ proxies: [a, b].map(toUpstream) }),
   });
 }
+async function startBatch(page) {
+  const response = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/api/node-tests',
+  );
+  await page.getByRole('button', { name: '开始三内核检查', exact: true }).click();
+  const started = await response;
+  expect(started.status()).toBe(202);
+  return (await started.json()).id;
+}
 
 test('HY2 mport and certificate pins remain selectable with per-core compatibility results', async ({
   page,
@@ -35,14 +46,14 @@ test('HY2 mport and certificate pins remain selectable with per-core compatibili
     await expect(page.locator('.node-row')).not.toContainText('连接字段无法');
     await page.locator('.node-row').getByRole('button', { name: '测试', exact: true }).click();
     await page.getByRole('button', { name: '三内核检查', exact: true }).click();
-    await page.getByRole('button', { name: '开始三内核检查', exact: true }).click();
+    const batchId = await startBatch(page);
     await expect
-      .poll(async () => (await api(page, '/api/node-tests/current')).batch?.state)
+      .poll(async () => (await api(page, '/api/node-tests/' + batchId)).state)
       .toBe('completed');
-    const results = (await api(page, '/api/node-tests/current')).batch.results;
+    const results = (await api(page, '/api/node-tests/' + batchId)).results;
     expect(results.find((r) => r.core === 'mihomo').status).toBe('passed');
-    expect(results.find((r) => r.core === 'singbox').message).toContain('pinSHA256');
-    expect(results.find((r) => r.core === 'xray').message).toContain('Hysteria2');
+    expect(results.find((r) => r.core === 'singbox').message).toContain('证书解析');
+    expect(results.find((r) => r.core === 'xray').status).toBe('passed');
     await expect(page.locator('.test-results > li')).toHaveCount(3);
     await noOverflow(page);
   } finally {
@@ -69,10 +80,10 @@ test('unified batch testing includes excluded originals and retains results and 
     await expect(page.locator('.selection-bar')).toContainText('已选 2');
     await page.getByRole('button', { name: '测试所选', exact: true }).click();
     await page.getByRole('button', { name: '三内核检查', exact: true }).click();
-    await page.getByRole('button', { name: '开始三内核检查', exact: true }).click();
+    const batchId = await startBatch(page);
     await expect(page.getByRole('progressbar', { name: '测试进度' })).toBeVisible();
     await expect
-      .poll(async () => (await api(page, '/api/node-tests/current')).batch.state, {
+      .poll(async () => (await api(page, '/api/node-tests/' + batchId)).state, {
         timeout: 15000,
       })
       .toBe('completed');
@@ -112,13 +123,13 @@ test('batch cancellation remains available after navigation', async ({ page }, i
       .getByRole('button', { name: '测试', exact: true })
       .click();
     await page.getByRole('button', { name: '三内核检查', exact: true }).click();
-    await page.getByRole('button', { name: '开始三内核检查', exact: true }).click();
+    const batchId = await startBatch(page);
     await page.getByRole('button', { name: '输出方案', exact: true }).click();
     await page.getByRole('button', { name: '测试中心', exact: true }).click();
     await page.getByRole('button', { name: '三内核检查', exact: true }).click();
     await page.getByRole('button', { name: '取消测试', exact: true }).click();
     await expect
-      .poll(async () => (await api(page, '/api/node-tests/current')).batch.state)
+      .poll(async () => (await api(page, '/api/node-tests/' + batchId)).state)
       .toBe('cancelled');
   } finally {
     await cleanup(page, { resource });

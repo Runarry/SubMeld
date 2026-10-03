@@ -4,9 +4,18 @@ import { AppError } from './errors.js';
 import { hash, marker, type UpstreamResources } from './upstream-resources.js';
 import { identityKey, type UpstreamRecord } from './sub-store.js';
 import { defaultTemplates } from './templates/basic.js';
+import { hy2ResolverConnectionSchema } from './shared/hy2-certificates.js';
 export const SCRIPT_VERSION = 1;
 export class UpstreamFiles {
+  private certificateConnection?: string;
   constructor(readonly resources: UpstreamResources) {}
+  configureCertificateResolver(connection: unknown) {
+    this.certificateConnection = JSON.stringify(
+      hy2ResolverConnectionSchema.parse(connection),
+      null,
+      2,
+    );
+  }
   get(id: string, role: string) {
     const entry = this.resources.record(id);
     if (
@@ -77,6 +86,13 @@ export class UpstreamFiles {
       })),
     ];
 
+    if (this.certificateConnection)
+      defaults.push({
+        name: 'sm-hy2-resolver-v1',
+        role: 'certificate-resolver',
+        content: this.certificateConnection,
+      });
+
     return defaults;
   }
   supportFiles() {
@@ -84,7 +100,12 @@ export class UpstreamFiles {
     return {
       files: this.resources.files().flatMap(({ id, record }) => {
         const meta = marker(record);
-        if (meta?.role !== 'runtime' && meta?.role !== 'template') return [];
+        if (
+          meta?.role !== 'runtime' &&
+          meta?.role !== 'template' &&
+          meta?.role !== 'certificate-resolver'
+        )
+          return [];
         const seed = defaults.find((s) => s.role === meta.role && s.format === meta.format);
         if (!seed) return [];
         return [

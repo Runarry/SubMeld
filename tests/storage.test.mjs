@@ -29,11 +29,14 @@ test('new settings initialize once, preserve password hashes and enforce single 
     assert.equal(settings.getPasswordHash(), undefined);
     const hash = await hashPassword('only-a-test-password');
     settings.setPasswordHash(hash);
+    const resolverToken = settings.certificateResolverToken();
+    assert.match(resolverToken, /^[a-f0-9]{64}$/);
     assert.throws(() => openSettings(dir.path, true), /正在使用/);
     settings.close();
     settings = undefined;
     const reopened = openSettings(dir.path, true);
     assert.equal(reopened.getPasswordHash(), hash);
+    assert.equal(reopened.certificateResolverToken(), resolverToken);
     reopened.close();
     const db = new Database(join(dir.path, 'submeld-v2.sqlite'));
     assert.equal(db.pragma('user_version', { simple: true }), 3);
@@ -141,6 +144,27 @@ test('listener configuration validates ports and the IPv4 chain bind address', (
     assert.throws(() => loadConfig(false, { ...env, PORT }));
   for (const MIAOSPEED_BRIDGE_BIND of ['', 'submeld', '::1', '999.1.1.1'])
     assert.throws(() => loadConfig(false, { ...env, MIAOSPEED_BRIDGE_BIND }));
+  assert.equal(loadConfig(false, env).hy2ResolverOrigin, 'http://submeld:3000');
+  for (const MIAOSPEED_BRIDGE_HOST of ['192.168.1.10', '::1'])
+    assert.equal(
+      loadConfig(true, {
+        ...env,
+        PUBLIC_ORIGIN: 'http://127.0.0.1:5173',
+        MIAOSPEED_BRIDGE_HOST,
+        PORT: '3012',
+      }).hy2ResolverOrigin,
+      'http://host.docker.internal:3012',
+    );
+  assert.equal(
+    loadConfig(false, { ...env, HY2_RESOLVER_ORIGIN: 'http://[::1]:3012' }).hy2ResolverOrigin,
+    'http://[::1]:3012',
+  );
+  for (const HY2_RESOLVER_ORIGIN of [
+    'ftp://localhost',
+    'http://user:secret@localhost',
+    'http://localhost/path',
+  ])
+    assert.throws(() => loadConfig(false, { ...env, HY2_RESOLVER_ORIGIN }));
 });
 
 test('empty v2 business definitions upgrade while preserving account settings and legacy test records', async () => {

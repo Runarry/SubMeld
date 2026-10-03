@@ -127,7 +127,7 @@ export function validateDraft(node: NodeDraft, i: number): Diagnostic[] {
         i,
         'INSECURE_TLS',
         node.protocol === 'hysteria2' && node.protocolOptions.pinSHA256
-          ? '此节点跳过证书链验证，仍按 pinSHA256 固定校验服务端证书。'
+          ? '原节点跳过证书链验证，并按 pinSHA256 固定校验服务端证书。'
           : '此节点明确关闭证书验证，将按原值保留。',
         'tls.insecure',
         'warning',

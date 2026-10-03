@@ -29,8 +29,11 @@ import { revisionSchema } from './shared/resources.js';
 import { scriptConfigSchema } from './shared/miaospeed.js';
 import type { TelegramService } from './telegram.js';
 import type { NodeReporting } from './node-reporting.js';
+import type { Hy2Certificates } from './hy2-certificates.js';
 
 export type AppOptions = {
+  files?: UpstreamFiles;
+  certificates?: Hy2Certificates;
   nodeReporting?: NodeReporting;
   miaospeed?: MiaospeedTester;
   telegram?: TelegramService;
@@ -44,6 +47,8 @@ export type AppOptions = {
   auth: Auth;
 };
 export function createApp({
+  files,
+  certificates,
   nodeReporting,
   miaospeed,
   telegram,
@@ -135,6 +140,16 @@ export function createApp({
     )
       await resources.sync();
     await next();
+  });
+  app.post('/api/internal/hy2-certificates/resolve', async (c) => {
+    if (!certificates)
+      throw new AppError('HY2_RESOLVER_UNAVAILABLE', 'HY2 证书解析服务未就绪。', 503);
+    certificates.authorize(c.req.header('Authorization'));
+    if (!/^application\/json(?:\s*;.*)?$/i.test(c.req.header('Content-Type') ?? ''))
+      throw new AppError('INVALID_REQUEST', '证书解析请求必须是 JSON。', 415);
+    return c.json(
+      await certificates.resolve(await readJson(c.req.raw, 128 * 1024), c.req.raw.signal),
+    );
   });
   app.get('/api/integrations', (c) => {
     if (!auth.valid(getCookie(c, cookieName)))
@@ -268,9 +283,11 @@ export function createApp({
     const data = scriptConfigSchema.strip().parse(old);
     return c.json(await speed().scripts.put({ ...data, revision }, old.id, true));
   });
-  const supportFiles = new UpstreamFiles(resources);
+  const supportFiles = files ?? new UpstreamFiles(resources);
   app.get('/api/integrations/files', async (c) => {
     await resources.sync();
+    if (resources.files('runtime').length)
+      await resources.client.exclusive(() => supportFiles.initialize());
     return c.json(supportFiles.supportFiles());
   });
   app.patch('/api/integrations/files/:id', async (c) =>

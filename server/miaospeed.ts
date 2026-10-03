@@ -359,7 +359,10 @@ export class MiaospeedTester {
               row.state = signal.aborted
                 ? 'cancelled'
                 : error instanceof AppError &&
-                    ['TARGET_UNSUPPORTED', 'CONVERSION_FAILED'].includes(error.code)
+                    (error.code === 'TARGET_UNSUPPORTED' ||
+                      error.diagnostics?.some(
+                        (diagnostic) => diagnostic.code === 'TARGET_UNSUPPORTED',
+                      ))
                   ? 'unsupported'
                   : error instanceof AppError && error.code === 'REVISION_CONFLICT'
                     ? 'stale'
@@ -367,7 +370,10 @@ export class MiaospeedTester {
               row.message = signal.aborted
                 ? '已取消，已有结果保留。'
                 : error instanceof AppError
-                  ? error.message
+                  ? error.diagnostics
+                      ?.filter((diagnostic) => diagnostic.level === 'error')
+                      .map((diagnostic) => diagnostic.message)
+                      .join(' ') || error.message
                   : '测试无法完成，未将未知结果视为成功。';
               row.stale = row.state === 'stale';
               if (error instanceof AppError && error.code.startsWith('MIAOSPEED_')) {

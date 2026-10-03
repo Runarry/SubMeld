@@ -20,6 +20,7 @@ import {
 import { chainListSchema, type Chain } from '../server/shared/chains';
 import { resourceSchema, type Resource, type NodeSelector } from '../server/shared/resources';
 import { ApiError } from './api';
+import type { Diagnostic } from '../server/shared/contracts';
 import NodePicker from './NodePicker.vue';
 import ModalDialog from './ui/ModalDialog.vue';
 const props = defineProps<{
@@ -41,21 +42,17 @@ const resources = ref<Resource[]>([]),
   previewFormat = ref<OutputFormat>('mihomo'),
   confirming = ref<'delete' | 'revoke' | null>(null);
 const groupLabels = { uri: 'URI / Base64', mihomo: 'Mihomo', singbox: 'sing-box', xray: 'Xray' };
+const diagnostics = ref<Diagnostic[]>([]);
 async function act(fn: () => Promise<void>) {
   if (busy.value) return;
   busy.value = true;
   message.value = '';
+  diagnostics.value = [];
   try {
     await fn();
   } catch (e) {
-    message.value =
-      e instanceof ApiError
-        ? e.message +
-          ' ' +
-          e.diagnostics.map((d) => '第 ' + (d.nodeIndex + 1) + ' 项：' + d.message).join(' ')
-        : e instanceof Error
-          ? e.message
-          : '操作失败。';
+    message.value = e instanceof Error ? e.message : '操作失败。';
+    if (e instanceof ApiError) diagnostics.value = e.diagnostics;
   } finally {
     busy.value = false;
   }
@@ -372,8 +369,28 @@ onMounted(() => void act(load));
           </div>
         </div>
         <textarea v-if="preview" :value="preview" readonly rows="12" aria-label="生成结果" />
+        <p v-if="previewFormat.startsWith('singbox')">
+          sing-box 1.14 会自动取得 HY2
+          证书并核验原指纹，再固定服务器公钥；同一公钥续签的证书仍可通过。首次生成需要节点可达，已验证的证书可复用。
+        </p>
       </section>
       <p v-if="message" role="status" class="notice">{{ message }}</p>
+      <div v-if="diagnostics.some((d) => d.level === 'error')" role="alert" class="diagnostics">
+        <strong>生成错误</strong>
+        <ul>
+          <li v-for="(d, i) in diagnostics.filter((d) => d.level === 'error')" :key="i">
+            第 {{ d.nodeIndex + 1 }} 项：{{ d.message }}
+          </li>
+        </ul>
+      </div>
+      <details v-if="diagnostics.some((d) => d.level === 'warning')" class="diagnostics">
+        <summary>提示（不导致生成失败）</summary>
+        <ul>
+          <li v-for="(d, i) in diagnostics.filter((d) => d.level === 'warning')" :key="i">
+            第 {{ d.nodeIndex + 1 }} 项：{{ d.message }}
+          </li>
+        </ul>
+      </details>
       <template #footer
         ><button v-if="baseline" class="danger" :disabled="busy" @click="confirming = 'delete'">
           删除方案</button

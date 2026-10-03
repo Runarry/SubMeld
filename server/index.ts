@@ -12,6 +12,7 @@ import { KernelManager } from './kernels.js';
 import { NodeTester } from './node-tests.js';
 import { MiaospeedTester } from './miaospeed.js';
 import { TelegramService } from './telegram.js';
+import { Hy2Certificates } from './hy2-certificates.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -31,7 +32,18 @@ async function main() {
     throw new Error('请先通过本地 admin:init 命令初始化管理员。');
   }
   const auth = new Auth(passwordHash);
-  const converter = new Converter(client);
+  const kernels = new KernelManager(config.dataDir);
+  const certificates = new Hy2Certificates(
+    settings.resources,
+    settings.certificateResolverToken(),
+    config.dataDir,
+    kernels,
+  );
+  settings.files.configureCertificateResolver({
+    url: config.hy2ResolverOrigin + '/api/internal/hy2-certificates/resolve',
+    token: settings.certificateResolverToken(),
+  });
+  const converter = new Converter(client, certificates.resolve);
   try {
     await converter.ready;
   } catch (error) {
@@ -40,7 +52,6 @@ async function main() {
     throw error;
   }
 
-  const kernels = new KernelManager(config.dataDir);
   const tester = new NodeTester(
     settings.nodeTests,
     kernels,
@@ -63,10 +74,12 @@ async function main() {
   try {
     await kernels.initialize();
     app = createApp({
+      certificates,
       miaospeed,
       telegram,
       webRoot,
       resources: settings.resources,
+      files: settings.files,
       tester,
       config,
       auth,
@@ -81,6 +94,7 @@ async function main() {
     await telegram.close();
     await miaospeed.close();
     await tester.close();
+    await certificates.close();
     await kernels.close();
 
     await converter.close();
@@ -102,6 +116,7 @@ async function main() {
     await telegram.close();
     await miaospeed.close();
     await tester.close();
+    await certificates.close();
     await kernels.close();
 
     await converter.close();

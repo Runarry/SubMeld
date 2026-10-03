@@ -8,10 +8,13 @@ import { Converter } from '../dist/server/converter/pool.js';
 import { node, items, UUID, TEST_PASSWORD } from './fixtures.mjs';
 import { renderFixtures } from './render-fixtures.mjs';
 import { checkedDraft } from '../dist/server/converter/normalized.js';
+import { certificateProof } from '../dist/server/converter/certificate-pin.js';
+import { testCertificate } from './source-tls-fixture.mjs';
+import { X509Certificate } from 'node:crypto';
 
-test('HY2 pinning remains intact for Mihomo and fails explicitly only on incompatible targets', async () => {
+test('HY2 pinning survives Mihomo and Xray and sing-box uses a verified public key', async () => {
   const client = new SubStoreClient(),
-    pin = 'ab'.repeat(32);
+    pin = new X509Certificate(testCertificate).fingerprint256.replaceAll(':', '').toLowerCase();
   const raw = (
     await client.convert(
       'hysteria2://test-only@example.com:20120?mport=20120-20200&insecure=1&sni=example.com&pinSHA256=' +
@@ -29,12 +32,26 @@ test('HY2 pinning remains intact for Mihomo and fails explicitly only on incompa
   assert.equal(output.fingerprint, pin);
   assert.equal(output['skip-cert-verify'], true);
   assert.deepEqual(raw, before);
-  await assert.rejects(renderInput({ target: 'singbox', items: items(draft) }), (error) =>
-    error.diagnostics.some((d) => d.code === 'TARGET_UNSUPPORTED' && /pinSHA256/.test(d.message)),
-  );
-  await assert.rejects(renderInput({ target: 'xray', items: items(draft) }), (error) =>
-    error.diagnostics.some((d) => d.code === 'TARGET_UNSUPPORTED' && /Hysteria2/.test(d.message)),
-  );
+  const proof = certificateProof(pin, testCertificate);
+  const pinned = JSON.parse(
+    (
+      await renderInput(
+        { target: 'singbox', items: items(draft) },
+        client,
+        undefined,
+        undefined,
+        async () => proof,
+      )
+    ).nodes,
+  ).outbounds[0];
+  assert.deepEqual(pinned.tls.certificate_public_key_sha256, [proof.publicKeySha256]);
+  assert.notEqual(proof.publicKeySha256, Buffer.from(pin, 'hex').toString('base64'));
+  const xray = JSON.parse((await renderInput({ target: 'xray', items: items(draft) })).nodes)
+    .outbounds[0];
+  assert.equal(xray.protocol, 'hysteria');
+  assert.equal(xray.streamSettings.tlsSettings.pinnedPeerCertSha256, pin);
+  assert.equal(xray.streamSettings.tlsSettings.allowInsecure, undefined);
+  assert.equal(xray.streamSettings.finalmask.quicParams.udpHop.ports, '20120-20200');
   draft.protocolOptions.pinSHA256 = '';
   const singbox = JSON.parse((await renderInput({ target: 'singbox', items: items(draft) })).nodes)
     .outbounds[0];
@@ -177,10 +194,13 @@ for (const target of ['mihomo', 'singbox', 'xray'])
             assert.equal(n.congestion_control ?? 'cubic', d.protocolOptions.congestionControl);
           }
         } else {
-          const server = (n.settings.servers ?? n.settings.vnext)[0];
+          const server =
+            d.protocol === 'hysteria2' ? n.settings : (n.settings.servers ?? n.settings.vnext)[0];
           assert.equal(server.address, d.server);
           assert.equal(server.port, d.port);
-          if ('password' in d.auth) assert.equal(server.password, TEST_PASSWORD);
+          if (d.protocol === 'hysteria2')
+            assert.equal(n.streamSettings.hysteriaSettings.auth, TEST_PASSWORD);
+          else if ('password' in d.auth) assert.equal(server.password, TEST_PASSWORD);
           else assert.equal(server.users[0].id, d.auth.uuid);
           if (d.transport.type === 'ws') {
             assert.equal(n.streamSettings.wsSettings.path, d.transport.path);

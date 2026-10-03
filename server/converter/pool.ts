@@ -3,6 +3,7 @@ import { SubStoreClient } from '../sub-store.js';
 import type { ConversionRequest } from '../shared/contracts.js';
 import { parseInput, produceInput } from './engine.js';
 import { renderInput } from './render.js';
+import type { Hy2CertificateResolver } from '../shared/hy2-certificates.js';
 
 /** One bounded enhancement operation; conversion itself runs in Sub-Store. */
 export class Converter {
@@ -11,7 +12,10 @@ export class Converter {
   private tail = Promise.resolve();
   private closed = false;
   private listeners = new Set<() => void>();
-  constructor(readonly client = new SubStoreClient()) {}
+  constructor(
+    readonly client = new SubStoreClient(),
+    readonly resolveCertificate?: Hy2CertificateResolver,
+  ) {}
   isAvailable() {
     return !this.closed && this.requests.size === 0;
   }
@@ -49,7 +53,13 @@ export class Converter {
       abort.throwIfAborted();
       if (request.kind === 'parse') return await parseInput(request.input, this.client, abort);
       if (request.kind === 'produce') return await produceInput(request.input, this.client, abort);
-      return await renderInput(request.input, this.client, abort);
+      return await renderInput(
+        request.input,
+        this.client,
+        abort,
+        undefined,
+        this.resolveCertificate,
+      );
     } finally {
       this.requests.delete(controller);
       release();

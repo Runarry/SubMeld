@@ -3,7 +3,7 @@ import { node } from './fixtures.mjs';
 export function renderFixtures(target) {
   const result = [];
   for (const p of ['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic']) {
-    if (target === 'xray' && ['hysteria2', 'tuic'].includes(p)) continue;
+    if (target === 'xray' && p === 'tuic') continue;
     for (const transport of ['vmess', 'vless', 'trojan'].includes(p)
       ? ['tcp', 'ws', 'grpc']
       : ['tcp']) {

@@ -13,6 +13,7 @@ services:
       MIAOSPEED_TOKEN: ${MIAOSPEED_TOKEN:?Set MIAOSPEED_TOKEN}
       MIAOSPEED_BRIDGE_HOST: submeld
       MIAOSPEED_BRIDGE_BIND: ${MIAOSPEED_BRIDGE_BIND:-0.0.0.0}
+      HY2_RESOLVER_ORIGIN: ${HY2_RESOLVER_ORIGIN:-http://submeld:${PORT:-3000}}
     ports:
       - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'
     volumes:

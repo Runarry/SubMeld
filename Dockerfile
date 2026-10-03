@@ -1,4 +1,7 @@
+FROM golang:1.26.0-bookworm AS go-toolchain
 FROM node:24.6.0-bookworm-slim AS build
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends unzip && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.33.2 --activate

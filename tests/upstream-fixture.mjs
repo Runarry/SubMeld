@@ -33,7 +33,8 @@ export async function fixture(t, options = {}) {
   const directory = mkdtempSync(resolve('.cache/upstream-test-'));
   const store = openSettings(directory, true, client);
   await store.resources.sync();
-  const converter = options.converter ?? new Converter(client);
+  const certificates = options.makeCertificates?.(store, directory);
+  const converter = options.converter ?? new Converter(client, certificates?.resolve);
   const tester = options.makeTester?.(store, converter, directory);
   const auth = new Auth(await hashPassword('test-only-SubMeld-password'));
   const config = {
@@ -45,11 +46,19 @@ export async function fixture(t, options = {}) {
     miaospeedToken: process.env.MIAOSPEED_TOKEN ?? '',
     miaospeedBridgeHost: process.env.MIAOSPEED_BRIDGE_HOST ?? 'host.docker.internal',
   };
-  const app = createApp({ ...store, tester, auth, config, webRoot: resolve('dist/web') });
+  const app = createApp({
+    ...store,
+    certificates,
+    tester,
+    auth,
+    config,
+    webRoot: resolve('dist/web'),
+  });
   const cleanups = [];
   t.after(async () => {
     for (const cleanup of cleanups.reverse()) await cleanup();
     await tester?.close();
+    await certificates?.close();
     await converter.close?.();
     auth.close();
     store.close();
@@ -81,6 +90,7 @@ export async function fixture(t, options = {}) {
     ...store,
     client,
     converter,
+    certificates,
     tester,
     auth,
     app,

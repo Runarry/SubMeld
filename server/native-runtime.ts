@@ -12,6 +12,8 @@ import { renderInput } from './converter/render.js';
 import { produceInput } from './converter/engine.js';
 import { fillTemplate } from './templates/basic.js';
 import { diagnostic, isChain, type RenderItem, type NodeDraft } from './shared/contracts.js';
+import { remoteCertificateResolver } from './converter/hy2-resolver-client.js';
+import type { Hy2CertificateResolver } from './shared/hy2-certificates.js';
 type Native = {
   read: (key: string) => unknown;
   ProxyUtils: {
@@ -31,7 +33,12 @@ export async function generate(native: Native, planId: string, requested: string
   const subs = records.parse(native.read('subs') ?? []);
   const collections = records.parse(native.read('collections') ?? []);
   const files = records.parse(native.read('files') ?? []);
-  const before = JSON.stringify([subs, collections, files]);
+  const sourceFiles = (value: typeof files) =>
+    value.filter((f) => {
+      const meta = upstreamIdentitySchema.safeParse(f._submeld);
+      return !meta.success || meta.data.role !== 'certificate-cache';
+    });
+  const before = JSON.stringify([subs, collections, sourceFiles(files)]);
   const marker = (record: UpstreamRecord) => upstreamIdentitySchema.safeParse(record._submeld);
   const byId = (all: UpstreamRecord[], id: string, role?: string) => {
     const matches = all.filter((r) => {
@@ -175,6 +182,29 @@ export async function generate(native: Native, planId: string, requested: string
       );
     },
   };
+  const resolveCertificate: Hy2CertificateResolver = async (request, signal) => {
+    const connections = files.filter((file) => {
+      const m = marker(file);
+      return m.success && m.data.role === 'certificate-resolver' && m.data.version === 1;
+    });
+    if (connections.length !== 1)
+      throw new AppError(
+        'HY2_RESOLVER_UNAVAILABLE',
+        'HY2 证书解析连接文件缺失或重复，请更新配套文件。',
+        422,
+      );
+    let resolve;
+    try {
+      resolve = remoteCertificateResolver(JSON.parse(String(connections[0]!.content)));
+    } catch {
+      throw new AppError(
+        'HY2_RESOLVER_UNAVAILABLE',
+        'HY2 证书解析连接文件无效，请更新配套文件。',
+        422,
+      );
+    }
+    return resolve(request, signal);
+  };
   let content: string;
   if (group === 'uri') {
     const result = await produceInput({ items: items.filter((item) => !isChain(item)) }, client);
@@ -204,6 +234,7 @@ export async function generate(native: Native, planId: string, requested: string
       client,
       undefined,
       (target, nodes, names, port) => fillTemplate(template, target, nodes, names, port),
+      resolveCertificate,
     );
     content = format === group ? result.full : result.nodes;
   }
@@ -212,7 +243,7 @@ export async function generate(native: Native, planId: string, requested: string
     JSON.stringify([
       native.read('subs') ?? [],
       native.read('collections') ?? [],
-      native.read('files') ?? [],
+      sourceFiles(records.parse(native.read('files') ?? [])),
     ])
   )
     throw new AppError('REVISION_CONFLICT', '生成期间上游配置已变化，请重试。', 409);

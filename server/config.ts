@@ -10,6 +10,7 @@ export type Config = {
   miaospeedToken: string;
   miaospeedBridgeHost: string;
   miaospeedBridgeBind: string;
+  hy2ResolverOrigin: string;
 };
 export function loadConfig(development = false, env: NodeJS.ProcessEnv = process.env): Config {
   if (!env.PUBLIC_ORIGIN || !env.DATA_DIR)
@@ -37,6 +38,18 @@ export function loadConfig(development = false, env: NodeJS.ProcessEnv = process
   const miaospeedBridgeBind = env.MIAOSPEED_BRIDGE_BIND ?? '0.0.0.0';
   if (!isIPv4(miaospeedBridgeBind))
     throw new Error('MIAOSPEED_BRIDGE_BIND 必须是本机可监听的 IPv4 地址。');
+  const resolverOrigin = new URL(
+    env.HY2_RESOLVER_ORIGIN ?? `http://${development ? 'host.docker.internal' : 'submeld'}:${port}`,
+  );
+  if (
+    !['http:', 'https:'].includes(resolverOrigin.protocol) ||
+    resolverOrigin.username ||
+    resolverOrigin.password ||
+    resolverOrigin.pathname !== '/' ||
+    resolverOrigin.search ||
+    resolverOrigin.hash
+  )
+    throw new Error('HY2_RESOLVER_ORIGIN 必须是 Sub-Store 可访问的 SubMeld 服务 origin。');
   return {
     publicOrigin: url.origin,
     port,
@@ -50,5 +63,6 @@ export function loadConfig(development = false, env: NodeJS.ProcessEnv = process
     miaospeedBridgeHost:
       env.MIAOSPEED_BRIDGE_HOST ?? (development ? 'host.docker.internal' : 'submeld'),
     miaospeedBridgeBind,
+    hy2ResolverOrigin: resolverOrigin.origin,
   };
 }

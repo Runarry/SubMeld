@@ -128,17 +128,17 @@ export class NodeTester {
                 result.status = 'cancelled';
                 result.message = '测试已取消，已有完成结果保留。';
               } else if (error instanceof AppError) {
-                result.message = error.message;
+                result.message =
+                  error.diagnostics
+                    ?.filter((diagnostic) => diagnostic.level === 'error')
+                    .map((diagnostic) => diagnostic.message)
+                    .join(' ') || error.message;
                 if (error.code === 'TARGET_UNSUPPORTED') {
                   result.status = 'unsupported';
                 } else if (
                   error.diagnostics?.some((diagnostic) => diagnostic.code === 'TARGET_UNSUPPORTED')
                 ) {
                   result.status = 'unsupported';
-                  result.message = error.diagnostics
-                    .filter((diagnostic) => diagnostic.level === 'error')
-                    .map((diagnostic) => diagnostic.message)
-                    .join(' ');
                 } else if (error.code === 'REVISION_CONFLICT' || error.code === 'NOT_FOUND')
                   result.status = 'stale';
                 else if (

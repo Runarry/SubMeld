@@ -4,6 +4,7 @@ export default defineConfig({
   testMatch: [
     'browser.spec.mjs',
     'node-tests.browser.mjs',
+    'hy2.browser.mjs',
     'node-reporting.browser.mjs',
     'upstream.browser.mjs',
     'miaospeed.browser.mjs',

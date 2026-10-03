@@ -7,7 +7,17 @@ export type UpstreamRecord = z.infer<typeof upstreamRecordSchema>;
 export const upstreamIdentitySchema = z.object({
   id: z.string().uuid(),
   role: z
-    .enum(['chain', 'plan', 'output', 'template', 'runtime', 'test-script', 'report-source'])
+    .enum([
+      'chain',
+      'plan',
+      'output',
+      'template',
+      'runtime',
+      'test-script',
+      'report-source',
+      'certificate-cache',
+      'certificate-resolver',
+    ])
     .optional(),
   version: z.number().int().optional(),
   parent: z.string().optional(),

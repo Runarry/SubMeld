@@ -30,12 +30,15 @@ const sources = [
   'web',
   'scripts',
   'tests',
+  'tools/hy2-cert-probe',
   'upstreams.lock.json',
   'miaospeed-scripts.lock.json',
   'docs',
 ];
 if (existsSync('dist/diagnostics/manifest.json'))
   sources.push('dist/diagnostics/manifest.json', 'dist/diagnostics/source.tar.gz');
+if (existsSync('dist/hy2-cert-probe/source.tar.gz'))
+  sources.push('dist/hy2-cert-probe/source.tar.gz');
 if (existsSync('dist/kernel-sources/manifest.json'))
   sources.push(
     'dist/kernel-sources/manifest.json',

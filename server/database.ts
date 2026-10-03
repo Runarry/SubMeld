@@ -16,6 +16,7 @@ import { MiaospeedInput } from './miaospeed-input.js';
 import { TelegramStore } from './telegram-store.js';
 import { metricIds } from './shared/miaospeed.js';
 import { NodeReporting } from './node-reporting.js';
+import { randomBytes } from 'node:crypto';
 export function openSettings(dataDir: string, development: boolean, client = new SubStoreClient()) {
   if (process.platform === 'win32' && !development)
     throw new Error('生产数据权限需要 Linux 容器；Windows 仅支持显式开发模式。');
@@ -107,6 +108,14 @@ export function openSettings(dataDir: string, development: boolean, client = new
       telegramStore,
       miaospeedInput: input,
       nodeTests: createNodeTestStore(database, resources, chains),
+      certificateResolverToken(): string {
+        const key = 'hy2_certificate_resolver_token';
+        const row: unknown = database.prepare('SELECT value FROM settings WHERE key=?').get(key);
+        if (row) return z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).parse(row).value;
+        const token = randomBytes(32).toString('hex');
+        database.prepare('INSERT INTO settings(key,value) VALUES (?,?)').run(key, token);
+        return token;
+      },
       getPasswordHash(): string | undefined {
         const row: unknown = database
           .prepare("SELECT value FROM settings WHERE key='admin_password_hash'")

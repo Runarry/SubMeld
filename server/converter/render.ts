@@ -17,6 +17,8 @@ import { produceUpstream } from './engine.js';
 import { xrayOutbound } from './xray.js';
 import { basicConfig, SELECTOR } from '../templates/basic.js';
 import { hysteriaPortRanges } from './hysteria2.js';
+import { hy2CertificateRequest, type Hy2CertificateResolver } from '../shared/hy2-certificates.js';
+import { verifyCertificateProof } from './certificate-pin.js';
 function at(value: unknown, path: string): unknown {
   for (const part of path.split('.')) value = record(value) ? value[part] : undefined;
   return value;
@@ -45,7 +47,7 @@ function checkMihomo(value: Record<string, unknown>, node: NodeDraft) {
   if (node.transport.type === 'grpc')
     equal(restored.transport.serviceName, node.transport.serviceName);
 }
-function checkSingbox(value: Record<string, unknown>, node: NodeDraft) {
+function checkSingbox(value: Record<string, unknown>, node: NodeDraft, publicKeyPin?: string) {
   const check = (path: string, expected: unknown, fallback?: unknown) =>
     equal(at(value, path) ?? fallback, expected);
   check('type', node.protocol === 'ss' ? 'shadowsocks' : node.protocol);
@@ -63,6 +65,7 @@ function checkSingbox(value: Record<string, unknown>, node: NodeDraft) {
     check('packet_encoding', node.protocolOptions.packetEncoding, 'xudp');
   }
   if (node.protocol === 'hysteria2') {
+    if (node.protocolOptions.pinSHA256) check('tls.certificate_public_key_sha256', [publicKeyPin]);
     check('obfs.type', node.protocolOptions.obfs, '');
     if (node.protocolOptions.obfs) check('obfs.password', node.protocolOptions.obfsPassword);
     check(
@@ -114,6 +117,7 @@ export async function renderInput(
     names: string[],
     port: number,
   ) => unknown = basicConfig,
+  resolveCertificate?: Hy2CertificateResolver,
 ): Promise<RenderResult> {
   if (Buffer.byteLength(JSON.stringify(input)) > MAX_BYTES)
     throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数据超过 4 MiB。', 413);
@@ -177,6 +181,7 @@ export async function renderInput(
     index: number,
     role?: 'entry' | 'exit',
     detour?: string,
+    entry?: NodeDraft,
   ) {
     const node = structuredClone(draft);
     node.name = name;
@@ -196,25 +201,33 @@ export async function renderInput(
         ),
       );
     };
-    if (
-      target === 'xray' &&
-      (!['ss', 'vmess', 'vless', 'trojan'].includes(node.protocol) || node.tls.insecure)
-    ) {
+    const pinnedHy2 = node.protocol === 'hysteria2' && !!node.protocolOptions.pinSHA256;
+    if (target === 'xray' && (node.protocol === 'tuic' || (node.tls.insecure && !pinnedHy2))) {
       report(
         'TARGET_UNSUPPORTED',
-        !['ss', 'vmess', 'vless', 'trojan'].includes(node.protocol)
-          ? '本项目 Xray 目标尚不支持 Hysteria2／TUIC，请选择 Mihomo 或其他支持此协议的目标。'
-          : '锁定 Xray 版本不支持关闭证书验证；请使用其他目标或明确修改节点。',
+        node.protocol === 'tuic'
+          ? '本项目 Xray 目标尚不支持 TUIC，请选择其他支持此协议的目标。'
+          : '锁定 Xray 版本不支持仅关闭证书验证；HY2 请提供 pinSHA256，或使用有效的受信任证书。',
       );
       return;
     }
-    if (target === 'singbox' && node.protocol === 'hysteria2' && node.protocolOptions.pinSHA256) {
-      report(
-        'TARGET_UNSUPPORTED',
-        '当前 sing-box 转换路径无法保留 HY2 的 pinSHA256 证书固定校验；请使用 Mihomo 或 miaospeed 内置 Mihomo。',
-        'protocolOptions.pinSHA256',
-      );
-      return;
+    if (target === 'xray' && node.protocol === 'hysteria2') {
+      if (detour && node.protocolOptions.ports) {
+        report(
+          'TARGET_UNSUPPORTED',
+          'Xray 26.3.27 不支持 HY2 链出口同时使用端口跳跃。',
+          'protocolOptions.ports',
+        );
+        return;
+      }
+      if (node.protocolOptions.hopInterval !== null && node.protocolOptions.hopInterval < 5) {
+        report(
+          'TARGET_UNSUPPORTED',
+          'Xray 的 HY2 跳跃间隔至少为 5 秒，不能自动修改该设置。',
+          'protocolOptions.hopInterval',
+        );
+        return;
+      }
     }
     if (target === 'xray' && node.tls.mode === 'reality' && node.tls.alpn.length) {
       report(
@@ -235,6 +248,26 @@ export async function renderInput(
     }
     try {
       if (target === 'xray') return xrayOutbound(node);
+      let publicKeyPin: string | undefined;
+      if (target === 'singbox' && pinnedHy2) {
+        if (!resolveCertificate)
+          throw new AppError(
+            'HY2_RESOLVER_UNAVAILABLE',
+            'HY2 自动证书解析尚未就绪，请检查配套文件与 SubMeld 服务。',
+            422,
+          );
+        const request = hy2CertificateRequest(node, entry);
+        publicKeyPin = verifyCertificateProof(
+          request.pinSHA256,
+          await resolveCertificate(request, signal),
+        ).publicKeySha256;
+        report(
+          'HY2_PUBLIC_KEY_PIN',
+          '已核验原证书指纹；sing-box 1.14 使用公钥固定校验，同一公钥续签的证书仍可通过。',
+          'protocolOptions.pinSHA256',
+          'warning',
+        );
+      }
       const raw: unknown = await produceUpstream(
         [
           {
@@ -250,11 +283,20 @@ export async function renderInput(
       if (!Array.isArray(raw) || raw.length !== 1 || !record(raw[0]))
         throw new Error('Missing node');
       const output = raw[0];
+      if (publicKeyPin) {
+        if (!record(output.tls)) throw new Error('Missing TLS');
+        output.tls.certificate_public_key_sha256 = [publicKeyPin];
+      }
       if (target === 'mihomo') checkMihomo(output, node);
-      else checkSingbox(output, node);
+      else checkSingbox(output, node, publicKeyPin);
       if (detour) equal(output[target === 'mihomo' ? 'dialer-proxy' : 'detour'], detour);
       return output;
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      if (error instanceof AppError && error.code.startsWith('HY2_')) {
+        report(error.code, error.message, 'protocolOptions.pinSHA256');
+        return;
+      }
       if (error instanceof AppError && error.status >= 500) throw error;
       report('EXPORT_FIELD_LOSS', '此项无法完整输出已开放的连接字段，请修正参数或明确排除。');
     }
@@ -266,7 +308,7 @@ export async function renderInput(
       const name = allocate(item.name, item.nodeIndex);
       const entryName = allocate(item.name.slice(0, 480) + ' · 前置', item.nodeIndex);
       const entry = await convert(item.entry, entryName, item.nodeIndex, 'entry');
-      const exit = await convert(item.exit, name, item.nodeIndex, 'exit', entryName);
+      const exit = await convert(item.exit, name, item.nodeIndex, 'exit', entryName, item.entry);
       if (!entry || !exit) continue;
       if (['hysteria2', 'tuic'].includes(item.exit.protocol)) {
         diagnostics.push(

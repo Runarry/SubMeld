@@ -77,6 +77,24 @@ test('real conversion plus controlled probe preserves target DNS classification'
   assert.equal(f.releases(), 1);
   assert.equal(f.nodeTests.results([subject(f.rows[0])], f.kernels.versions()).results.length, 3);
 });
+
+test('HY2 certificate errors stay specific without folding pin warnings into the failure', async (t) => {
+  const f = await setup(t);
+  const resource = await f.nodes.create({
+    name: 'pinned-hy2',
+    source: 'local',
+    content: 'hysteria2://public-test-only@example.com:443?insecure=1&pinSHA256=' + 'ab'.repeat(32),
+  });
+  const row = (await f.nodes.list(resource.id)).nodes[0];
+  f.tester.start({ subjects: [subject(row)] });
+  const results = (await finished(f)).results;
+  const singbox = results.find((result) => result.core === 'singbox');
+  assert.equal(singbox.status, 'config_error');
+  assert.match(singbox.message, /证书解析/);
+  assert.doesNotMatch(singbox.message, /原节点跳过证书链验证/);
+  assert.equal(results.find((result) => result.core === 'mihomo').status, 'passed');
+  assert.equal(results.find((result) => result.core === 'xray').status, 'passed');
+});
 test('excluded raw nodes and complete chains test sequentially without changing upstream plans', async (t) => {
   const f = await setup(t);
   const chain = await f.chains.create({

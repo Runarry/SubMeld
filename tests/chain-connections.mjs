@@ -54,7 +54,12 @@ export async function dualPort() {
 export async function start(binary, target, config, path) {
   await mkdir(path, { recursive: true });
   const file = join(path, target === 'mihomo' ? 'config.yaml' : 'config.json');
-  await writeFile(file, target === 'mihomo' ? stringify(config) : JSON.stringify(config));
+  await writeFile(
+    file,
+    target === 'mihomo'
+      ? stringify(config)
+      : JSON.stringify(target === 'singbox' ? { ...config, log: { level: 'debug' } } : config),
+  );
   const args = target === 'mihomo' ? ['-d', path, '-f', file] : ['run', '-c', file];
   const child = spawn(binary, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '',
@@ -77,7 +82,16 @@ export async function start(binary, target, config, path) {
       while (Date.now() < deadline) {
         if (failure || child.exitCode !== null)
           throw new Error('Loopback core failed: ' + (failure?.message ?? output));
-        if (target === 'singbox' && !socks && !output.includes('sing-box started')) {
+        // sing-box 1.14.1 can accept SOCKS before its first Windows interface
+        // update finishes, which closes fresh QUIC sessions as "network changed".
+        // Wait for the actual initialization messages before testing traffic.
+        if (
+          target === 'singbox' &&
+          (!output.includes('sing-box started') ||
+            (process.platform === 'win32' &&
+              output.includes('updated default interface') &&
+              !output.includes('updated network environment')))
+        ) {
           await delay(40);
           continue;
         }
@@ -108,7 +122,7 @@ export async function start(binary, target, config, path) {
     },
   };
 }
-function socksRequest(proxyPort, destinationPort) {
+export function socksRequest(proxyPort, destinationPort) {
   return new Promise((resolve, reject) => {
     const socket = createConnection({ host: '127.0.0.1', port: proxyPort });
     let buffer = Buffer.alloc(0),
@@ -165,7 +179,9 @@ function serverConfig(inbound) {
 }
 export async function checkChainConnections(binaries, results, render = renderInput) {
   for (const target of ['mihomo', 'singbox', 'xray']) {
-    for (const exitProtocol of target === 'xray' ? ['ss'] : ['ss', 'hysteria2', 'tuic']) {
+    for (const exitProtocol of target === 'xray'
+      ? ['ss', 'hysteria2']
+      : ['ss', 'hysteria2', 'tuic']) {
       const caseDir = join(results, 'chain-' + target + '-' + exitProtocol);
       let hits = 0,
         entryCore,
@@ -196,9 +212,11 @@ export async function checkChainConnections(binaries, results, render = renderIn
           chain.exit.protocolOptions.obfs = '';
           chain.exit.protocolOptions.obfsPassword = '';
           chain.exit.tls.insecure = true;
-          chain.exit.protocolOptions.ports = exitPort + '-' + exitPort;
-          chain.exit.port = await udpPort();
-          if (target === 'mihomo')
+          if (target !== 'xray') {
+            chain.exit.protocolOptions.ports = exitPort + '-' + exitPort;
+            chain.exit.port = await udpPort();
+          }
+          if (target !== 'singbox')
             chain.exit.protocolOptions.pinSHA256 = new X509Certificate(
               testCertificate,
             ).fingerprint256
@@ -275,7 +293,7 @@ export async function checkChainConnections(binaries, results, render = renderIn
         );
         await client.stop();
         client = undefined;
-        if (target === 'mihomo' && exitProtocol === 'hysteria2') {
+        if (target !== 'singbox' && exitProtocol === 'hysteria2') {
           const wrongPin = structuredClone(chain);
           wrongPin.exit.protocolOptions.pinSHA256 = 'ab'.repeat(32);
           const rejected = await render({ target, items: [wrongPin], listenPort: clientPort });

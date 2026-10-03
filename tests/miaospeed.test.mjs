@@ -431,6 +431,22 @@ test(
     });
     assert.equal((await finished(rejected.id)).results[0].state, 'unsupported');
     assert.equal(requests.length, 0, 'Unsupported parameters must not silently fall back');
+    const pinned = await f.miaospeedInput.preview({
+      kind: 'text',
+      content:
+        'hysteria2://public-test-only@example.com:443?insecure=1&pinSHA256=' + 'ab'.repeat(32),
+    });
+    const unresolved = await tester.start({
+      subjects: [{ kind: 'temporary', previewId: pinned.id, nodeIndex: 0 }],
+      metrics: ['TEST_HTTP_CODE'],
+      scripts: [],
+      settings: { ...settings, nodeCore: 'singbox' },
+    });
+    const certificateError = (await finished(unresolved.id)).results[0];
+    assert.equal(certificateError.state, 'failed');
+    assert.match(certificateError.message, /证书解析/);
+    assert.doesNotMatch(certificateError.message, /原节点跳过证书链验证/);
+    assert.equal(requests.length, 0, 'Missing certificate proof must not reach the speed backend');
     const beforeHang = net.counts.http;
     const running = await tester.start({
       subjects: [saved],

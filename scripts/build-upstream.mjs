@@ -14,14 +14,20 @@ await build({
       fileName: () => 'runtime.js',
     },
     rollupOptions: {
-      external: ['node:net', 'node:url'],
-      output: { globals: { 'node:net': 'SubMeldNet', 'node:url': 'SubMeldUrl' } },
+      external: ['node:net', 'node:url', 'node:crypto'],
+      output: {
+        globals: {
+          'node:net': 'SubMeldNet',
+          'node:url': 'SubMeldUrl',
+          'node:crypto': 'SubMeldCrypto',
+        },
+      },
     },
   },
 });
 const path = 'dist/upstream/runtime.js';
 await writeFile(
   path,
-  'const SubMeldNet = require("node:net"), SubMeldUrl = require("node:url");\n' +
+  'const SubMeldNet = require("node:net"), SubMeldUrl = require("node:url"), SubMeldCrypto = require("node:crypto");\n' +
     (await readFile(path, 'utf8')),
 );
