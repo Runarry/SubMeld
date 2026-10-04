@@ -24,7 +24,6 @@ settings.setPasswordHash(hash);
 let clock = Date.now();
 const auth = new Auth(settings.getPasswordHash(), () => clock);
 const converter = new Converter();
-await converter.ready;
 
 // Browser coverage controls request timing and GitHub metadata; real traffic is covered by test:cores.
 const coreLocks = JSON.parse(readFileSync('tests/kernels.lock.json', 'utf8'));

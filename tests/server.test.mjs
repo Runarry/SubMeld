@@ -22,7 +22,6 @@ before(async () => {
   hash = await hashPassword(password);
   auth = new Auth(hash);
   converter = new Converter();
-  await converter.ready;
   mock.method(console, 'warn', (value) => logs.push(value));
   const webRoot = fileURLToPath(new URL('../dist/web/', import.meta.url));
   server = serve({

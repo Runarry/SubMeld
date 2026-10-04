@@ -111,6 +111,7 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     await page.getByRole('button', { name: '历史报告', exact: true }).click();
     await historyRow.getByRole('button', { name: '删除报告', exact: true }).click();
     await expect(historyRow).toHaveCount(0);
+    expect((await api(page, '/api/miaospeed/tests/current')).report?.id).not.toBe(report.id);
 
     await page.getByRole('button', { name: '综合测试', exact: true }).click();
     await page.getByRole('combobox', { name: '输入方式', exact: true }).selectOption('url');

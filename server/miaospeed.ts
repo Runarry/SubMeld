@@ -78,8 +78,12 @@ export async function validateTargets(
     }
   }
 }
+type ReportValidity = { checkedAt: number; staleRows: Set<number> };
+
 export class MiaospeedTester {
   private currentId: string | null = null;
+  private currentValidity: { id: string; value?: ReportValidity } | undefined;
+  private reportChecks = new Map<string, Promise<ReportValidity>>();
   private task: Promise<void> | undefined;
   private abort = new AbortController();
   private closed = false;
@@ -141,31 +145,71 @@ export class MiaospeedTester {
     }
     return this.status();
   }
-  async report(id: string) {
-    const report = this.store.get(id),
-      saved = report.results.filter((row) => row.subject.kind !== 'temporary');
-    if (saved.length) {
-      let confirmed = true;
-      try {
-        await this.input.refresh(saved.map((row) => row.subject));
-      } catch {
-        confirmed = false;
-      }
-      for (const row of saved)
-        if (!confirmed || !this.input.matches(row.subject)) {
-          row.stale = true;
-          if (!['pending', 'running', 'cancelled'].includes(row.state)) row.state = 'stale';
+  private checkReport(report: SpeedReport) {
+    const pending = this.reportChecks.get(report.id);
+    if (pending) return pending;
+    const check = (async (): Promise<ReportValidity> => {
+      const saved = report.results.filter((row) => row.subject.kind !== 'temporary'),
+        staleRows = new Set<number>();
+      if (saved.length) {
+        let confirmed = true;
+        try {
+          await this.input.refresh(saved.map((row) => row.subject));
+        } catch {
+          confirmed = false;
         }
-    }
-    return report;
+        for (const row of saved)
+          if (!confirmed || !this.input.matches(row.subject)) staleRows.add(row.index);
+      }
+      return { checkedAt: Date.now(), staleRows };
+    })();
+    if (!this.closed) this.reportChecks.set(report.id, check);
+    void check
+      .finally(() => {
+        if (this.reportChecks.get(report.id) === check) this.reportChecks.delete(report.id);
+      })
+      .catch(() => {});
+    return check;
+  }
+  private async readReport(id: string, useCache: boolean) {
+    const report = this.store.get(id);
+    const slot = !this.closed && this.currentValidity?.id === id ? this.currentValidity : undefined;
+    const cached =
+      useCache && slot?.value && Date.now() - slot.value.checkedAt < 30_000
+        ? slot.value
+        : undefined;
+    const validity = cached ?? (await this.checkReport(report));
+    if (slot && !this.closed && this.currentValidity === slot) slot.value = validity;
+    // Progress may have advanced while the upstream snapshot was being checked.
+    const current = cached ? report : this.store.get(id);
+    for (const row of current.results)
+      if (validity.staleRows.has(row.index)) {
+        row.stale = true;
+        if (!['pending', 'running', 'cancelled'].includes(row.state)) row.state = 'stale';
+      }
+    return current;
+  }
+  report(id: string) {
+    return this.readReport(id, false);
+  }
+  removeReport(id: string) {
+    const result = this.store.remove(id);
+    if (this.currentId === id) this.currentId = null;
+    if (this.currentValidity?.id === id) this.currentValidity = undefined;
+    this.reportChecks.delete(id);
+    return result;
   }
   async current(): Promise<{ report: SpeedReport | null }> {
     const id = this.currentId ?? this.store.list(0).reports[0]?.id;
+    if (this.currentValidity?.id !== id) this.currentValidity = undefined;
+    if (id && !this.closed && !this.currentValidity) this.currentValidity = { id };
     try {
-      return { report: id ? await this.report(id) : null };
+      return { report: id ? await this.readReport(id, true) : null };
     } catch (error) {
-      if (this.currentId && error instanceof AppError && error.code === 'NOT_FOUND') {
-        this.currentId = null;
+      if (error instanceof AppError && error.code === 'NOT_FOUND') {
+        if (this.currentValidity?.id === id) this.currentValidity = undefined;
+        if (id) this.reportChecks.delete(id);
+        if (this.currentId === id) this.currentId = null;
         return this.current();
       }
       throw error;
@@ -221,6 +265,7 @@ export class MiaospeedTester {
       };
       this.store.create(report);
       this.currentId = report.id;
+      this.currentValidity = undefined;
       this.abort = new AbortController();
       const signal = this.abort.signal,
         heldLease = lease;
@@ -469,6 +514,8 @@ export class MiaospeedTester {
   }
   async close() {
     this.closed = true;
+    this.currentValidity = undefined;
+    this.reportChecks.clear();
     this.abort.abort();
     await this.task;
     this.input.close();

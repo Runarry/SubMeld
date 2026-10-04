@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parse } from 'yaml';
 import { renderInput } from '../dist/server/converter/render.js';
-import { parseInput, produceInput } from '../dist/server/converter/engine.js';
+import { produceInput } from '../dist/server/converter/engine.js';
 import { SubStoreClient } from '../dist/server/sub-store.js';
 import { Converter } from '../dist/server/converter/pool.js';
 import { node, items, UUID, TEST_PASSWORD } from './fixtures.mjs';
@@ -57,7 +57,7 @@ test('HY2 pinning survives Mihomo and Xray and sing-box uses a verified public k
     .outbounds[0];
   assert.deepEqual(singbox.server_ports, ['20120:20200']);
 });
-test('foreground conversion waits behind publication and cancelled waiters do not block later work', async () => {
+test('renders run serially and cancelled waiters do not block later work', async () => {
   const client = new SubStoreClient();
   const convert = client.convert.bind(client);
   let release, started;
@@ -77,8 +77,8 @@ test('foreground conversion waits behind publication and cancelled waiters do no
   };
   const converter = new Converter(client);
   const request = {
-    kind: 'parse',
-    input: { format: 'uri', text: `vless://${UUID}@example.com:443?security=tls#queue` },
+    kind: 'render',
+    input: { target: 'mihomo', items: items(node('ss')) },
   };
   const first = converter.run(request);
   await entered;
@@ -92,7 +92,6 @@ test('foreground conversion waits behind publication and cancelled waiters do no
   assert.equal((await first).counts.output, 1);
   assert.equal((await last).counts.output, 1);
   assert.equal(calls, 2);
-  assert.equal(converter.isAvailable(), true);
   await converter.close();
   await assert.rejects(() => converter.run(request), { code: 'CONVERTER_CLOSED' });
 });
@@ -102,13 +101,14 @@ test('native VLESS defaults survive source JSON, URI and every enhanced target',
     'JSON',
     true,
   );
-  const input = await parseInput({ format: 'yaml', text: JSON.stringify({ proxies }) });
-  assert.equal(input.counts.output, 1, JSON.stringify(input.items[0].diagnostics));
-  assert.equal(input.items[0].draft.protocolOptions.packetEncoding, 'xudp');
-  const uri = await produceInput({ items: input.items });
+  assert.equal(proxies.length, 1);
+  const draft = checkedDraft(proxies[0]);
+  const input = items(draft);
+  assert.equal(draft.protocolOptions.packetEncoding, 'xudp');
+  const uri = await produceInput({ items: input });
   assert.equal(new URL(uri.uri).searchParams.get('packetEncoding'), 'xudp');
   for (const target of ['mihomo', 'singbox', 'xray']) {
-    const output = await renderInput({ target, items: input.items });
+    const output = await renderInput({ target, items: input });
     if (target === 'mihomo')
       assert.equal(parse(output.nodes).proxies[0]['packet-encoding'], 'xudp');
     else if (target === 'singbox')
@@ -283,19 +283,17 @@ test('malformed nodes, unsupported settings and output limits cannot create a pa
   assert.ok(Buffer.byteLength(JSON.stringify(request)) < 4 * 1024 * 1024);
   await assert.rejects(async () => await renderInput(request), { code: 'OUTPUT_LIMIT_EXCEEDED' });
 });
-test('remote converter renders configurations, then retains the URI/Base64 path', async () => {
+test('converter renders configurations through its queued request interface', async () => {
   const converter = new Converter();
   try {
-    await converter.ready;
     const input = items(node('ss'));
     const result = await converter.run({
       kind: 'render',
       input: { items: input, target: 'xray', listenPort: 1080 },
     });
     assert.equal(result.target, 'xray');
-    const uri = await converter.run({ kind: 'produce', input: { items: input } });
-    assert.equal(Buffer.from(uri.base64, 'base64').toString('utf8'), uri.uri);
-    assert.equal(uri.uri, (await produceInput({ items: input })).uri);
+    assert.equal(result.counts.output, 1);
+    assert.equal(JSON.parse(result.nodes).outbounds[0].settings.servers[0].address, '2001:db8::1');
   } finally {
     await converter.close();
   }

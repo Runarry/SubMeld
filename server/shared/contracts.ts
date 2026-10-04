@@ -106,27 +106,16 @@ export const itemSchema = z.strictObject({
   diagnostics: z.array(diagnosticSchema).max(64),
 });
 export type WorkbenchItem = z.infer<typeof itemSchema>;
-export const formatSchema = z.enum(['auto', 'uri', 'base64', 'yaml']);
-export const parseRequestSchema = z.strictObject({ format: formatSchema, text: z.string() });
 export const produceRequestSchema = z.strictObject({ items: z.array(itemSchema).max(MAX_NODES) });
 const counts = z.strictObject({ input: z.number(), output: z.number(), filtered: z.number() });
-export const parseResultSchema = z.strictObject({
-  items: z.array(itemSchema),
-  diagnostics: z.array(diagnosticSchema),
-  counts,
-});
 export const produceResultSchema = z.strictObject({
   uri: z.string(),
   base64: z.string().nullable(),
   diagnostics: z.array(diagnosticSchema),
   counts,
 });
-export type ParseResult = z.infer<typeof parseResultSchema>;
 export type ProduceResult = z.infer<typeof produceResultSchema>;
-export type ConversionRequest =
-  | { kind: 'parse'; input: z.infer<typeof parseRequestSchema> }
-  | { kind: 'produce'; input: z.infer<typeof produceRequestSchema> }
-  | { kind: 'render'; input: z.infer<typeof renderRequestSchema> };
+export type ConversionRequest = { kind: 'render'; input: z.infer<typeof renderRequestSchema> };
 export const errorSchema = z.object({
   code: z.string(),
   message: z.string(),

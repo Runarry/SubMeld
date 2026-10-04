@@ -13,7 +13,7 @@ import type { KernelManager } from './kernels.js';
 import { freeProbePort, runNodeProbe } from './node-probe.js';
 import { TestActivity } from './test-activity.js';
 
-type TestConverter = Pick<Converter, 'run' | 'isAvailable' | 'onAvailable'>;
+type TestConverter = Pick<Converter, 'run'>;
 export class NodeTester {
   private batch: TestBatch | null = null;
   private task: Promise<void> | undefined;
@@ -202,39 +202,12 @@ export class NodeTester {
     listenPort: number,
     signal: AbortSignal,
   ) {
-    for (;;) {
-      signal.throwIfAborted();
-      if (!this.converter.isAvailable())
-        await new Promise<void>((resolve, reject) => {
-          const cleanup = () => {
-            unsubscribe();
-            signal.removeEventListener('abort', abort);
-          };
-          const ready = () => {
-            cleanup();
-            resolve();
-          };
-          const abort = () => {
-            cleanup();
-            reject(new AppError('TEST_CANCELLED', '测试已取消。'));
-          };
-          const unsubscribe = this.converter.onAvailable(ready);
-          signal.addEventListener('abort', abort, { once: true });
-          if (signal.aborted) abort();
-          else if (this.converter.isAvailable()) ready();
-        });
-      try {
-        return renderResultSchema.parse(
-          await this.converter.run(
-            { kind: 'render', input: { target, listenPort, items: [item] } },
-            signal,
-          ),
-        );
-      } catch (error) {
-        if (error instanceof AppError && error.code === 'CONVERTER_BUSY') continue;
-        throw error;
-      }
-    }
+    return renderResultSchema.parse(
+      await this.converter.run(
+        { kind: 'render', input: { target, listenPort, items: [item] } },
+        signal,
+      ),
+    );
   }
   cancel(id: string) {
     this.get(id);

@@ -1,15 +1,9 @@
 import { isAlias, isMap, isScalar, isSeq, parseDocument } from 'yaml';
 import { AppError } from '../errors.js';
 import { guardStructure } from '../input.js';
-import {
-  MAX_BYTES,
-  MAX_DEPTH,
-  MAX_NODES,
-  diagnostic,
-  type Diagnostic,
-} from '../shared/contracts.js';
+import { MAX_BYTES, MAX_DEPTH, diagnostic, type Diagnostic } from '../shared/contracts.js';
 import { record } from './model.js';
-import { certificatePin, hysteriaPortRanges, hysteriaUri } from './hysteria2.js';
+import { certificatePin, hysteriaPortRanges } from './hysteria2.js';
 
 export function byteLimit(text: string) {
   if (Buffer.byteLength(text) > MAX_BYTES)
@@ -104,52 +98,6 @@ export function yamlObject(text: string): unknown {
   guardStructure(result);
   return result;
 }
-export function splitInput(
-  text: string,
-  format: 'auto' | 'uri' | 'base64' | 'yaml',
-): { entries: (string | Record<string, unknown>)[]; diagnostics: Diagnostic[] } {
-  byteLimit(text);
-  let content = text.replace(/^\uFEFF/, '').trim();
-  if (!content) throw new AppError('EMPTY_INPUT', '请先输入节点。');
-  if (/^\s*</.test(content)) throw new AppError('INPUT_FORMAT_UNSUPPORTED', '不接受 HTML 内容。');
-  if (format === 'auto') {
-    if (/^[\w-]+:\/\//.test(content)) format = 'uri';
-    else if (/^(\{|\[)/.test(content))
-      throw new AppError('INPUT_FORMAT_UNSUPPORTED', 'P1 不支持原生 JSON 配置导入。');
-    else if (/(?:^|\n)\s*(?:proxies|proxy-providers)\s*:/.test(content)) format = 'yaml';
-    else format = 'base64';
-  }
-  if (format === 'base64') {
-    content = decodeBase64(content);
-    format = 'uri';
-  }
-  const diagnostics: Diagnostic[] = [];
-  let entries: (string | Record<string, unknown>)[];
-  if (format === 'yaml') {
-    const document = yamlObject(content);
-    if (!record(document) || !Array.isArray(document.proxies))
-      throw new AppError('NO_INLINE_NODES', '只接受 proxies 内联节点；provider 不会联网获取。');
-    if (Object.keys(document).some((k) => k !== 'proxies'))
-      diagnostics.push(
-        diagnostic(
-          -1,
-          'YAML_METADATA_NOT_IMPORTED',
-          '仅提取内联节点；provider、规则、DNS 和代理组未导入，也不会联网。',
-          undefined,
-          'warning',
-        ),
-      );
-    entries = document.proxies.map((item: unknown) => (record(item) ? item : {}));
-  } else
-    entries = content
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-  if (!entries.length) throw new AppError('EMPTY_INPUT', '输入中没有节点。');
-  if (entries.length > MAX_NODES)
-    throw new AppError('INPUT_LIMIT_EXCEEDED', '节点数量超过 2,000。', 413);
-  return { entries, diagnostics };
-}
 const unsupportedFields = new Set([
   'plugin',
   'plugin-opts',
@@ -187,75 +135,8 @@ const unsupportedFields = new Set([
   'upmbps',
   'downmbps',
 ]);
-const queryFields = new Set([
-  'security',
-  'type',
-  'encryption',
-  'sni',
-  'peer',
-  'servername',
-  'alpn',
-  'fp',
-  'pbk',
-  'sid',
-  'flow',
-  'path',
-  'host',
-  'serviceName',
-  'allowInsecure',
-  'insecure',
-  'allow_insecure',
-  'skip-cert-verify',
-  'obfs',
-  'obfs-password',
-  'congestion_control',
-  'congestion-controller',
-  'udp_relay_mode',
-  'udp-relay-mode',
-  'reduce_rtt',
-]);
-const commonTlsQuery = ['sni', 'alpn', 'fp', 'allowInsecure'];
-const hysteriaQuery = [
-  'sni',
-  'peer',
-  'insecure',
-  'obfs',
-  'obfs-password',
-  'mport',
-  'pinSHA256',
-  'hop-interval',
-];
 const hysteriaFields = new Set(['ports', 'hop-interval', 'tls-fingerprint', 'fingerprint']);
-const queryByProtocol: Record<string, Set<string>> = {
-  ss: new Set(),
-  vless: new Set([
-    ...commonTlsQuery,
-    'security',
-    'type',
-    'encryption',
-    'pbk',
-    'sid',
-    'flow',
-    'path',
-    'host',
-    'serviceName',
-  ]),
-  trojan: new Set([...commonTlsQuery, 'type', 'path', 'host', 'serviceName']),
-  hysteria2: new Set(hysteriaQuery),
-  hy2: new Set(hysteriaQuery),
-  tuic: new Set([
-    'sni',
-    'alpn',
-    'allow_insecure',
-    'insecure',
-    'congestion_control',
-    'congestion-controller',
-    'udp_relay_mode',
-    'udp-relay-mode',
-    'reduce_rtt',
-  ]),
-};
-export function preflight(entry: string | Record<string, unknown>, i: number): Diagnostic[] {
+export function preflight(entry: Record<string, unknown>, i: number): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   const fail = (field?: string) =>
     diagnostics.push(
@@ -276,279 +157,162 @@ export function preflight(entry: string | Record<string, unknown>, i: number): D
         'warning',
       ),
     );
-  if (typeof entry === 'string') {
-    const scheme = entry.split('://')[0];
-    if (!['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'hy2', 'tuic'].includes(scheme)) {
-      fail('protocol');
-      return diagnostics;
-    }
-    try {
-      decodeURIComponent(entry);
-      if (scheme === 'vmess') {
-        const raw = decodeBase64(entry.slice(8));
-        const data: unknown = JSON.parse(raw);
-        if (!record(data)) {
-          fail();
-          return diagnostics;
-        }
-        // Use YAML's duplicate-key check too; JSON.parse alone silently overwrites keys.
-        yamlObject(raw);
-        if (data.net && !['tcp', 'ws', 'grpc'].includes(String(data.net))) fail('transport.type');
-        if (data.tls && !['tls', 'none'].includes(String(data.tls))) fail('tls.mode');
-        if (
-          data.scy &&
-          !['auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero'].includes(String(data.scy))
-        )
-          fail('protocolOptions.security');
-        if (data.aid && Number(data.aid) !== 0) fail('protocolOptions.alterId');
-        if (data.type && !['none', 'gun'].includes(String(data.type))) fail('transport.type');
-        const keys = new Set([
-          'v',
-          'ps',
-          'add',
-          'port',
-          'id',
-          'aid',
-          'scy',
-          'net',
-          'type',
-          'host',
-          'path',
-          'tls',
-          'sni',
-          'alpn',
-          'fp',
-          'allowInsecure',
-        ]);
-        if (Object.keys(data).some((k) => !keys.has(k))) warning();
-      } else {
-        const url = new URL(hysteriaUri(entry));
-        const params = url.searchParams;
-        if (params.get('security') === 'reality' && !params.get('pbk')) fail('tls.publicKey');
-        if (params.has('security') && !['vless', 'vmess'].includes(scheme)) fail('tls.mode');
-        const transport = params.get('type') || 'tcp';
-        if ((params.has('path') || params.has('host')) && transport !== 'ws') fail('transport');
-        if (params.has('serviceName') && transport !== 'grpc') fail('transport.serviceName');
-        if (params.has('sni') && ['', 'off'].includes(params.get('sni') ?? ''))
-          fail('tls.serverName');
-        const seen = new Set<string>();
-        for (const [key, val] of params) {
-          if (seen.has(key))
-            diagnostics.push(diagnostic(i, 'DUPLICATE_PARAMETER', 'URI 含重复参数。'));
-          seen.add(key);
-          if (scheme === 'vless' && key === 'packetEncoding' && val === 'xudp') continue;
-          if (
-            ['hysteria2', 'hy2'].includes(scheme) &&
-            ['mport', 'pinSHA256', 'hop-interval'].includes(key)
-          )
-            continue;
-          if (unsupportedFields.has(key)) fail(key);
-          else if (queryFields.has(key) && !queryByProtocol[scheme]?.has(key)) fail();
-          else if (!queryFields.has(key)) warning();
-          if (key === 'obfs' && !['none', 'salamander', ''].includes(val))
-            fail('protocolOptions.obfs');
-          if (['pbk', 'sid'].includes(key) && params.get('security') !== 'reality')
-            fail('tls.mode');
-          if (key === 'type' && !['tcp', 'ws', 'grpc'].includes(val)) fail('transport.type');
-          if (key === 'security' && !['none', 'tls', 'reality'].includes(val)) fail('tls.mode');
-          if (key === 'encryption' && val !== 'none') fail('protocolOptions');
-          if (
-            [
-              'allowInsecure',
-              'insecure',
-              'allow_insecure',
-              'skip-cert-verify',
-              'reduce_rtt',
-            ].includes(key) &&
-            !['0', '1', 'true', 'false'].includes(val.toLowerCase())
-          )
-            fail('tls.insecure');
-        }
-        if (scheme === 'ss' && params.size) fail('protocolOptions');
-        if (scheme === 'hysteria2' || scheme === 'hy2') {
-          if (params.has('alpn') || params.has('fp')) fail('tls');
-          try {
-            if (params.has('mport')) {
-              if (!params.get('mport')) throw new Error('Empty port list');
-              hysteriaPortRanges(params.get('mport')!);
-            }
-            if (params.has('pinSHA256')) {
-              if (!params.get('pinSHA256')) throw new Error('Empty certificate pin');
-              certificatePin(params.get('pinSHA256')!);
-            }
-            if (
-              params.has('hop-interval') &&
-              (!params.get('mport') || !/^[1-9]\d*$/.test(params.get('hop-interval')!))
-            )
-              throw new Error('Invalid hop interval');
-          } catch {
-            fail('protocolOptions');
-          }
-        }
-      }
-    } catch {
-      diagnostics.push(diagnostic(i, 'NODE_PARSE_FAILED', '节点链接格式或编码无效。'));
-    }
-  } else {
-    if (!['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic'].includes(String(entry.type)))
-      fail('protocol');
-    for (const key of Object.keys(entry))
-      if (
-        unsupportedFields.has(key) &&
-        !(entry.type === 'hysteria2' && hysteriaFields.has(key)) &&
-        !(key === 'packet-encoding' && entry.type === 'vless' && entry[key] === 'xudp') &&
-        entry[key] !== undefined &&
-        entry[key] !== false &&
-        entry[key] !== ''
-      )
+  if (!['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic'].includes(String(entry.type)))
+    fail('protocol');
+  for (const key of Object.keys(entry))
+    if (
+      unsupportedFields.has(key) &&
+      !(entry.type === 'hysteria2' && hysteriaFields.has(key)) &&
+      !(key === 'packet-encoding' && entry.type === 'vless' && entry[key] === 'xudp') &&
+      entry[key] !== undefined &&
+      entry[key] !== false &&
+      entry[key] !== ''
+    )
+      fail(key);
+  if (entry.type === 'hysteria2') {
+    for (const key of ['ports', 'tls-fingerprint', 'fingerprint']) {
+      if (entry[key] === undefined) continue;
+      try {
+        if (typeof entry[key] !== 'string') throw new Error('Expected text');
+        if (key === 'ports') hysteriaPortRanges(entry[key]);
+        else certificatePin(entry[key]);
+      } catch {
         fail(key);
-    if (entry.type === 'hysteria2') {
-      for (const key of ['ports', 'tls-fingerprint', 'fingerprint']) {
-        if (entry[key] === undefined) continue;
-        try {
-          if (typeof entry[key] !== 'string') throw new Error('Expected text');
-          if (key === 'ports') hysteriaPortRanges(entry[key]);
-          else certificatePin(entry[key]);
-        } catch {
-          fail(key);
-        }
       }
-      if (entry['tls-fingerprint'] && entry.fingerprint) {
-        try {
-          if (
-            certificatePin(String(entry['tls-fingerprint'])) !==
-            certificatePin(String(entry.fingerprint))
-          )
-            fail('tls-fingerprint');
-        } catch {
-          fail('tls-fingerprint');
-        }
-      }
-      if (
-        entry['hop-interval'] !== undefined &&
-        (!entry.ports ||
-          typeof entry['hop-interval'] !== 'number' ||
-          !Number.isSafeInteger(entry['hop-interval']) ||
-          entry['hop-interval'] <= 0)
-      )
-        fail('hop-interval');
     }
-    for (const key of [
-      'name',
-      'server',
-      'password',
-      'uuid',
-      'sni',
-      'servername',
-      'client-fingerprint',
-      'cipher',
-      'flow',
-      'packet-encoding',
-      'obfs',
-      'obfs-password',
-    ]) {
-      if (entry[key] !== undefined && typeof entry[key] !== 'string') fail();
-    }
-    if (
-      ['sni', 'servername'].some((key) => key in entry && ['', 'off'].includes(String(entry[key])))
-    )
-      fail('tls.serverName');
-    if (
-      entry.alpn !== undefined &&
-      typeof entry.alpn !== 'string' &&
-      !(Array.isArray(entry.alpn) && entry.alpn.every((x) => typeof x === 'string'))
-    )
-      fail('tls.alpn');
-    if (entry.tls !== undefined && typeof entry.tls !== 'boolean') fail('tls.mode');
-    if (entry['skip-cert-verify'] !== undefined && typeof entry['skip-cert-verify'] !== 'boolean')
-      fail('tls.insecure');
-    if (entry.tls === false && ['trojan', 'hysteria2', 'tuic'].includes(String(entry.type)))
-      fail('tls.mode');
-    if (entry.obfs && !['salamander'].includes(String(entry.obfs))) fail('protocolOptions.obfs');
-    if (
-      entry.type === 'vmess' &&
-      entry.cipher &&
-      !['auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero'].includes(String(entry.cipher))
-    )
-      fail('protocolOptions.security');
-    if (entry.type === 'hysteria2' && entry.obfs && !entry['obfs-password'])
-      fail('protocolOptions.obfsPassword');
-    if (entry.network && !['tcp', 'ws', 'grpc'].includes(String(entry.network)))
-      fail('transport.type');
-    if (
-      'reality-opts' in entry &&
-      (!record(entry['reality-opts']) || !entry['reality-opts']['public-key'])
-    )
-      fail('tls.publicKey');
-    for (const key of ['ws-opts', 'grpc-opts', 'reality-opts']) {
-      const options = entry[key];
-      if (options === undefined) continue;
-      if (!record(options)) {
-        fail('transport');
-        continue;
-      }
-      if (key === 'ws-opts' && entry.network !== 'ws') fail('transport.type');
-      if (key === 'grpc-opts' && entry.network !== 'grpc') fail('transport.type');
-      for (const field of ['path', 'grpc-service-name', 'public-key', 'short-id'])
-        if (options[field] !== undefined && typeof options[field] !== 'string') fail('transport');
-      if (options.headers !== undefined) {
+    if (entry['tls-fingerprint'] && entry.fingerprint) {
+      try {
         if (
-          !record(options.headers) ||
-          Object.values(options.headers).some((x) => typeof x !== 'string')
+          certificatePin(String(entry['tls-fingerprint'])) !==
+          certificatePin(String(entry.fingerprint))
         )
-          fail('transport.host');
-        else if ('host' in options.headers && 'Host' in options.headers) fail('transport.host');
+          fail('tls-fingerprint');
+      } catch {
+        fail('tls-fingerprint');
       }
-      const allowed =
-        key === 'ws-opts'
-          ? ['path', 'headers']
-          : key === 'grpc-opts'
-            ? ['grpc-service-name']
-            : ['public-key', 'short-id'];
-      if (Object.keys(options).some((k) => !allowed.includes(k))) fail('transport');
+    }
+    if (
+      entry['hop-interval'] !== undefined &&
+      (!entry.ports ||
+        typeof entry['hop-interval'] !== 'number' ||
+        !Number.isSafeInteger(entry['hop-interval']) ||
+        entry['hop-interval'] <= 0)
+    )
+      fail('hop-interval');
+  }
+  for (const key of [
+    'name',
+    'server',
+    'password',
+    'uuid',
+    'sni',
+    'servername',
+    'client-fingerprint',
+    'cipher',
+    'flow',
+    'packet-encoding',
+    'obfs',
+    'obfs-password',
+  ]) {
+    if (entry[key] !== undefined && typeof entry[key] !== 'string') fail();
+  }
+  if (['sni', 'servername'].some((key) => key in entry && ['', 'off'].includes(String(entry[key]))))
+    fail('tls.serverName');
+  if (
+    entry.alpn !== undefined &&
+    typeof entry.alpn !== 'string' &&
+    !(Array.isArray(entry.alpn) && entry.alpn.every((x) => typeof x === 'string'))
+  )
+    fail('tls.alpn');
+  if (entry.tls !== undefined && typeof entry.tls !== 'boolean') fail('tls.mode');
+  if (entry['skip-cert-verify'] !== undefined && typeof entry['skip-cert-verify'] !== 'boolean')
+    fail('tls.insecure');
+  if (entry.tls === false && ['trojan', 'hysteria2', 'tuic'].includes(String(entry.type)))
+    fail('tls.mode');
+  if (entry.obfs && !['salamander'].includes(String(entry.obfs))) fail('protocolOptions.obfs');
+  if (
+    entry.type === 'vmess' &&
+    entry.cipher &&
+    !['auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero'].includes(String(entry.cipher))
+  )
+    fail('protocolOptions.security');
+  if (entry.type === 'hysteria2' && entry.obfs && !entry['obfs-password'])
+    fail('protocolOptions.obfsPassword');
+  if (entry.network && !['tcp', 'ws', 'grpc'].includes(String(entry.network)))
+    fail('transport.type');
+  if (
+    'reality-opts' in entry &&
+    (!record(entry['reality-opts']) || !entry['reality-opts']['public-key'])
+  )
+    fail('tls.publicKey');
+  for (const key of ['ws-opts', 'grpc-opts', 'reality-opts']) {
+    const options = entry[key];
+    if (options === undefined) continue;
+    if (!record(options)) {
+      fail('transport');
+      continue;
+    }
+    if (key === 'ws-opts' && entry.network !== 'ws') fail('transport.type');
+    if (key === 'grpc-opts' && entry.network !== 'grpc') fail('transport.type');
+    for (const field of ['path', 'grpc-service-name', 'public-key', 'short-id'])
+      if (options[field] !== undefined && typeof options[field] !== 'string') fail('transport');
+    if (options.headers !== undefined) {
       if (
-        record(options.headers) &&
-        Object.keys(options.headers).some((k) => !['host', 'Host'].includes(k))
+        !record(options.headers) ||
+        Object.values(options.headers).some((x) => typeof x !== 'string')
       )
         fail('transport.host');
+      else if ('host' in options.headers && 'Host' in options.headers) fail('transport.host');
     }
-    const allowed = new Set([
-      'type',
-      'name',
-      'server',
-      'port',
-      'cipher',
-      'password',
-      'uuid',
-      'alterId',
-      'tls',
-      'servername',
-      'sni',
-      'skip-cert-verify',
-      'alpn',
-      'client-fingerprint',
-      'network',
-      'ws-opts',
-      'grpc-opts',
-      'reality-opts',
-      'flow',
-      'obfs',
-      'obfs-password',
-      'congestion-controller',
-      'udp-relay-mode',
-      'reduce-rtt',
-      'udp',
-    ]);
+    const allowed =
+      key === 'ws-opts'
+        ? ['path', 'headers']
+        : key === 'grpc-opts'
+          ? ['grpc-service-name']
+          : ['public-key', 'short-id'];
+    if (Object.keys(options).some((k) => !allowed.includes(k))) fail('transport');
     if (
-      Object.keys(entry).some(
-        (k) =>
-          !allowed.has(k) &&
-          !unsupportedFields.has(k) &&
-          !(entry.type === 'hysteria2' && hysteriaFields.has(k)),
-      )
+      record(options.headers) &&
+      Object.keys(options.headers).some((k) => !['host', 'Host'].includes(k))
     )
-      warning();
+      fail('transport.host');
   }
+  const allowed = new Set([
+    'type',
+    'name',
+    'server',
+    'port',
+    'cipher',
+    'password',
+    'uuid',
+    'alterId',
+    'tls',
+    'servername',
+    'sni',
+    'skip-cert-verify',
+    'alpn',
+    'client-fingerprint',
+    'network',
+    'ws-opts',
+    'grpc-opts',
+    'reality-opts',
+    'flow',
+    'obfs',
+    'obfs-password',
+    'congestion-controller',
+    'udp-relay-mode',
+    'reduce-rtt',
+    'udp',
+  ]);
+  if (
+    Object.keys(entry).some(
+      (k) =>
+        !allowed.has(k) &&
+        !unsupportedFields.has(k) &&
+        !(entry.type === 'hysteria2' && hysteriaFields.has(k)),
+    )
+  )
+    warning();
   // Avoid unbounded/repetitive diagnostics for a single hostile item.
   return diagnostics.slice(0, 32);
 }

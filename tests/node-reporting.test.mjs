@@ -8,6 +8,8 @@ import { fixture, subject } from './upstream-fixture.mjs';
 import { node, TEST_PASSWORD } from './fixtures.mjs';
 import { deferred } from './publication-fixtures.mjs';
 import { toUpstream } from '../dist/server/converter/model.js';
+import { byteLimit, decodeBase64 } from '../dist/server/converter/input.js';
+import { inlineNodeEntries } from '../dist/server/inline-node-input.js';
 import { openSettings } from '../dist/server/database.js';
 import { AppError } from '../dist/server/errors.js';
 import { MAX_BYTES, MAX_NODES } from '../dist/server/shared/contracts.js';
@@ -24,6 +26,37 @@ const uri =
   'ss://' +
   Buffer.from('aes-128-gcm:' + TEST_PASSWORD).toString('base64') +
   '@example.com:443#entry';
+
+test('shared report input preserves textual YAML fields and extracts only inline nodes', () => {
+  const content =
+    'proxy-providers:\n  external:\n    url: https://example.invalid/private\nproxies:\n' +
+    '  - {type: trojan, name: yaml, server: example.com, port: 443, password: 00123}\n' +
+    '  - {type: vless, name: reality, server: example.com, port: 443, reality-opts: {short-id: 0088}}\n';
+  const entries = inlineNodeEntries(content);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].password, '00123');
+  assert.equal(entries[1]['reality-opts']['short-id'], '0088');
+  assert.deepEqual(inlineNodeEntries(Buffer.from(uri).toString('base64url')), [uri]);
+});
+
+test('shared report input rejects invalid Base64 and UTF-8 and caps source and decoded bytes', () => {
+  for (const value of ['!', 'a', 'AB==', 'YWJj='])
+    assert.throws(() => decodeBase64(value), { code: 'INVALID_BASE64' });
+  assert.throws(() => inlineNodeEntries(Buffer.from([0xff]).toString('base64')), {
+    code: 'INVALID_ENCODING',
+  });
+  const boundary = 'x'.repeat(MAX_BYTES);
+  assert.doesNotThrow(() => byteLimit(boundary));
+  assert.equal(decodeBase64(Buffer.from(boundary).toString('base64')), boundary);
+  for (const text of [boundary + 'x', '中'.repeat(Math.ceil(MAX_BYTES / 3))]) {
+    assert.throws(() => inlineNodeEntries(text), { code: 'INPUT_LIMIT_EXCEEDED', status: 413 });
+    assert.throws(() => decodeBase64(Buffer.from(text).toString('base64')), {
+      code: 'INPUT_LIMIT_EXCEEDED',
+      status: 413,
+    });
+  }
+});
+
 async function enabledFixture(t) {
   const f = await fixture(t);
   const response = await f.request(settingsPath + '/token', {});
@@ -203,6 +236,10 @@ test('invalid, partially parsed, empty and oversized reports preserve the previo
     [JSON.stringify({ proxies: [rawNode(), null] }), 422],
     [JSON.stringify({ proxies: [rawNode(), { type: 'unknown-protocol', name: 'bad' }] }), 422],
     ['proxies: [', 422],
+    ['<html>private page</html>', 400],
+    ['a: &a [*a]\nproxies: *a', 413],
+    ['proxies: ' + '['.repeat(35) + ']'.repeat(35), 413],
+    ['proxies: []\nproxies: []', 422],
     ['x'.repeat(MAX_BYTES + 1), 413],
     ['中'.repeat(Math.ceil(MAX_BYTES / 3)), 413],
     [Array.from({ length: MAX_NODES + 1 }, () => uri).join('\n'), 413],

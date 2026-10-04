@@ -44,14 +44,6 @@ async function main() {
     token: settings.certificateResolverToken(),
   });
   const converter = new Converter(client, certificates.resolve);
-  try {
-    await converter.ready;
-  } catch (error) {
-    await converter.close();
-    settings.close();
-    throw error;
-  }
-
   const tester = new NodeTester(
     settings.nodeTests,
     kernels,

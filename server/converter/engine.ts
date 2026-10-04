@@ -2,14 +2,12 @@ import { AppError } from '../errors.js';
 import {
   MAX_BYTES,
   diagnostic,
-  parseRequestSchema,
   produceRequestSchema,
   type Diagnostic,
-  type ParseResult,
   type ProduceResult,
 } from '../shared/contracts.js';
 import { fromUpstream, toUpstream, validateDraft } from './model.js';
-import { byteLimit, preflight, splitInput } from './input.js';
+import { byteLimit } from './input.js';
 
 import { SubStoreClient } from '../sub-store.js';
 import { record } from './model.js';
@@ -65,53 +63,6 @@ export async function produceUpstream(
   );
 }
 
-export async function parseInput(
-  input: unknown,
-  client: Pick<SubStoreClient, 'convert'> = new SubStoreClient(),
-  signal?: AbortSignal,
-): Promise<ParseResult> {
-  const request = parseRequestSchema.safeParse(input);
-  if (!request.success) throw new AppError('INVALID_REQUEST', '解析请求格式无效。', 400);
-  const { entries, diagnostics } = splitInput(request.data.text, request.data.format);
-  const items: ParseResult['items'] = [];
-  for (const [nodeIndex, entry] of entries.entries()) {
-    signal?.throwIfAborted();
-    const parseEntry = async () => {
-      const itemDiagnostics = preflight(entry, nodeIndex);
-      if (itemDiagnostics.some((d) => d.level === 'error'))
-        return { nodeIndex, excluded: false, draft: null, diagnostics: itemDiagnostics };
-      try {
-        const raw = typeof entry === 'string' ? entry : JSON.stringify(entry);
-        const parsed = await client.convert(parserInput(raw), 'JSON', true, signal);
-        if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error('Missing input item');
-        const draft = fromUpstream(parsed[0], nodeIndex);
-        itemDiagnostics.push(...validateDraft(draft, nodeIndex));
-        return { nodeIndex, excluded: false, draft, diagnostics: itemDiagnostics };
-      } catch (error) {
-        if (error instanceof AppError && error.status >= 500) throw error;
-        itemDiagnostics.push(
-          diagnostic(
-            nodeIndex,
-            'NODE_PARSE_FAILED',
-            '此项无法完整解析为已支持节点；请检查必填字段和参数组合。',
-          ),
-        );
-        return { nodeIndex, excluded: false, draft: null, diagnostics: itemDiagnostics };
-      }
-    };
-    items.push(await parseEntry());
-  }
-  return {
-    items,
-    diagnostics,
-    counts: {
-      input: entries.length,
-      output: items.filter((i) => i.draft && !i.diagnostics.some((d) => d.level === 'error'))
-        .length,
-      filtered: 0,
-    },
-  };
-}
 export function prepareItems(input: unknown) {
   byteLimit(JSON.stringify(input));
   const request = produceRequestSchema.safeParse(input);

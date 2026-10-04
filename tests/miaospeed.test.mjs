@@ -7,7 +7,8 @@ import { isIPv4 } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
-import { fixture, waitFor, subject } from './upstream-fixture.mjs';
+import { randomUUID } from 'node:crypto';
+import { fixture, waitFor, subject, ref } from './upstream-fixture.mjs';
 import { controlledNetwork } from './miaospeed-fixture.mjs';
 import { KernelManager } from '../dist/server/kernels.js';
 import { MiaospeedClient } from '../dist/server/miaospeed-client.js';
@@ -26,6 +27,389 @@ import { portReady } from '../dist/server/node-probe.js';
 import { toUpstream } from '../dist/server/converter/model.js';
 import { newSubscription } from '../dist/server/shared/subscriptions.js';
 import Database from 'better-sqlite3';
+
+async function reportReadFixture(t) {
+  const f = await fixture(t);
+  const kernels = new KernelManager(f.directory);
+  const tester = new MiaospeedTester(
+    f.miaospeedStore,
+    f.miaospeedScripts,
+    f.miaospeedInput,
+    kernels,
+    f.converter,
+    f.testActivity,
+    f.config,
+  );
+  f.beforeClose(async () => {
+    await tester.close();
+    await kernels.close();
+  });
+  const resources = [];
+  const nodes = [];
+  const raws = [];
+  for (const name of ['cache-entry', 'cache-exit']) {
+    const raw = {
+      name,
+      type: 'socks5',
+      server: 'example.com',
+      port: 1080 + raws.length,
+      username: 'public-fixture',
+      password: 'cache-secret-never-in-report',
+      udp: true,
+    };
+    const resource = await f.nodes.create({
+      name,
+      source: 'local',
+      content: JSON.stringify({ proxies: [raw] }),
+    });
+    resources.push(resource);
+    nodes.push((await f.nodes.list(resource.id)).nodes[0]);
+    raws.push(raw);
+  }
+  const chain = await f.chains.create({
+    name: 'cache-two-hop',
+    enabled: true,
+    entry: { resourceId: resources[0].id, nodeName: raws[0].name },
+    exit: { resourceId: resources[1].id, nodeName: raws[1].name },
+  });
+  const chainSubject = {
+    kind: 'chain',
+    id: chain.id,
+    revision: chain.revision,
+    entry: ref(chain.entryNode),
+    exit: ref(chain.exitNode),
+  };
+  const refs = [subject(nodes[0]), subject(nodes[1]), chainSubject];
+  let sequence = 0;
+  const seed = (subjects = refs, id = randomUUID()) => {
+    // Seed progress only; every saved reference comes from actual Sub-Store parsing.
+    const at = new Date(Date.now() + ++sequence).toISOString();
+    const report = {
+      id,
+      origin: 'web',
+      name: 'cache-report-' + sequence,
+      state: 'completed',
+      createdAt: at,
+      finishedAt: at,
+      backendVersion: '4.7.6',
+      settings: speedSettingsSchema.parse({}),
+      metrics: ['TEST_HTTP_CODE'],
+      scripts: [],
+      total: subjects.length,
+      completed: subjects.length,
+      current: null,
+      error: null,
+      results: subjects.map((ref, index) => ({
+        index,
+        subject: ref,
+        name: 'snapshot-' + index,
+        protocol: 'socks5',
+        state: 'completed',
+        stale: false,
+        message: '',
+        testedAt: at,
+        coreVersion: null,
+        measurements: [],
+      })),
+    };
+    f.miaospeedStore.create(report);
+    return report;
+  };
+  const counts = { refresh: 0, preview: 0 };
+  const refresh = f.miaospeedInput.refresh.bind(f.miaospeedInput);
+  const preview = f.client.preview.bind(f.client);
+  t.mock.method(f.miaospeedInput, 'refresh', async (...args) => {
+    counts.refresh++;
+    return refresh(...args);
+  });
+  t.mock.method(f.client, 'preview', async (...args) => {
+    counts.preview++;
+    return preview(...args);
+  });
+  const changeEntry = () =>
+    f.client.api(
+      '/api/sub/' + resources[0].upstreamName,
+      { content: JSON.stringify({ proxies: [{ ...raws[0], port: 1081 }] }) },
+      'PATCH',
+    );
+  return { ...f, tester, counts, seed, refs, changeEntry };
+}
+
+test(
+  'current validity TTL keeps SQLite progress fresh and historical reads force real previews',
+  { timeout: 30000 },
+  async (t) => {
+    const f = await reportReadFixture(t);
+    let now = Date.now();
+    t.mock.method(Date, 'now', () => now);
+    const temporary = { kind: 'temporary', previewId: randomUUID(), nodeIndex: 0 };
+    const report = f.seed([...f.refs, temporary]);
+    report.state = 'running';
+    report.finishedAt = null;
+    report.completed = 0;
+    report.current = report.results[0].name;
+    report.results[0].state = 'running';
+    f.miaospeedStore.create(report);
+    const first = (await f.tester.current()).report;
+    assert.equal(first.completed, 0);
+    assert.deepEqual(f.counts, { refresh: 1, preview: 2 });
+    first.results[1].message = 'caller mutation must not leak';
+    first.settings.pingCount = 16;
+    const measurement = {
+      id: 'TEST_HTTP_CODE',
+      label: 'HTTP 状态',
+      unit: '',
+      status: 'measured',
+      value: '204',
+      samples: [],
+      geo: [],
+      color: null,
+      message: '',
+    };
+    report.results[0].state = 'completed';
+    report.results[0].measurements = [measurement];
+    report.completed = 1;
+    report.current = report.results[1].name;
+    report.results[1].state = 'running';
+    f.miaospeedStore.saveRow(report.id, report.results[0]);
+    f.miaospeedStore.saveRow(report.id, report.results[1]);
+    f.miaospeedStore.save(report);
+    now += 29999;
+    for (let read = 0; read < 3; read++) {
+      const current = (await f.tester.current()).report;
+      assert.equal(current.completed, 1);
+      assert.equal(current.current, report.results[1].name);
+      assert.equal(current.results[1].state, 'running');
+      assert.deepEqual(current.results[0].measurements, [measurement]);
+      assert.equal(current.results[1].message, '');
+      assert.equal(current.settings.pingCount, report.settings.pingCount);
+    }
+    assert.deepEqual(f.counts, { refresh: 1, preview: 2 });
+    report.state = 'completed';
+    report.completed = report.total;
+    report.current = null;
+    report.finishedAt = new Date(now).toISOString();
+    report.results[1].state = 'completed';
+    f.miaospeedStore.saveRow(report.id, report.results[1]);
+    f.miaospeedStore.save(report);
+    const completed = (await f.tester.current()).report;
+    assert.equal(completed.state, 'completed');
+    assert.equal(completed.completed, report.total);
+    assert.equal(completed.current, null);
+    assert.equal(completed.finishedAt, report.finishedAt);
+    assert.deepEqual(f.counts, { refresh: 1, preview: 2 });
+    now++;
+    await f.tester.current();
+    assert.deepEqual(f.counts, { refresh: 2, preview: 4 });
+    await f.tester.report(report.id);
+    await f.tester.report(report.id);
+    assert.deepEqual(f.counts, { refresh: 4, preview: 8 });
+    await f.changeEntry();
+    const historical = await f.tester.report(report.id);
+    assert.deepEqual(f.counts, { refresh: 5, preview: 10 });
+    assert.deepEqual(
+      historical.results.map((row) => row.stale),
+      [true, false, true, false],
+    );
+    assert.equal(historical.results[0].state, 'stale');
+    assert.deepEqual(historical.results[0].subject, report.results[0].subject);
+    assert.deepEqual(historical.results[0].measurements, [measurement]);
+    assert.equal(f.miaospeedStore.get(report.id).results[0].stale, false);
+    assert.ok(!JSON.stringify(historical).includes('cache-secret-never-in-report'));
+  },
+);
+
+test(
+  'same-report reads share in-flight validity checks and late checks cannot replace a new current report',
+  { timeout: 30000 },
+  async (t) => {
+    const f = await reportReadFixture(t);
+    let now = Date.now();
+    t.mock.method(Date, 'now', () => now);
+    const original = f.miaospeedInput.refresh.bind(f.miaospeedInput);
+    let hold;
+    t.mock.method(f.miaospeedInput, 'refresh', async (...args) => {
+      const gate = hold;
+      hold = undefined;
+      await original(...args);
+      if (gate) {
+        gate.started.resolve();
+        await gate.release.promise;
+      }
+    });
+    const gate = () => {
+      hold = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+      return hold;
+    };
+    const old = f.seed([f.refs[0]]);
+    old.state = 'running';
+    old.completed = 0;
+    old.current = old.results[0].name;
+    old.finishedAt = null;
+    old.results[0].state = 'running';
+    f.miaospeedStore.create(old);
+    let blocked = gate();
+    const first = f.tester.current();
+    await blocked.started.promise;
+    const second = f.tester.current();
+    const historical = f.tester.report(old.id);
+    assert.deepEqual(f.counts, { refresh: 1, preview: 1 });
+    old.state = 'completed';
+    old.completed = 1;
+    old.current = null;
+    old.finishedAt = new Date(now).toISOString();
+    old.results[0].state = 'completed';
+    old.results[0].message = 'progress written during upstream check';
+    f.miaospeedStore.create(old);
+    now += 31000;
+    blocked.release.resolve();
+    for (const result of await Promise.all([first, second, historical])) {
+      const latest = result.report ?? result;
+      assert.equal(latest.completed, 1);
+      assert.equal(latest.state, 'completed');
+      assert.equal(latest.results[0].state, 'completed');
+      assert.equal(latest.results[0].message, old.results[0].message);
+      assert.equal(latest.results[0].stale, false);
+    }
+    await f.tester.current();
+    now += 29999;
+    await f.tester.current();
+    assert.deepEqual(f.counts, { refresh: 1, preview: 1 }, 'TTL starts when checking finishes');
+    now++;
+    await f.changeEntry();
+    blocked = gate();
+    const late = f.tester.current();
+    await blocked.started.promise;
+    const newest = f.seed([f.refs[1]]);
+    const switched = (await f.tester.current()).report;
+    assert.equal(switched.id, newest.id);
+    assert.equal(switched.results[0].stale, false);
+    assert.deepEqual(f.counts, { refresh: 3, preview: 3 });
+    blocked.release.resolve();
+    assert.equal((await late).report.results[0].stale, true);
+    const afterLate = (await f.tester.current()).report;
+    assert.equal(afterLate.id, newest.id);
+    assert.equal(afterLate.results[0].stale, false);
+    assert.deepEqual(f.counts, { refresh: 3, preview: 3 });
+    assert.equal((await f.tester.report(old.id)).results[0].stale, true);
+    assert.equal((await f.tester.current()).report.id, newest.id);
+    assert.deepEqual(f.counts, { refresh: 4, preview: 4 });
+  },
+);
+
+test(
+  'failed validity checks preserve stale rules and deletion or close clears cached checks',
+  { timeout: 30000 },
+  async (t) => {
+    const f = await reportReadFixture(t);
+    let now = Date.now();
+    t.mock.method(Date, 'now', () => now);
+    const report = f.seed();
+    report.results[0].state = 'pending';
+    report.results[1].state = 'running';
+    report.results[2].state = 'cancelled';
+    f.miaospeedStore.create(report);
+    const failure = t.mock.method(f.client, 'preview', async () => {
+      throw new Error('controlled upstream preview failure');
+    });
+    const stale = (await f.tester.current()).report;
+    assert.deepEqual(
+      stale.results.map((row) => row.stale),
+      [true, true, true],
+    );
+    assert.deepEqual(
+      stale.results.map((row) => row.state),
+      ['pending', 'running', 'cancelled'],
+    );
+    failure.mock.restore();
+    report.results[0].state = 'completed';
+    f.miaospeedStore.saveRow(report.id, report.results[0]);
+    const progressed = (await f.tester.current()).report;
+    assert.equal(progressed.results[0].stale, true);
+    assert.equal(progressed.results[0].state, 'stale');
+    assert.equal(f.counts.refresh, 1);
+    const recovered = await f.tester.report(report.id);
+    assert.deepEqual(
+      recovered.results.map((row) => row.stale),
+      [false, false, false],
+    );
+    assert.equal(f.counts.refresh, 2);
+    assert.deepEqual(f.tester.removeReport(report.id), { deleted: true });
+    assert.throws(
+      () => f.miaospeedStore.get(report.id),
+      (error) => error.code === 'NOT_FOUND',
+    );
+    assert.equal((await f.tester.current()).report, null);
+    f.seed([f.refs[0]], report.id);
+    assert.equal((await f.tester.current()).report.results[0].stale, false);
+    assert.equal(f.counts.refresh, 3);
+    const original = f.miaospeedInput.refresh.bind(f.miaospeedInput);
+    const started = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let held = true;
+    t.mock.method(f.miaospeedInput, 'refresh', async (...args) => {
+      await original(...args);
+      if (held) {
+        held = false;
+        started.resolve();
+        await release.promise;
+      }
+    });
+    const late = f.tester.report(report.id);
+    await started.promise;
+    f.tester.removeReport(report.id);
+    await f.changeEntry();
+    await f.resources.sync();
+    const replacement = (await f.nodes.list(f.refs[0].resourceId)).nodes[0];
+    assert.notEqual(replacement.revision, f.refs[0].revision);
+    assert.notEqual(replacement.snapshotHash, f.refs[0].snapshotHash);
+    f.seed([subject(replacement)], report.id);
+    assert.equal((await f.tester.current()).report.results[0].stale, false);
+    assert.equal(
+      f.counts.refresh,
+      5,
+      'Deleted in-flight work must not be reused for a recreated ID',
+    );
+    release.resolve();
+    await late;
+    const afterDeletion = (await f.tester.current()).report;
+    assert.deepEqual(afterDeletion.results[0].subject, subject(replacement));
+    assert.equal(afterDeletion.results[0].stale, false);
+    assert.equal(f.counts.refresh, 5, 'A deleted check must not repopulate the validity cache');
+    const beforeClose = { ...f.counts };
+    const refresh = f.miaospeedInput.refresh.bind(f.miaospeedInput);
+    const checking = Promise.withResolvers();
+    const finishCheck = Promise.withResolvers();
+    let pause = true;
+    t.mock.method(f.miaospeedInput, 'refresh', async (...args) => {
+      await refresh(...args);
+      if (pause) {
+        pause = false;
+        checking.resolve();
+        await finishCheck.promise;
+      }
+    });
+    const closingCheck = f.tester.report(report.id);
+    await checking.promise;
+    await f.tester.close();
+    await f.tester.current();
+    await f.tester.current();
+    assert.equal(
+      f.counts.refresh,
+      beforeClose.refresh + 3,
+      'Close must clear cached and in-flight checks',
+    );
+    finishCheck.resolve();
+    await closingCheck;
+    await f.tester.current();
+    assert.equal(
+      f.counts.refresh,
+      beforeClose.refresh + 4,
+      'A late check must not recreate closed caches',
+    );
+    assert.equal(f.counts.preview, beforeClose.preview + 4);
+  },
+);
 
 test(
   'real API v3, controlled metrics, three chained cores, scripts, cancellation and disconnection',

@@ -254,7 +254,7 @@ export function createApp({
   );
   app.delete('/api/miaospeed/reports/:id', async (c) => {
     await empty(c.req.raw);
-    return c.json(speed().store.remove(c.req.param('id')));
+    return c.json(speed().removeReport(c.req.param('id')));
   });
   app.get('/api/miaospeed/scripts', async (c) => {
     await resources.sync();

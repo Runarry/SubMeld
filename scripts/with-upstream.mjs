@@ -64,79 +64,87 @@ try {
   }
   if (!ready) throw new Error('Pinned Sub-Store did not become ready; checks were not skipped');
   console.info('Testing against isolated Sub-Store ' + lock.subStore.backendVersion);
-  const speedToken = 'isolated-test-' + randomUUID();
-  const allocatedSpeedPort = await freeProbePort();
-  docker([
-    'run',
-    '--detach',
-    '--rm',
-    '--name',
-    speedName,
-    '--label',
-    'submeld.purpose=isolated-test',
-    '-p',
-    '127.0.0.1:' + allocatedSpeedPort + ':8765',
-    '--add-host',
-    'host.docker.internal:host-gateway',
-    lock.miaospeed.image,
-    'server',
-    '-bind',
-    '0.0.0.0:8765',
-    '-token',
-    speedToken,
-    '-path',
-    '/miaospeed',
-    '-upload',
-  ]);
-  speedStarted = true;
-  const speedPort = docker(['port', speedName, '8765/tcp']).match(/127\.0\.0\.1:(\d+)/)?.[1];
-  if (!speedPort) throw new Error('Missing isolated miaospeed port');
-  const speedUrl = 'ws://127.0.0.1:' + speedPort + '/miaospeed';
-  const backend = new MiaospeedClient(speedUrl, speedToken);
-  let speedReady = false;
-  for (let n = 0; n < 40; n++) {
-    try {
-      const result = await backend.run(
-        speedSettingsSchema.parse({}),
-        [],
-        [],
-        [],
-        AbortSignal.timeout(1000),
-        undefined,
-        true,
-      );
-      assertVersion(result.version);
-      speedReady = true;
-      break;
-    } catch {
-      await delay(250);
-    }
-  }
-  if (!speedReady)
-    throw new Error('Pinned miaospeed API v3 was not ready; checks were not skipped');
-  function assertVersion(version) {
-    if (version !== lock.miaospeed.version)
-      throw new Error('miaospeed version mismatch: ' + version);
-  }
-  console.info('Testing against isolated miaospeed ' + lock.miaospeed.version + ' API v3');
   const env = {
     ...process.env,
     SUB_STORE_URL: url,
     SUBMELD_TEST_CONTAINER: name,
-    MIAOSPEED_URL: speedUrl,
-    MIAOSPEED_TOKEN: speedToken,
-    MIAOSPEED_BRIDGE_HOST:
-      process.env.SUBMELD_TEST_BRIDGE_HOST ??
-      (process.platform === 'win32'
-        ? Object.values(networkInterfaces())
-            .flat()
-            .find(
-              (ip) => ip?.family === 'IPv4' && !ip.internal && !ip.address.startsWith('169.254.'),
-            )?.address
-        : undefined) ??
-      'host.docker.internal',
-    SUBMELD_TEST_MIAOSPEED_CONTAINER: speedName,
   };
+  if (mode === 'cores') {
+    for (const key of Object.keys(env))
+      if (/^MIAOSPEED_/i.test(key) || key.toUpperCase() === 'SUBMELD_TEST_MIAOSPEED_CONTAINER')
+        delete env[key];
+  } else {
+    const speedToken = 'isolated-test-' + randomUUID();
+    const allocatedSpeedPort = await freeProbePort();
+    docker([
+      'run',
+      '--detach',
+      '--rm',
+      '--name',
+      speedName,
+      '--label',
+      'submeld.purpose=isolated-test',
+      '-p',
+      '127.0.0.1:' + allocatedSpeedPort + ':8765',
+      '--add-host',
+      'host.docker.internal:host-gateway',
+      lock.miaospeed.image,
+      'server',
+      '-bind',
+      '0.0.0.0:8765',
+      '-token',
+      speedToken,
+      '-path',
+      '/miaospeed',
+      '-upload',
+    ]);
+    speedStarted = true;
+    const speedPort = docker(['port', speedName, '8765/tcp']).match(/127\.0\.0\.1:(\d+)/)?.[1];
+    if (!speedPort) throw new Error('Missing isolated miaospeed port');
+    const speedUrl = 'ws://127.0.0.1:' + speedPort + '/miaospeed';
+    const backend = new MiaospeedClient(speedUrl, speedToken);
+    let speedReady = false;
+    for (let n = 0; n < 40; n++) {
+      try {
+        const result = await backend.run(
+          speedSettingsSchema.parse({}),
+          [],
+          [],
+          [],
+          AbortSignal.timeout(1000),
+          undefined,
+          true,
+        );
+        assertVersion(result.version);
+        speedReady = true;
+        break;
+      } catch {
+        await delay(250);
+      }
+    }
+    if (!speedReady)
+      throw new Error('Pinned miaospeed API v3 was not ready; checks were not skipped');
+    function assertVersion(version) {
+      if (version !== lock.miaospeed.version)
+        throw new Error('miaospeed version mismatch: ' + version);
+    }
+    console.info('Testing against isolated miaospeed ' + lock.miaospeed.version + ' API v3');
+    Object.assign(env, {
+      MIAOSPEED_URL: speedUrl,
+      MIAOSPEED_TOKEN: speedToken,
+      MIAOSPEED_BRIDGE_HOST:
+        process.env.SUBMELD_TEST_BRIDGE_HOST ??
+        (process.platform === 'win32'
+          ? Object.values(networkInterfaces())
+              .flat()
+              .find(
+                (ip) => ip?.family === 'IPv4' && !ip.internal && !ip.address.startsWith('169.254.'),
+              )?.address
+          : undefined) ??
+        'host.docker.internal',
+      SUBMELD_TEST_MIAOSPEED_CONTAINER: speedName,
+    });
+  }
   const run = (args) =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, args, { env, stdio: 'inherit', windowsHide: true });
