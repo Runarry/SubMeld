@@ -7,6 +7,7 @@ export default defineConfig({
     'hy2.browser.mjs',
     'node-reporting.browser.mjs',
     'machines.browser.mjs',
+    'machine-deletion.browser.mjs',
     'machine-node-creator.browser.mjs',
     'machine-overview.browser.mjs',
     'relay-wizard.browser.mjs',

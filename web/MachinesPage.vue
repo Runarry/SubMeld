@@ -16,6 +16,7 @@ import { ApiError } from './api';
 import ModalDialog from './ui/ModalDialog.vue';
 import MachineNodeEditor from './MachineNodeEditor.vue';
 import MachineNodeCreator from './MachineNodeCreator.vue';
+import MachineDeleteDialog from './MachineDeleteDialog.vue';
 import { nodeProtocol, type MachineNode } from './machineEditor';
 import {
   fieldOptions,
@@ -65,7 +66,8 @@ const busy = ref(false),
 const creating = ref(false),
   machineName = ref(''),
   renaming = ref(false),
-  renameValue = ref('');
+  renameValue = ref(''),
+  deletingMachine = ref(false);
 const token = ref<{ machine: MachineView; token: string } | null>(null),
   copyMessage = ref('');
 const tokenInput = ref<HTMLInputElement | null>(null),
@@ -81,6 +83,7 @@ const actionForm = ref<{
 let alive = true;
 let timer: ReturnType<typeof setInterval> | undefined;
 let detailRequest = 0;
+let overviewRequest = 0;
 const snapshot = computed(() => detail.value?.snapshot);
 const reportedAddresses = computed(() => [
   ...new Set(
@@ -303,7 +306,13 @@ function showGenerated() {
 async function loadDetail(id: string) {
   if (!id) return;
   const request = ++detailRequest;
-  const value = machineDetailSchema.parse(await props.api('/api/machines/' + id));
+  let value: MachineDetail;
+  try {
+    value = machineDetailSchema.parse(await props.api('/api/machines/' + id));
+  } catch (error) {
+    if (alive && selectedId.value === id && request === detailRequest) throw error;
+    return;
+  }
   if (alive && selectedId.value === id && request === detailRequest) {
     detail.value = value;
     const node = value.snapshot?.nodes.find((node) => node.id === editingId.value);
@@ -344,6 +353,7 @@ async function syncRoute(load = true) {
     preparationTask.value = null;
     creatorTrigger.value = null;
     submittedTask.value = null;
+    deletingMachine.value = false;
     editingFallback.value = null;
     editorTrigger.value = null;
     nodeQuery.value = '';
@@ -379,11 +389,12 @@ async function syncRoute(load = true) {
 async function refresh() {
   if (loading.value) return;
   loading.value = true;
+  const request = ++overviewRequest;
   try {
     const value = z
       .object({ machines: z.array(machineViewSchema) })
       .parse(await props.api('/api/machines'));
-    if (!alive) return;
+    if (!alive || request !== overviewRequest) return;
     machines.value = value.machines;
     const id = selectedId.value;
     if (id) await Promise.all([loadDetail(id), loadRoutes()]);
@@ -431,6 +442,33 @@ async function updateMachine(body: { name?: string; enabled?: boolean }) {
   await props.api('/api/machines/' + detail.value.machine.id, body, 'PATCH');
   renaming.value = false;
   await refresh();
+}
+async function machineDeleted() {
+  const removedId = detail.value?.machine.id || selectedId.value;
+  deletingMachine.value = false;
+  overviewRequest++;
+  detailRequest++;
+  machines.value = machines.value.filter((machine) => machine.id !== removedId);
+  selectedId.value = '';
+  detail.value = null;
+  actionForm.value = null;
+  addingNode.value = false;
+  creatorHidden.value = false;
+  preparingNodeCore.value = false;
+  preparationTask.value = null;
+  submittedTask.value = null;
+  editingId.value = '';
+  editingFallback.value = null;
+  editorTrigger.value = null;
+  creatorTrigger.value = null;
+  token.value = null;
+  navigateMachine();
+  message.value = '机器及关联面板数据已删除。';
+  try {
+    await refresh();
+  } catch (error) {
+    if (alive) message.value += ' ' + errorText(error);
+  }
 }
 async function copy(value: string, input: HTMLInputElement | HTMLTextAreaElement | null) {
   try {
@@ -639,6 +677,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   alive = false;
+  overviewRequest++;
   detailRequest++;
   clearInterval(timer);
   document.removeEventListener('visibilitychange', poll);
@@ -1365,13 +1404,31 @@ onBeforeUnmount(() => {
               </div>
               <p v-if="detail.machine.syncError" class="notice" role="alert">
                 {{ detail.machine.syncError }}
-              </p></template
+              </p>
+              <div class="setting-row danger-setting">
+                <div>
+                  <strong>删除机器</strong>
+                  <p>先卸载 Agent，再删除机器、生成的节点订阅与关联记录。</p>
+                </div>
+                <button class="danger" :disabled="busy" @click="deletingMachine = true">
+                  删除机器
+                </button>
+              </div></template
             >
           </section>
         </div>
       </section>
       <p v-if="!detail && message" class="notice" role="alert">{{ message }}</p>
     </template>
+    <MachineDeleteDialog
+      v-if="deletingMachine && detail"
+      :key="detail.machine.id"
+      :machine-id="detail.machine.id"
+      :machine-name="detail.machine.name"
+      :api="api"
+      @close="deletingMachine = false"
+      @deleted="machineDeleted"
+    />
     <ModalDialog v-if="creating" label="添加机器" :dismissible="!busy" @close="creating = false"
       ><h2>添加机器</h2>
       <form id="create-machine" @submit.prevent="act(createMachine)">
@@ -1570,6 +1627,13 @@ onBeforeUnmount(() => {
 .machines-page {
   display: grid;
   gap: 20px;
+}
+.danger-setting {
+  border-top: 1px solid var(--border);
+  margin-top: 20px;
+}
+.danger-setting strong {
+  color: var(--danger);
 }
 .page-header {
   margin: 0;

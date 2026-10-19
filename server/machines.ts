@@ -3,10 +3,12 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { z } from 'zod';
 import { AppError } from './errors.js';
 import { guardStructure } from './input.js';
-import { identityKey, type UpstreamRecord } from './sub-store.js';
+import { machineRelayReferences } from './relays.js';
+import { identityKey, upstreamRecordSchema, type UpstreamRecord } from './sub-store.js';
 import { hash, marker, type Entry, type UpstreamResources } from './upstream-resources.js';
 import {
   createMachineSchema,
+  deleteMachineSchema,
   machineCommandSchema,
   machineExportSchema,
   machineReportSchema,
@@ -15,12 +17,14 @@ import {
   machineTaskSchema,
   queueMachineCommandSchema,
   type MachineCommand,
+  type MachineDeletionPreview,
   type MachineDetail,
   type MachineSnapshot,
   type MachineTask,
   type MachineView,
 } from './shared/machines.js';
 import { revisionSchema } from './shared/resources.js';
+import { readStoredSubscription } from './shared/legacy-chain-inputs.js';
 
 const uuid = z
   .string()
@@ -58,6 +62,11 @@ const taskRowSchema = z.object({
   finished: z.number(),
 });
 type TaskRow = z.infer<typeof taskRowSchema>;
+type OwnedResource = Entry & {
+  id: string;
+  role: 'machine-source' | 'machine-snapshot' | 'machine-command';
+  revision: string;
+};
 const appliedSchema = z.object({
   revision: revisionSchema.nullable(),
   exports: z.array(machineExportSchema).max(2000),
@@ -238,6 +247,8 @@ function checkedSnapshot(input: unknown) {
 /** Configuration and command parameters live only in private Sub-Store files. */
 export class MachineStore {
   onChange?: (machineId: string) => void | Promise<void>;
+  // Relay operations acquire their queue before the shared Sub-Store lock.
+  coordinateDeletion?: <T>(operation: () => Promise<T>) => Promise<T>;
   beforeEnqueue?: (
     machineId: string,
     input: z.infer<typeof queueMachineCommandSchema>,
@@ -427,6 +438,268 @@ export class MachineStore {
         .run(digest(token).toString('hex'), row.id);
       this.changed(row.id);
       return { machine: this.view(this.row(row.id)), token };
+    });
+  }
+  private deletionLock<T>(operation: () => Promise<T>) {
+    const locked = () => this.resources.client.exclusive(operation);
+    return this.coordinateDeletion ? this.coordinateDeletion(locked) : locked();
+  }
+  private async rawCatalog(): Promise<Entry[]> {
+    return (
+      await Promise.all(
+        (['sub', 'collection', 'file'] as const).map(async (type) =>
+          (await this.resources.client.records(type)).map((record) => ({ type, record })),
+        ),
+      )
+    ).flat();
+  }
+  private deletionTasks(id: string) {
+    return z
+      .array(taskRowSchema)
+      .parse(this.db.prepare('SELECT * FROM machine_tasks WHERE machine_id=? ORDER BY id').all(id));
+  }
+  private ownedResources(row: MachineRow, tasks: TaskRow[], catalog: Entry[]): OwnedResource[] {
+    const expected = new Map<string, OwnedResource['role']>([
+      [row.resource_id, 'machine-source'],
+      [row.snapshot_file_id, 'machine-snapshot'],
+      ...tasks.map((task) => [task.file_id, 'machine-command'] as const),
+    ]);
+    const names = new Map(
+      [...expected].map(([id, role]) => [
+        role === 'machine-source' ? 'sub/sm-machine-' + row.id : 'file/sm-' + role + '-' + id,
+        id,
+      ]),
+    );
+    const owned: OwnedResource[] = [];
+    const conflict = () => {
+      throw new AppError(
+        'MACHINE_RESOURCE_CONFLICT',
+        '机器资源的 UUID、用途、所属机器或类型已变化，未删除；请先修正 Sub-Store 中的冲突。',
+        409,
+      );
+    };
+    for (const entry of catalog) {
+      const value = entry.record[identityKey];
+      const raw =
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : {};
+      // The retired chain boundary applies before identity checks or body parsing.
+      if (entry.type === 'file' && raw.role === 'chain') continue;
+      const id = typeof raw.id === 'string' ? raw.id : '';
+      const parentOwned =
+        raw.parent === row.id &&
+        ['machine-source', 'machine-snapshot', 'machine-command'].includes(String(raw.role));
+      if (parentOwned && raw.role === 'machine-command') {
+        if (
+          !uuid.safeParse(id).success ||
+          (expected.has(id) && expected.get(id) !== 'machine-command')
+        )
+          conflict();
+        expected.set(id, 'machine-command');
+      }
+      const named = names.get(entry.type + '/' + entry.record.name);
+      if (!parentOwned && !expected.has(id) && !named) continue;
+      const role = expected.get(id);
+      const meta = marker(entry.record);
+      if (
+        !role ||
+        !meta ||
+        (named && named !== id) ||
+        meta.id !== id ||
+        meta.role !== role ||
+        meta.parent !== row.id ||
+        meta.version !== 1 ||
+        entry.type !== (role === 'machine-source' ? 'sub' : 'file') ||
+        entry.record.source !== 'local' ||
+        (entry.type === 'file' && entry.record.type !== 'file') ||
+        ['localFirst', 'remoteFirst'].includes(String(entry.record.mergeSources)) ||
+        owned.some((item) => item.id === id)
+      )
+        conflict();
+      owned.push({ ...entry, id, role: role!, revision: hash(entry.record) });
+    }
+    return owned.sort((a, b) => a.id.localeCompare(b.id));
+  }
+  private async deletionInventory(row: MachineRow) {
+    const tasks = this.deletionTasks(row.id);
+    // Validate raw identities first: sync assigns UUIDs to unmarked native resources.
+    this.ownedResources(row, tasks, await this.rawCatalog());
+    await this.resources.syncUnlocked();
+    const catalog = [
+      ...this.resources.listResources().map(({ id }) => this.resources.record(id)),
+      ...this.resources.files().map(({ id }) => this.resources.record(id)),
+    ];
+    const owned = this.ownedResources(row, tasks, catalog);
+    const source = owned.find((item) => item.role === 'machine-source');
+    const blockers: Array<MachineDeletionPreview['blockers'][number] & { revision: string }> =
+      machineRelayReferences(this.resources, row.id);
+    for (const resource of this.resources.listResources()) {
+      const entry = this.resources.record(resource.id);
+      if (
+        entry.type === 'collection' &&
+        source &&
+        Array.isArray(entry.record.subscriptions) &&
+        entry.record.subscriptions.includes(source.record.name)
+      )
+        blockers.push({
+          kind: 'collection',
+          id: resource.id,
+          name: resource.name,
+          revision: resource.revision,
+        });
+    }
+    for (const { id, record } of this.resources.files('plan')) {
+      if (marker(record)?.version !== 1)
+        throw new AppError('FILE_INVALID', '上游文件用途或格式版本不兼容。', 409);
+      let plan;
+      try {
+        plan = readStoredSubscription(JSON.parse(String(record.content)));
+      } catch {
+        throw new AppError('PLAN_INVALID', '上游输出方案无法读取，请在原生文件页面修正。', 422);
+      }
+      if (
+        plan.inputs.some(
+          (input) => (input.kind === 'node' ? input.resourceId : input.id) === row.resource_id,
+        )
+      )
+        blockers.push({ kind: 'plan', id, name: plan.name, revision: hash(record) });
+    }
+    blockers.sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
+    const snapshot = owned.find((item) => item.role === 'machine-snapshot');
+    let nodes: number | null = row.revision ? null : 0;
+    if (snapshot) {
+      try {
+        nodes = envelopeSchema.parse(JSON.parse(String(snapshot.record.content))).snapshot.nodes
+          .length;
+      } catch {
+        nodes = null;
+      }
+    }
+    const revision = hash({
+      machine: {
+        id: row.id,
+        name: row.name,
+        resourceId: row.resource_id,
+        snapshotFileId: row.snapshot_file_id,
+        tokenHash: row.token_hash,
+      },
+      resources: owned.map(({ id, type, role, revision }) => ({ id, type, role, revision })),
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        status: task.status,
+        finished: task.finished,
+        fileId: task.file_id,
+        action: task.action,
+        expectedRevision: task.expected_revision,
+        resultRevision: task.result_revision,
+      })),
+      blockers,
+    });
+    const preview: MachineDeletionPreview = {
+      machine: { id: row.id, name: row.name },
+      revision,
+      counts: {
+        nodes,
+        subscriptions: Number(!!source),
+        tasks: tasks.length,
+        files: owned.filter((item) => item.type === 'file').length,
+      },
+      unfinishedTasks: tasks
+        .filter((task) => !task.finished || task.status === 'unknown')
+        .map((task) => this.taskView(task)),
+      blockers: blockers.map(({ kind, id, name }) => ({ kind, id, name })),
+    };
+    return { preview, owned, tasks };
+  }
+  deletionPreview(id: string): Promise<MachineDeletionPreview> {
+    return this.deletionLock(async () => (await this.deletionInventory(this.row(id))).preview);
+  }
+  private async deletionResource(row: MachineRow, tasks: TaskRow[], item: OwnedResource) {
+    let record: UpstreamRecord;
+    try {
+      record = upstreamRecordSchema.parse(
+        await this.resources.client.api(
+          '/api/' +
+            (item.type === 'file' ? 'wholeFile' : 'sub') +
+            '/' +
+            encodeURIComponent(item.record.name),
+        ),
+      );
+    } catch (error) {
+      // The pinned upstream also returns 500 for some missing single-record GETs.
+      // Only a fresh catalog can distinguish absence, a rename and a read failure.
+      if (!(error instanceof AppError) || error.code !== 'SUB_STORE_FAILED') throw error;
+      return this.ownedResources(row, tasks, await this.rawCatalog()).find(
+        (entry) => entry.id === item.id,
+      );
+    }
+    if (record.name !== item.record.name)
+      throw new AppError('REVISION_CONFLICT', '删除期间机器资源名称已变化。', 409);
+    const checked = this.ownedResources(row, tasks, [{ type: item.type, record }]).find(
+      (entry) => entry.id === item.id,
+    );
+    if (!checked)
+      throw new AppError('MACHINE_RESOURCE_CONFLICT', '待删除资源名称已被其他身份占用。', 409);
+    return checked;
+  }
+  async remove(id: string, input: unknown) {
+    const machineId = uuid.parse(id),
+      { revision } = deleteMachineSchema.parse(input);
+    return this.deletionLock(async () => {
+      const value: unknown = this.db.prepare('SELECT * FROM machines WHERE id=?').get(machineId);
+      if (!value) return { deleted: true as const };
+      const row = rowSchema.parse(value);
+      const { preview, owned, tasks } = await this.deletionInventory(row);
+      if (preview.revision !== revision)
+        throw new AppError(
+          'REVISION_CONFLICT',
+          '机器删除范围或引用已变化，请重新预览并确认。',
+          409,
+        );
+      if (preview.blockers.length)
+        throw new AppError(
+          'MACHINE_REFERENCED',
+          '机器仍被中转线路、组合或输出方案引用，请先解除引用。',
+          409,
+        );
+      this.db.prepare('UPDATE machines SET enabled=0 WHERE id=?').run(row.id);
+      this.wake(row.id);
+      try {
+        for (const item of owned) {
+          const current = () => this.deletionResource(row, tasks, item);
+          const checked = await current();
+          if (!checked) continue;
+          if (checked.revision !== item.revision)
+            throw new AppError('REVISION_CONFLICT', '删除期间机器资源已变化。', 409);
+          await this.resources.client.revoke(checked.record.name, checked.type);
+          const beforeDelete = await current();
+          if (!beforeDelete) continue;
+          if (beforeDelete.revision !== item.revision)
+            throw new AppError('REVISION_CONFLICT', '删除期间机器资源已变化。', 409);
+          await this.resources.client.api(
+            '/api/' + beforeDelete.type + '/' + encodeURIComponent(beforeDelete.record.name),
+            undefined,
+            'DELETE',
+          );
+        }
+        if (this.ownedResources(row, tasks, await this.rawCatalog()).length)
+          throw new AppError('REVISION_CONFLICT', '删除期间出现新的机器资源。', 409);
+        await this.resources.syncUnlocked();
+        this.db.transaction(() => {
+          this.db.prepare('DELETE FROM machine_tasks WHERE machine_id=?').run(row.id);
+          this.db.prepare('DELETE FROM machines WHERE id=?').run(row.id);
+        })();
+        this.wake(row.id);
+        return { deleted: true as const };
+      } catch {
+        await this.resources.syncUnlocked().catch(() => {});
+        throw new AppError(
+          'MACHINE_DELETE_INCOMPLETE',
+          '机器已停用，但删除未完成，部分上游资源可能已清理。任务记录仍保留；请重新读取删除预览，确认 Agent 已卸载后重试。',
+          502,
+        );
+      }
     });
   }
   authorize(id: string, authorization?: string) {
@@ -702,9 +975,9 @@ export class MachineStore {
           throw new AppError('MACHINE_REQUEST_CONFLICT', '此请求编号已用于其他机器操作。', 409);
         return { task: this.taskView(task) };
       }
-      const snapshot = this.envelope(row)?.snapshot;
       if (!row.enabled)
         throw new AppError('MACHINE_DISABLED', '此机器已停用，请启用后再操作。', 403);
+      const snapshot = this.envelope(row)?.snapshot;
       if (row.revision !== value.expectedRevision || snapshot?.revision !== value.expectedRevision)
         throw new AppError('REVISION_CONFLICT', '机器配置已变化或尚未上报，请刷新后重试。', 409);
       if (this.activeTask(row.id))
@@ -891,8 +1164,11 @@ export class MachineStore {
       return { task: this.task(task.id) };
     });
   }
-  private changed(id: string) {
+  private wake(id: string) {
     for (const wake of [...(this.waiters.get(id) ?? [])]) wake();
+  }
+  private changed(id: string) {
+    this.wake(id);
     if (this.onChange)
       void Promise.resolve()
         .then(() => this.onChange?.(id))

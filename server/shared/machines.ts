@@ -179,6 +179,29 @@ export const machineTaskSchema = z.object({
   message: z.string(),
 });
 export type MachineTask = z.infer<typeof machineTaskSchema>;
+export const machineDeletionPreviewSchema = z.object({
+  machine: z.object({ id: z.string().uuid(), name: z.string() }),
+  revision: revisionSchema,
+  counts: z.object({
+    nodes: z.number().int().nonnegative().nullable(),
+    subscriptions: z.number().int().nonnegative(),
+    tasks: z.number().int().nonnegative(),
+    files: z.number().int().nonnegative(),
+  }),
+  unfinishedTasks: z.array(machineTaskSchema),
+  blockers: z.array(
+    z.object({
+      kind: z.enum(['relay', 'collection', 'plan']),
+      id: z.string().uuid(),
+      name: z.string(),
+    }),
+  ),
+});
+export type MachineDeletionPreview = z.infer<typeof machineDeletionPreviewSchema>;
+export const deleteMachineSchema = z.strictObject({
+  revision: revisionSchema,
+  agentUninstalled: z.literal(true),
+});
 export const machineDetailSchema = z.object({
   machine: machineViewSchema,
   snapshot: machineSnapshotSchema.nullable(),

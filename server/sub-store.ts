@@ -133,17 +133,23 @@ export class SubStoreClient {
         }),
       );
   }
-  async tokens(name: string) {
+  async tokens(name: string, type: 'file' | 'sub' | 'collection' = 'file') {
+    const nativeType = type === 'collection' ? 'col' : type;
     return z
       .array(z.object({ token: z.string(), name: z.string(), type: z.string() }))
-      .parse(await this.api('/api/tokens?type=file&name=' + encodeURIComponent(name)));
+      .parse(
+        await this.api('/api/tokens?type=' + nativeType + '&name=' + encodeURIComponent(name)),
+      );
   }
-  async revoke(name: string) {
-    for (const item of await this.tokens(name))
+  async revoke(name: string, type: 'file' | 'sub' | 'collection' = 'file') {
+    const nativeType = type === 'collection' ? 'col' : type;
+    for (const item of await this.tokens(name, type))
       await this.api(
         '/api/token/' +
           encodeURIComponent(item.token) +
-          '?type=file&name=' +
+          '?type=' +
+          nativeType +
+          '&name=' +
           encodeURIComponent(name),
         undefined,
         'DELETE',

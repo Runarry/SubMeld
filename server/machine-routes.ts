@@ -12,6 +12,12 @@ export function registerMachineRoutes(app: Hono, store: MachineStore, _config?: 
     c.json(store.create(await readJson(c.req.raw, 4096)), 201),
   );
   app.get('/api/machines/:id', async (c) => c.json(await store.detail(c.req.param('id'))));
+  app.get('/api/machines/:id/deletion-preview', async (c) =>
+    c.json({ preview: await store.deletionPreview(c.req.param('id')) }),
+  );
+  app.delete('/api/machines/:id', async (c) =>
+    c.json(await store.remove(c.req.param('id'), await readJson(c.req.raw, 4096))),
+  );
   app.patch('/api/machines/:id', async (c) =>
     c.json(await store.update(c.req.param('id'), await readJson(c.req.raw, 4096))),
   );

@@ -1,11 +1,11 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { z } from 'zod';
-import { MachineStore } from './machines.js';
+import type { MachineStore } from './machines.js';
 import { AppError } from './errors.js';
 import { readJson } from './input.js';
 import { identityKey } from './sub-store.js';
-import { hash, marker, type UpstreamResources } from './upstream-resources.js';
+import { hash, marker, type Entry, type UpstreamResources } from './upstream-resources.js';
 import { tunnelCertificate } from './machine-assets.js';
 import { relayRouteSchema, machineOperationSchema } from './shared/machines.js';
 import { revisionSchema } from './shared/resources.js';
@@ -87,6 +87,39 @@ const active = (task: ReturnType<MachineStore['task']>, machines: MachineStore) 
 const textField = (obj: Record<string, unknown>, key: string) =>
   typeof obj[key] === 'string' ? obj[key] : '';
 
+function readRelay(entry: Entry): { saved: Saved; revision: string } {
+  if (entry.type !== 'file' || marker(entry.record)?.role !== 'relay-route')
+    throw new AppError('NOT_FOUND', '中转线路不存在。', 404);
+  try {
+    return {
+      saved: savedSchema.parse(JSON.parse(String(entry.record.content))),
+      revision: hash(entry.record),
+    };
+  } catch {
+    throw new AppError('RELAY_INVALID', '中转线路配置无法读取。', 422);
+  }
+}
+
+/** Called with a fresh catalog while the caller holds the Sub-Store lock. */
+export function machineRelayReferences(resources: UpstreamResources, machineId: string) {
+  return resources.files('relay-route').flatMap(({ id }) => {
+    const { saved, revision } = readRelay(resources.record(id));
+    if (saved.route.status === 'deleted') return [];
+    const deployments = [saved, ...(saved.migration ? [saved.migration.previous] : [])];
+    const referenced =
+      deployments.some((deployment) =>
+        [
+          deployment.route.entryMachineId,
+          deployment.route.targetMachineId,
+          ...deployment.route.hops.map((hop) => hop.machineId),
+          ...deployment.hops.map((hop) => hop.machineId),
+          deployment.step?.machineId,
+        ].includes(machineId),
+      ) || saved.migration?.retire.some((item) => item.machineId === machineId);
+    return referenced ? [{ kind: 'relay' as const, id, name: saved.route.name, revision }] : [];
+  });
+}
+
 export function relayEndpoint(uri: string, host: string, port: number, name: string): string {
   // Native vpsctl exports SIP002 and standard URI protocols. Preserve all identity fields.
   const url = new URL(uri);
@@ -119,6 +152,7 @@ export class RelayStore {
     private resources: UpstreamResources,
   ) {
     machines.beforeEnqueue = (id, input, requestId) => this.assertOperation(id, input, requestId);
+    machines.coordinateDeletion = (operation) => this.exclusive(operation);
   }
   start() {
     this.timer = setInterval(() => {
@@ -191,17 +225,7 @@ export class RelayStore {
     return task;
   }
   private read(id: string): { saved: Saved; revision: string } {
-    const entry = this.resources.record(id);
-    if (entry.type !== 'file' || marker(entry.record)?.role !== 'relay-route')
-      throw new AppError('NOT_FOUND', '中转线路不存在。', 404);
-    try {
-      return {
-        saved: savedSchema.parse(JSON.parse(String(entry.record.content))),
-        revision: hash(entry.record),
-      };
-    } catch {
-      throw new AppError('RELAY_INVALID', '中转线路配置无法读取。', 422);
-    }
+    return readRelay(this.resources.record(id));
   }
   private async save(saved: Saved, expected?: string) {
     return this.resources.client.exclusive(async () => {
