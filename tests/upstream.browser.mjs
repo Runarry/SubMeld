@@ -1,6 +1,7 @@
 /* global document, window, caches */
 import { test, expect } from '@playwright/test';
 import { UUID } from './fixtures.mjs';
+import { navigate } from './browser-helpers.mjs';
 async function login(page) {
   await page.goto('/submeld/');
   await page.getByLabel('管理员密码', { exact: true }).fill('SubMeld-UI-Test-Only-2026');
@@ -93,10 +94,11 @@ test('home opens upstream nodes and test center; support files and test settings
   });
   await page.getByRole('button', { name: '查看 Sub-Store 节点', exact: true }).click();
   await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption({ label: name });
+  await expect(page.locator('.node-row')).toHaveCount(1);
   await expect(
     page.getByRole('checkbox', { name: '选择 visible-node', exact: true }),
   ).toBeVisible();
-  await page.getByRole('button', { name: '服务入口', exact: true }).click();
+  await navigate(page, '服务入口');
   await page.getByRole('button', { name: '打开测试中心', exact: true }).click();
   await expect(page.getByRole('heading', { name: '测试中心', exact: true })).toBeVisible();
   await page.goto('/submeld/#/koipy');
@@ -108,8 +110,8 @@ test('home opens upstream nodes and test center; support files and test settings
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
-  await page.getByRole('button', { name: '服务入口', exact: true }).click();
-  await page.getByRole('button', { name: '配套文件', exact: true }).click();
+  await navigate(page, '服务入口');
+  await navigate(page, '配套文件');
   await expect(page.getByRole('heading', { name: '配套脚本与模板', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: '配套文件管理', exact: true })).toBeVisible();
   await expect(page).toHaveURL(/#\/support-files$/);

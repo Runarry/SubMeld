@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onBeforeUnmount, ref, provide } from 'vue';
+import { onMounted, onBeforeUnmount, ref, provide } from 'vue';
 import HomePage from './HomePage.vue';
 import TestCenter from './TestCenter.vue';
 import SupportFiles from './SupportFiles.vue';
@@ -24,15 +24,18 @@ type View =
   | 'machines'
   | 'relays';
 const nav = [
-  { view: 'home' as const, hash: 'home', label: '服务入口' },
-  { view: 'library' as const, hash: 'nodes', label: '节点' },
   { view: 'machines' as const, hash: 'machines', label: '机器' },
+  { view: 'library' as const, hash: 'nodes', label: '节点' },
   { view: 'relays' as const, hash: 'relays', label: '中转线路' },
   { view: 'chains' as const, hash: 'chains', label: '两跳链' },
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
   { view: 'tests' as const, hash: 'tests', label: '测试中心' },
   { view: 'supportFiles' as const, hash: 'support-files', label: '配套文件' },
+  { view: 'home' as const, hash: 'home', label: '服务入口' },
 ];
+const mobileMore = ref(false);
+const primaryViews: View[] = ['machines', 'library', 'relays', 'tests'];
+const lastRoutes = new Map<View, string>();
 const authenticated = ref(false);
 const checking = ref(true);
 const password = ref('');
@@ -58,7 +61,7 @@ provide(testActionsKey, {
 });
 
 function parseHash(): View {
-  const key = location.hash.replace(/^#\/?/, '');
+  const key = location.hash.replace(/^#\/?/, '').split('?')[0];
   if (key === 'koipy') return 'tests';
   if (key === 'support-files' || key === 'tools') return 'supportFiles';
   if (key === 'tests') return 'tests';
@@ -71,18 +74,25 @@ function parseHash(): View {
   return key === 'subscriptions' ? 'subscriptions' : 'home';
 }
 function setView(next: View) {
+  if (location.hash) lastRoutes.set(parseHash(), location.hash);
   const item = nav.find((entry) => entry.view === next);
-  const hash = '#/' + (item?.hash ?? 'subscriptions');
-  const reload = view.value === next;
-  view.value = reload ? null : next;
-  if (location.hash !== hash) history.replaceState(null, '', hash);
-  if (reload)
-    void nextTick(() => {
-      view.value = next;
-    });
+  const hash = lastRoutes.get(next) ?? '#/' + (item?.hash ?? 'home');
+  mobileMore.value = false;
+  if (location.hash !== hash) location.hash = hash;
+  view.value = next;
 }
 function onHashChange() {
-  if (authenticated.value) setView(parseHash());
+  if (authenticated.value) {
+    const next = parseHash();
+    const canonical = nav.find((item) => item.view === next)!.hash;
+    if (location.hash.replace(/^#\/?/, '').split('?')[0] !== canonical) {
+      const query = location.hash.split('?')[1];
+      history.replaceState(null, '', '#/' + canonical + (query ? '?' + query : ''));
+    }
+    lastRoutes.set(next, location.hash);
+    view.value = next;
+    mobileMore.value = false;
+  }
 }
 function lockWorkspace() {
   authenticated.value = false;
@@ -108,7 +118,7 @@ async function login() {
     await api('/api/auth/login', { password: password.value });
     authenticated.value = true;
     password.value = '';
-    setView(parseHash());
+    onHashChange();
   } catch (error) {
     message.value = error instanceof ApiError ? error.message : '无法连接服务。';
   } finally {
@@ -131,7 +141,7 @@ onMounted(async () => {
   try {
     await api('/api/auth/me');
     authenticated.value = true;
-    setView(parseHash());
+    onHashChange();
   } catch {
     /* Login remains available without a session. */
   } finally {
@@ -157,14 +167,34 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       <span class="version">2.0.0</span>
     </div>
     <nav class="app-nav" aria-label="管理页面">
+      <span class="nav-caption">管理</span>
       <button
         v-for="item in nav"
         :key="item.view"
         type="button"
-        :class="{ active: view === item.view }"
+        :class="{ active: view === item.view, 'nav-secondary': !primaryViews.includes(item.view) }"
         @click="setView(item.view)"
       >
-        <svg v-if="item.view === 'subscriptions'" viewBox="0 0 16 16" aria-hidden="true">
+        <svg
+          v-if="item.view === 'machines'"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <rect x="2" y="1.5" width="12" height="13" rx="2" />
+          <path d="M2 8h12M5 5h1M5 11h1M9 5h3M9 11h3" />
+        </svg>
+        <svg
+          v-else-if="item.view === 'relays'"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M2 5h11l-3-3M14 11H3l3 3" />
+        </svg>
+        <svg v-else-if="item.view === 'subscriptions'" viewBox="0 0 16 16" aria-hidden="true">
           <path
             fill="currentColor"
             d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5zM4 5h8v1.5H4zm0 3h5v1.5H4z"
@@ -187,6 +217,24 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
         </svg>
         {{ item.label }}
       </button>
+      <button
+        class="nav-more-trigger"
+        :class="{ active: !primaryViews.includes(view ?? 'home') }"
+        :aria-expanded="mobileMore"
+        @click="mobileMore = !mobileMore"
+      >
+        <span aria-hidden="true">•••</span>更多
+      </button>
+      <div v-if="mobileMore" class="nav-more-panel" aria-label="更多页面">
+        <button
+          v-for="item in nav.filter((item) => !primaryViews.includes(item.view))"
+          :key="item.view"
+          :class="{ active: view === item.view }"
+          @click="setView(item.view)"
+        >
+          {{ item.label }}
+        </button>
+      </div>
     </nav>
     <div class="rail-foot">
       <button type="button" :disabled="!!busy" @click="logout">退出登录</button>
@@ -210,6 +258,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       <SupportFiles v-if="view === 'supportFiles'" :api="api" />
       <TestCenter
         v-if="view === 'tests'"
+        :key="testInitialTab"
         :api="api"
         :subjects="testSubjects"
         :initial-tab="testInitialTab"

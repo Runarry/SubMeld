@@ -6,6 +6,18 @@ export async function login(page) {
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
 }
+export async function navigate(page, name) {
+  const nav = page.getByRole('navigation', { name: '管理页面' });
+  const direct = nav.getByRole('button', { name, exact: true }).first();
+  if (await direct.isVisible()) await direct.click();
+  else {
+    await nav.getByRole('button', { name: '更多', exact: true }).click();
+    await page
+      .getByLabel('更多页面', { exact: true })
+      .getByRole('button', { name, exact: true })
+      .click();
+  }
+}
 export async function api(page, path, body, method = body === undefined ? 'GET' : 'POST') {
   const response = await page.request.fetch(path, {
     method,

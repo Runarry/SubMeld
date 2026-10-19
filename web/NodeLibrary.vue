@@ -13,6 +13,8 @@ import { useNodeTests } from './nodeTests';
 import NodeTestSummary from './NodeTestSummary.vue';
 import ModalDialog from './ui/ModalDialog.vue';
 import NodeReportingSettings from './NodeReportingSettings.vue';
+import { machineViewSchema, type MachineView } from '../server/shared/machines';
+import { z } from 'zod';
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
 }>();
@@ -32,6 +34,22 @@ const form = ref<{ name: string; source: 'local' | 'remote'; content: string; ur
 const detail = ref<ReturnType<typeof nodeDetailsSchema.parse> | null>(null),
   deleting = ref<NodeView[] | null>(null);
 const reporting = ref(false);
+const machines = ref<MachineView[]>([]);
+const owner = (id: string) => machines.value.find((machine) => machine.resourceId === id);
+const machineLink = (id: string) => '#/machines?machine=' + encodeURIComponent(id) + '&tab=nodes';
+function readLocation() {
+  const query = new URLSearchParams(location.hash.split('?')[1]);
+  resourceId.value = query.get('resource') ?? '';
+  search.value = query.get('search') ?? '';
+  const value = Number(query.get('page') ?? 0);
+  page.value = Number.isInteger(value) && value >= 0 ? value : 0;
+}
+readLocation();
+function locationChanged() {
+  if (!/^#\/?nodes(?:\?|$)/.test(location.hash)) return;
+  readLocation();
+  void act(() => load());
+}
 const native = '/?api=' + encodeURIComponent(location.origin + '/upstream/sub-store');
 const key = (node: NodeView) => node.resourceId + ':' + node.nodeIndex;
 const nodeRef = (node: NodeView) =>
@@ -49,6 +67,7 @@ let alive = true,
 onBeforeUnmount(() => {
   alive = false;
   ticket++;
+  window.removeEventListener('hashchange', locationChanged);
 });
 async function act(action: () => Promise<void>) {
   if (busy.value) return;
@@ -81,6 +100,11 @@ async function load(force = false) {
   total.value = result.total;
   errors.value = result.errors.map((e) => e.message);
   selected.value = [];
+  const query = new URLSearchParams();
+  if (resourceId.value) query.set('resource', resourceId.value);
+  if (search.value) query.set('search', search.value);
+  if (page.value) query.set('page', String(page.value));
+  history.replaceState(null, '', '#/nodes' + (query.size ? '?' + query : ''));
   if (!nodes.value.length && page.value) {
     page.value--;
     await load(force);
@@ -105,7 +129,19 @@ async function remove() {
   await load();
   message.value = '删除操作已保存到 Sub-Store。';
 }
-onMounted(() => void act(() => load()));
+onMounted(() => {
+  window.addEventListener('hashchange', locationChanged);
+  void act(() => load());
+  void props
+    .api('/api/machines')
+    .then((value) => {
+      if (alive)
+        machines.value = z.object({ machines: machineViewSchema.array() }).parse(value).machines;
+    })
+    .catch(() => {
+      /* Node viewing remains available when machine summaries cannot load. */
+    });
+});
 </script>
 <template>
   <section class="page">
@@ -194,6 +230,12 @@ onMounted(() => void act(() => load()));
             {{ node.protocol }} · {{ node.resourceName
             }}{{ node.available ? '' : ' · 已被处理规则排除' }}
           </p>
+          <a
+            v-if="owner(node.resourceId)"
+            class="machine-origin"
+            :href="machineLink(owner(node.resourceId)!.id)"
+            >管理机器 · {{ owner(node.resourceId)!.name }} ↗</a
+          >
           <p v-if="!node.testable" class="muted">
             三内核检查：{{ node.testReason }} 综合测试将按 miaospeed 能力检查。
           </p>
@@ -281,10 +323,36 @@ onMounted(() => void act(() => load()));
     <ModalDialog v-if="detail" label="节点详情" wide @close="detail = null"
       ><h2>{{ detail.name }}</h2>
       <p>{{ detail.resourceName }} · {{ detail.protocol }}</p>
-      <h3>处理后内容</h3>
-      <pre>{{ JSON.stringify(detail.processed, null, 2) }}</pre>
-      <h3>原始节点</h3>
-      <pre>{{ JSON.stringify(detail.original, null, 2) }}</pre>
+      <dl class="connection-summary">
+        <template
+          v-for="[field, label] in [
+            ['server', '连接地址'],
+            ['port', '端口'],
+            ['sni', '服务器名称 SNI'],
+            ['network', '传输方式'],
+            ['cipher', '加密方式'],
+          ]"
+          :key="field"
+        >
+          <template v-if="field && detail.processed?.[field] !== undefined"
+            ><dt>{{ label }}</dt>
+            <dd>{{ detail.processed?.[field] }}</dd></template
+          >
+        </template>
+      </dl>
+      <p v-if="owner(detail.resourceId)">
+        <a :href="machineLink(owner(detail.resourceId)!.id)"
+          >前往 {{ owner(detail.resourceId)!.name }} 查看和编辑机器节点 →</a
+        >
+      </p>
+      <details>
+        <summary>处理后完整配置</summary>
+        <pre>{{ JSON.stringify(detail.processed, null, 2) }}</pre>
+      </details>
+      <details>
+        <summary>原始节点配置</summary>
+        <pre>{{ JSON.stringify(detail.original, null, 2) }}</pre>
+      </details>
       <template #footer
         ><a :href="native">打开 Sub-Store 编辑</a
         ><button @click="detail = null">关闭</button></template
@@ -307,6 +375,29 @@ onMounted(() => void act(() => load()));
   </section>
 </template>
 <style scoped>
+.machine-origin {
+  font-size: 12px;
+  color: var(--primary);
+}
+.connection-summary {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.connection-summary dd {
+  margin: 0;
+}
+details {
+  margin-block: 16px;
+}
+summary {
+  cursor: pointer;
+  color: var(--muted);
+}
 .filters,
 .selection-bar,
 .row-actions,

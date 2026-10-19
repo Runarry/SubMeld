@@ -1,7 +1,7 @@
 :root {
   --font: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
-  --bg: #e8eeea;
+  --bg: #f4f7f5;
   --surface: #fff;
   --sidebar: #14231e;
   --sidebar-text: #b7c9c0;
@@ -21,7 +21,7 @@
   --row-hover: #f3f7f5;
   --row-active: #e7f1ec;
   --radius: 8px;
-  --sidebar-width: 216px;
+  --sidebar-width: 192px;
   --bottom-nav: 58px;
   --space: 8px;
 }
@@ -202,6 +202,21 @@ h3 {
   flex-direction: column;
   gap: 4px;
   padding: 8px 10px;
+  position: relative;
+}
+.nav-caption {
+  padding: 10px 10px 8px;
+  font-size: 11px;
+  color: #90a99d;
+}
+.app-nav > button:nth-of-type(4) {
+  margin-top: 24px;
+}
+.app-nav .nav-more-trigger {
+  display: none;
+}
+.nav-more-panel {
+  display: none;
 }
 .app-nav button {
   display: flex;
@@ -932,6 +947,34 @@ summary {
     padding: 4px 6px;
     gap: 2px;
     border-top: 1px solid #2c4740;
+  }
+  .app-nav > button:nth-of-type(4) {
+    margin-top: 0;
+  }
+  .app-nav .nav-caption,
+  .app-nav .nav-secondary {
+    display: none;
+  }
+  .app-nav .nav-more-trigger {
+    display: flex;
+  }
+  .nav-more-panel {
+    display: grid;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 8px;
+    width: 210px;
+    padding: 8px;
+    border: 1px solid #2c4740;
+    border-radius: 10px;
+    background: var(--sidebar);
+    box-shadow: 0 8px 24px #14231e30;
+  }
+  .app-nav .nav-more-panel button {
+    flex-direction: row;
+    justify-content: flex-start;
+    font-size: 14px;
+    padding: 12px;
   }
   .app-nav button {
     flex: 1;

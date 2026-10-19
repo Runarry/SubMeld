@@ -7,23 +7,32 @@ import { readJson } from './input.js';
 import { identityKey } from './sub-store.js';
 import { hash, marker, type UpstreamResources } from './upstream-resources.js';
 import { tunnelCertificate } from './machine-assets.js';
-import { relayRouteSchema, machineOperationSchema } from './shared/machines.js';
+import {
+  relayRouteSchema,
+  machineOperationSchema,
+  machineExportSchema,
+} from './shared/machines.js';
 import { revisionSchema } from './shared/resources.js';
 
-const createSchema = relayRouteSchema.omit({
-  id: true,
-  revision: true,
-  status: true,
-  message: true,
-  taskIds: true,
-  health: true,
-});
+const createSchema = relayRouteSchema
+  .omit({
+    id: true,
+    revision: true,
+    status: true,
+    message: true,
+    taskIds: true,
+    health: true,
+    outputResourceId: true,
+  })
+  .strict();
+const updateSchema = createSchema.extend({ revision: revisionSchema });
 type Operation = z.infer<typeof machineOperationSchema>;
 const stepSchema = z.object({
   machineId: z.string().uuid(),
   requestId: z.string().uuid(),
   expectedRevision: revisionSchema,
   operation: machineOperationSchema,
+  reportedTunnelRevision: revisionSchema.nullable().optional(),
 });
 const hopSchema = z.object({
   machineId: z.string().uuid(),
@@ -37,7 +46,7 @@ const hopSchema = z.object({
   privateKeyPEM: z.string(),
   appliedRevision: z.string().default(''),
 });
-const savedSchema = z.object({
+const deploymentSchema = z.object({
   schemaVersion: z.literal(1),
   route: relayRouteSchema.omit({ revision: true }),
   sourceId: z.string().uuid(),
@@ -56,9 +65,26 @@ const savedSchema = z.object({
   forwardId: z.string().optional(),
   hops: z.array(hopSchema),
   entryTunnelRevision: z.string().default(''),
+  sourceNodeName: z.string().optional(),
   step: stepSchema.optional(),
 });
+const retiredTunnelSchema = z.object({
+  machineId: z.string().uuid(),
+  id: z.string().uuid(),
+  revision: z.string(),
+});
+const savedSchema = deploymentSchema.extend({
+  migration: z
+    .object({
+      previous: deploymentSchema,
+      phase: z.enum(['cleanup', 'deploy', 'retire']),
+      retire: z.array(retiredTunnelSchema).max(9),
+      retireIndex: z.number().int().nonnegative().default(0),
+    })
+    .optional(),
+});
 type Saved = z.infer<typeof savedSchema>;
+type Deployment = z.infer<typeof deploymentSchema>;
 const active = (task: ReturnType<MachineStore['task']>, machines: MachineStore) =>
   ['queued', 'running'].includes(task.status) ||
   (task.status === 'unknown' && machines.activeTask(task.machineId)?.id === task.id);
@@ -113,32 +139,51 @@ export class RelayStore {
   private async assertOperation(machineId: string, input: Operation, requestId?: string) {
     await this.resources.sync();
     for (const { id } of this.resources.files('relay-route')) {
-      const { saved } = this.read(id),
-        r = saved.route;
-      if (r.status === 'deleted' || (requestId && saved.step?.requestId === requestId)) continue;
-      const target = r.targetMachineId === machineId && input.params.id === r.targetNodeId;
-      const entry = r.entryMachineId === machineId && input.params.id === r.entryNodeId;
-      if (input.action === 'node.delete' && (target || entry))
-        throw new AppError('RELAY_REFERENCED', '节点仍被中转线路引用，请先删除线路。', 409);
-      if (
-        input.action === 'core.uninstall' &&
-        input.params.purge === true &&
-        [r.entryMachineId, r.targetMachineId].includes(machineId)
-      )
-        throw new AppError(
-          'RELAY_REFERENCED',
-          '机器仍有中转线路，请先处理线路后彻底清除内核配置。',
-          409,
-        );
-      if (r.entryMachineId !== machineId) continue;
-      const ids = [saved.exitId, saved.forwardId, saved.bindingId].filter(Boolean);
-      if (
-        ['exit.edit', 'exit.delete', 'forward.edit', 'forward.delete', 'binding.delete'].includes(
-          input.action,
-        ) &&
-        ids.includes(String(input.params.id))
-      )
-        throw new AppError('RELAY_REFERENCED', '该资源由集中中转线路管理，请从中转页面操作。', 409);
+      const { saved } = this.read(id);
+      if (saved.route.status === 'deleted' || (requestId && saved.step?.requestId === requestId))
+        continue;
+      for (const deployment of [saved, ...(saved.migration ? [saved.migration.previous] : [])]) {
+        const r = deployment.route;
+        const target = r.targetMachineId === machineId && input.params.id === r.targetNodeId;
+        const entry = r.entryMachineId === machineId && input.params.id === r.entryNodeId;
+        if (input.action === 'node.delete' && (target || entry))
+          throw new AppError('RELAY_REFERENCED', '节点仍被中转线路引用，请先删除线路。', 409);
+        if (
+          input.action === 'core.uninstall' &&
+          input.params.purge === true &&
+          [
+            r.entryMachineId,
+            r.targetMachineId,
+            ...deployment.hops.map((hop) => hop.machineId),
+          ].includes(machineId)
+        )
+          throw new AppError(
+            'RELAY_REFERENCED',
+            '机器仍有中转线路，请先处理线路后彻底清除内核配置。',
+            409,
+          );
+        if (
+          ['tunnel.apply', 'tunnel.delete'].includes(input.action) &&
+          ((machineId === r.entryMachineId && input.params.id === r.id) ||
+            deployment.hops.some(
+              (hop) => hop.machineId === machineId && hop.id === input.params.id,
+            ))
+        )
+          throw new AppError('RELAY_REFERENCED', '该隧道仍由中转线路管理，请从中转页面操作。', 409);
+        if (r.entryMachineId !== machineId) continue;
+        const ids = [deployment.exitId, deployment.forwardId, deployment.bindingId].filter(Boolean);
+        if (
+          ['exit.edit', 'exit.delete', 'forward.edit', 'forward.delete', 'binding.delete'].includes(
+            input.action,
+          ) &&
+          ids.includes(String(input.params.id))
+        )
+          throw new AppError(
+            'RELAY_REFERENCED',
+            '该资源由集中中转线路管理，请从中转页面操作。',
+            409,
+          );
+      }
     }
   }
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -198,6 +243,11 @@ export class RelayStore {
         entries.map(async ({ saved, revision }) => ({
           ...saved.route,
           revision,
+          outputResourceId:
+            saved.route.kind === 'tunnel'
+              ? saved.sourceId
+              : this.machines.list().find((machine) => machine.id === saved.route.entryMachineId)
+                  ?.resourceId,
           ...(await this.health(saved)),
         })),
       ),
@@ -254,108 +304,305 @@ export class RelayStore {
     if (!snap) throw new AppError('MACHINE_NOT_READY', '请等待机器完成首次上报。', 409);
     return snap;
   }
+  private async prepare(input: unknown, id: string, previous?: Deployment): Promise<Saved> {
+    const route = createSchema.parse(input);
+    if (route.kind !== 'tunnel' && route.hops.length)
+      throw new AppError('TUNNEL_HOPS', '跳路径仅适用于 TLS 隧道线路。', 400);
+    const [entry, target] = await Promise.all([
+      this.snapshot(route.entryMachineId),
+      this.snapshot(route.targetMachineId),
+    ]);
+    const node = target.nodes.find((n) => n.id === route.targetNodeId);
+    const exported = target.exports.find((e) => e.id === route.targetNodeId && e.kind === 'node');
+    if (!node || !exported || target.pendingCores.includes(node.core))
+      throw new AppError('TARGET_NOT_APPLIED', '目标节点不存在或仍在等待应用。', 409);
+    if (
+      route.entryMachineId === route.targetMachineId &&
+      (route.kind !== 'protocol' || route.entryNodeId === route.targetNodeId)
+    )
+      throw new AppError('RELAY_LOOP', '入口和目标不能构成同机转发回环。', 400);
+    if (route.kind === 'protocol' && !entry.nodes.some((n) => n.id === route.entryNodeId))
+      throw new AppError('ENTRY_REQUIRED', '请选择入口代理节点。', 400);
+    await this.resources.sync();
+    const routes = this.resources
+      .files('relay-route')
+      .flatMap(({ id: key }) => {
+        const { saved } = this.read(key);
+        return [saved.route, ...(saved.migration ? [saved.migration.previous.route] : [])];
+      })
+      .filter((r) => r.status !== 'deleted' && r.id !== id);
+    if (route.kind === 'protocol') {
+      const key = (m: string, n: string) => m + '/' + n;
+      if (
+        routes.some(
+          (r) =>
+            r.kind === 'protocol' &&
+            r.entryMachineId === route.entryMachineId &&
+            r.entryNodeId === route.entryNodeId,
+        )
+      )
+        throw new AppError('ENTRY_BOUND', '该入口已由另一条线路管理。', 409);
+      const entryKey = key(route.entryMachineId, route.entryNodeId!);
+      const pending = [key(route.targetMachineId, route.targetNodeId)],
+        visited = new Set<string>();
+      while (pending.length) {
+        const cursor = pending.pop()!;
+        if (cursor === entryKey) throw new AppError('RELAY_LOOP', '中转线路形成循环。', 409);
+        if (visited.has(cursor)) continue;
+        visited.add(cursor);
+        pending.push(
+          ...routes
+            .filter(
+              (r) => r.kind === 'protocol' && key(r.entryMachineId, r.entryNodeId ?? '') === cursor,
+            )
+            .map((r) => key(r.targetMachineId, r.targetNodeId)),
+        );
+      }
+    }
+    const host = typeof node.address === 'string' ? node.address : '';
+    const port = typeof node.port === 'number' ? node.port : Number(node.port);
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535)
+      throw new AppError('TARGET_ENDPOINT', '目标节点缺少有效的发布地址与端口。', 422);
+    const hops: Saved['hops'] = [];
+    if (route.kind === 'tunnel') {
+      if (
+        !route.hops.length ||
+        new Set([route.entryMachineId, ...route.hops.map((h) => h.machineId)]).size !==
+          route.hops.length + 1
+      )
+        throw new AppError('TUNNEL_HOPS', '请选择不重复且不含入口机器的隧道节点。', 400);
+      for (const hop of route.hops) {
+        await this.snapshot(hop.machineId);
+        const retained =
+          previous?.route.kind === 'tunnel' &&
+          previous.hops.find((item) => item.machineId === hop.machineId);
+        if (retained) {
+          hops.push({ ...retained, ...hop });
+          continue;
+        }
+        const hopId = randomUUID(),
+          serverName = hopId + '.submeld.internal';
+        hops.push({
+          ...hop,
+          id: hopId,
+          serverName,
+          username: randomBytes(16).toString('hex'),
+          password: randomBytes(32).toString('base64url'),
+          ...(await tunnelCertificate(serverName)),
+          appliedRevision: '',
+        });
+      }
+    }
+    const saved: Saved = {
+      schemaVersion: 1,
+      route: {
+        ...route,
+        id,
+        status: 'pending',
+        message: '等待部署。',
+        taskIds: previous?.route.taskIds ?? [],
+        health: 'unknown',
+      },
+      sourceId: previous?.sourceId ?? randomUUID(),
+      stage: 0,
+      deleting: false,
+      targetRevision: target.revision,
+      targetUri: exported.uri,
+      targetHost: host,
+      targetListen: typeof node.listen === 'string' ? node.listen : '0.0.0.0',
+      targetPort: port,
+      targetProfile: node.profile,
+      targetCore: node.core,
+      ...(typeof exported.tlsSpkiSha256 === 'string' ? { targetSpki: exported.tlsSpkiSha256 } : {}),
+      hops,
+      entryTunnelRevision:
+        previous?.route.entryMachineId === route.entryMachineId ? previous.entryTunnelRevision : '',
+      ...(previous?.sourceNodeName ? { sourceNodeName: previous.sourceNodeName } : {}),
+    };
+    return saved;
+  }
   async create(input: unknown) {
     return this.exclusive(async () => {
-      const route = createSchema.parse(input),
-        id = randomUUID();
-      const [entry, target] = await Promise.all([
-        this.snapshot(route.entryMachineId),
-        this.snapshot(route.targetMachineId),
-      ]);
-      const node = target.nodes.find((n) => n.id === route.targetNodeId);
-      const exported = target.exports.find((e) => e.id === route.targetNodeId && e.kind === 'node');
-      if (!node || !exported || target.pendingCores.includes(node.core))
-        throw new AppError('TARGET_NOT_APPLIED', '目标节点不存在或仍在等待应用。', 409);
-      if (
-        route.entryMachineId === route.targetMachineId &&
-        (route.kind !== 'protocol' || route.entryNodeId === route.targetNodeId)
-      )
-        throw new AppError('RELAY_LOOP', '入口和目标不能构成同机转发回环。', 400);
-      if (route.kind === 'protocol' && !entry.nodes.some((n) => n.id === route.entryNodeId))
-        throw new AppError('ENTRY_REQUIRED', '请选择入口代理节点。', 400);
-      await this.resources.sync();
-      const routes = this.resources
-        .files('relay-route')
-        .map(({ id: key }) => this.read(key).saved.route)
-        .filter((r) => r.status !== 'deleted');
-      if (route.kind === 'protocol') {
-        const key = (m: string, n: string) => m + '/' + n;
-        if (
-          routes.some(
-            (r) =>
-              r.kind === 'protocol' &&
-              r.entryMachineId === route.entryMachineId &&
-              r.entryNodeId === route.entryNodeId,
-          )
-        )
-          throw new AppError('ENTRY_BOUND', '该入口已由另一条线路管理。', 409);
-        let cursor = key(route.targetMachineId, route.targetNodeId);
-        const visited = new Set([key(route.entryMachineId, route.entryNodeId!)]);
-        while (true) {
-          if (visited.has(cursor)) throw new AppError('RELAY_LOOP', '中转线路形成循环。', 409);
-          visited.add(cursor);
-          const next = routes.find(
-            (r) => r.kind === 'protocol' && key(r.entryMachineId, r.entryNodeId ?? '') === cursor,
-          );
-          if (!next) break;
-          cursor = key(next.targetMachineId, next.targetNodeId);
-        }
-      }
-      const host = typeof node.address === 'string' ? node.address : '';
-      const port = typeof node.port === 'number' ? node.port : Number(node.port);
-      if (!host || !Number.isInteger(port) || port < 1 || port > 65535)
-        throw new AppError('TARGET_ENDPOINT', '目标节点缺少有效的发布地址与端口。', 422);
-      const hops: Saved['hops'] = [];
-      if (route.kind === 'tunnel') {
-        if (
-          !route.hops.length ||
-          new Set([route.entryMachineId, ...route.hops.map((h) => h.machineId)]).size !==
-            route.hops.length + 1
-        )
-          throw new AppError('TUNNEL_HOPS', '请选择不重复且不含入口机器的隧道节点。', 400);
-        for (const hop of route.hops) {
-          await this.snapshot(hop.machineId);
-          const hopId = randomUUID(),
-            serverName = hopId + '.submeld.internal';
-          hops.push({
-            ...hop,
-            id: hopId,
-            serverName,
-            username: randomBytes(16).toString('hex'),
-            password: randomBytes(32).toString('base64url'),
-            ...(await tunnelCertificate(serverName)),
-            appliedRevision: '',
-          });
-        }
-      }
-      const saved: Saved = {
-        schemaVersion: 1,
-        route: {
-          ...route,
-          id,
-          status: 'pending',
-          message: '等待部署。',
-          taskIds: [],
-          health: 'unknown',
-        },
-        sourceId: randomUUID(),
-        stage: 0,
-        deleting: false,
-        targetRevision: target.revision,
-        targetUri: exported.uri,
-        targetHost: host,
-        targetListen: typeof node.listen === 'string' ? node.listen : '0.0.0.0',
-        targetPort: port,
-        targetProfile: node.profile,
-        targetCore: node.core,
-        ...(typeof exported.tlsSpkiSha256 === 'string'
-          ? { targetSpki: exported.tlsSpkiSha256 }
-          : {}),
-        hops,
-        entryTunnelRevision: '',
-      };
+      const id = randomUUID(),
+        saved = await this.prepare(input, id);
       await this.save(saved);
       return { route: { ...saved.route, revision: this.read(id).revision } };
+    });
+  }
+  private taskFor(saved: Saved) {
+    if (!saved.step) return undefined;
+    try {
+      return this.machines.task(saved.step.requestId);
+    } catch (error) {
+      if (!(error instanceof AppError) || error.status !== 404) throw error;
+      return undefined;
+    }
+  }
+  private async assertNativeReplacement(saved: Deployment) {
+    const machine = this.machines.list().find((item) => item.id === saved.route.entryMachineId);
+    if (!machine) throw new AppError('MACHINE_NOT_FOUND', '入口机器不存在。', 404);
+    await this.resources.sync();
+    const privateFiles = this.resources
+      .files('machine-snapshot')
+      .filter((file) => marker(file.record)?.parent === machine.id);
+    if (privateFiles.length !== 1)
+      throw new AppError('MACHINE_SNAPSHOT_INVALID', '无法唯一核对入口已生效节点。', 409);
+    let applied: z.infer<typeof machineExportSchema>[];
+    try {
+      const value = z
+        .object({
+          applied: z.record(z.string(), z.object({ exports: z.array(machineExportSchema) })),
+        })
+        .parse(JSON.parse(String(privateFiles[0]!.record.content)));
+      applied = Object.values(value.applied).flatMap((item) => item.exports);
+    } catch {
+      throw new AppError(
+        'MACHINE_SNAPSHOT_INVALID',
+        '无法核对入口已生效节点，请等待有效上报。',
+        409,
+      );
+    }
+    const names = new Set(
+      applied
+        .filter((item) =>
+          saved.route.kind === 'forward'
+            ? item.kind === 'forward' &&
+              !!saved.forwardId &&
+              item.id.startsWith(saved.forwardId + ':')
+            : item.kind === 'node' && item.id === saved.route.entryNodeId,
+        )
+        .map((item) => item.name),
+    );
+    if (
+      !names.size ||
+      !this.resources.listResources().some((item) => item.id === machine.resourceId)
+    )
+      return;
+    const snapshot = await this.resources.preview(machine.resourceId);
+    await this.resources.assertDeletable(
+      snapshot.rows
+        .filter((row) =>
+          names.has(String(row.original?.name ?? row.processed?.name ?? row.view.name)),
+        )
+        .map((row) => row.view),
+    );
+  }
+  async update(id: string, input: unknown) {
+    const { revision, ...value } = updateSchema.parse(input);
+    return this.exclusive(async () => {
+      await this.resources.sync();
+      const { saved: previous, revision: current } = this.read(id);
+      if (revision !== current)
+        throw new AppError('REVISION_CONFLICT', '线路已更新，请刷新。', 409);
+      if (previous.migration)
+        throw new AppError(
+          'RELAY_UPDATE_PENDING',
+          '上次更新尚未完成，请先重试应用并完成旧资源清理。',
+          409,
+        );
+      if (previous.deleting || previous.route.status === 'deleted')
+        throw new AppError('RELAY_DELETING', '线路正在删除或已删除。', 409);
+      const task = this.taskFor(previous);
+      if (
+        ['pending', 'applying'].includes(previous.route.status) ||
+        (task && active(task, this.machines))
+      )
+        throw new AppError('MACHINE_BUSY', '线路操作仍在进行，请完成后再编辑。', 409);
+      if (task?.status === 'unknown')
+        throw new AppError(
+          'RELAY_RESULT_UNKNOWN',
+          '上次执行结果未知，请先核对机器状态并重试应用。',
+          409,
+        );
+      if (
+        previous.route.kind === 'protocol' &&
+        value.kind === 'protocol' &&
+        value.entryMachineId === previous.route.entryMachineId &&
+        value.entryNodeId === previous.route.entryNodeId &&
+        ['listenPort', 'address', 'network', 'family'].some(
+          (key) => value[key as keyof typeof value] !== previous.route[key as keyof typeof value],
+        )
+      )
+        throw new AppError(
+          'ENTRY_CONFIGURATION',
+          '协议线路沿用入口节点的监听配置；请在节点编辑中修改端口、地址或网络。',
+          422,
+        );
+      if (previous.route.kind !== 'tunnel') await this.nativeRecords(previous);
+      if (previous.route.kind === 'tunnel') {
+        const source = this.resources.listResources().find((item) => item.id === previous.sourceId);
+        if (source) {
+          const entry = this.resources.record(source.id);
+          const preview = await this.resources.client.preview('sub', {
+            ...entry.record,
+            process: [],
+          });
+          if (preview.original.length !== 1 || typeof preview.original[0]?.name !== 'string')
+            throw new AppError(
+              'RELAY_SOURCE_CONFLICT',
+              '线路来源不能唯一定位已发布名称，未更新。',
+              409,
+            );
+          previous.sourceNodeName = preview.original[0].name;
+        }
+      }
+      if (
+        Object.keys(createSchema.shape)
+          .filter((key) => key !== 'name')
+          .every(
+            (key) =>
+              JSON.stringify(value[key as keyof typeof value]) ===
+              JSON.stringify(previous.route[key as keyof typeof value]),
+          )
+      ) {
+        previous.route.name = value.name;
+        const next = await this.save(previous, current);
+        return { route: { ...previous.route, revision: next } };
+      }
+      const saved = await this.prepare(value, id, previous);
+      const compatible =
+        previous.route.kind === value.kind &&
+        previous.route.entryMachineId === value.entryMachineId &&
+        (value.kind !== 'protocol' || previous.route.entryNodeId === value.entryNodeId);
+      if (
+        !compatible ||
+        (value.kind === 'forward' && value.listenPort !== previous.route.listenPort)
+      ) {
+        if (previous.route.kind === 'tunnel') {
+          if (value.kind !== 'tunnel') await this.assertTunnelDeletable(previous);
+        } else await this.assertNativeReplacement(previous);
+      }
+      if (compatible && value.kind !== 'tunnel') {
+        saved.exitId = previous.exitId;
+        saved.forwardId = previous.forwardId;
+        saved.bindingId = previous.bindingId;
+      }
+      const retired =
+        compatible && value.kind === 'tunnel'
+          ? [...previous.hops]
+              .reverse()
+              .filter((hop) => !saved.hops.some((item) => item.id === hop.id))
+              .map((hop) => ({
+                machineId: hop.machineId,
+                id: hop.id,
+                revision: hop.appliedRevision,
+              }))
+          : [];
+      previous.stage = 0;
+      previous.deleting = !compatible;
+      delete previous.step;
+      saved.migration = {
+        previous: deploymentSchema.parse(previous),
+        phase: compatible ? 'deploy' : 'cleanup',
+        retire: retired,
+        retireIndex: 0,
+      };
+      saved.route.message = compatible
+        ? '更新已保存，等待应用；完成前保留旧目标与资源引用。'
+        : '更新已保存，将清理旧入口资源后部署新配置，期间连接会中断。';
+      const next = await this.save(saved, current);
+      await this.invalidateSource(saved);
+      return { route: { ...saved.route, revision: next } };
     });
   }
   async apply(id: string, revision: string) {
@@ -366,21 +613,19 @@ export class RelayStore {
         throw new AppError('REVISION_CONFLICT', '线路已更新，请刷新。', 409);
       if (saved.deleting || saved.route.status === 'deleted')
         throw new AppError('RELAY_DELETING', '线路正在删除或已经删除。', 409);
-      if (saved.step) {
-        let task;
-        try {
-          task = this.machines.task(saved.step.requestId);
-        } catch (error) {
-          if (!(error instanceof AppError) || error.status !== 404) throw error;
-        }
-        if (task && active(task, this.machines))
-          throw new AppError('MACHINE_BUSY', '线路操作仍未结束。', 409);
+      await this.reconcileStep(saved);
+      if (saved.migration?.phase === 'retire') {
+        saved.route.status = 'pending';
+        saved.route.message = '继续清理旧隧道跳，保留已应用的新入口。';
+        const next = await this.save(saved, current);
+        return { route: { ...saved.route, revision: next } };
       }
       const target = await this.snapshot(saved.route.targetMachineId);
       const node = target.nodes.find((n) => n.id === saved.route.targetNodeId),
         exp = target.exports.find((e) => e.id === saved.route.targetNodeId);
       if (!node || !exp || target.pendingCores.includes(node.core))
         throw new AppError('TARGET_NOT_APPLIED', '目标节点不可用或仍待应用。', 409);
+      const targetChanged = saved.targetRevision !== target.revision;
       saved.targetRevision = target.revision;
       saved.targetUri = exp.uri;
       saved.targetHost = String(node.address);
@@ -389,10 +634,14 @@ export class RelayStore {
       saved.targetCore = node.core;
       saved.targetProfile = node.profile;
       saved.targetSpki = typeof exp.tlsSpkiSha256 === 'string' ? exp.tlsSpkiSha256 : undefined;
-      saved.stage = 0;
-      delete saved.step;
+      if (!saved.migration || targetChanged) {
+        saved.stage = 0;
+        if (!saved.migration || saved.migration.phase === 'deploy') delete saved.step;
+      }
       saved.route.status = 'pending';
-      saved.route.message = '等待重新应用。';
+      saved.route.message = saved.migration
+        ? '继续上次更新，已确认的清理进度会保留。'
+        : '等待重新应用。';
       const next = await this.save(saved, current);
       return { route: { ...saved.route, revision: next } };
     });
@@ -403,6 +652,12 @@ export class RelayStore {
       const { saved, revision: current } = this.read(id);
       if (revision !== current)
         throw new AppError('REVISION_CONFLICT', '线路已更新，请刷新。', 409);
+      if (saved.migration)
+        throw new AppError(
+          'RELAY_UPDATE_PENDING',
+          '线路更新尚未完成，请先重试应用并完成旧资源清理。',
+          409,
+        );
       if (saved.route.kind === 'tunnel') await this.assertTunnelDeletable(saved);
       if (saved.step) {
         let task;
@@ -424,9 +679,7 @@ export class RelayStore {
       return { route: { ...saved.route, revision: next } };
     });
   }
-  private async nativeStep(
-    saved: Saved,
-  ): Promise<{ machineId: string; operation: Operation } | null> {
+  private async nativeRecords(saved: Deployment) {
     const r = saved.route,
       snapshot = await this.snapshot(r.entryMachineId),
       name = 'sm-route-' + r.id;
@@ -438,10 +691,180 @@ export class RelayStore {
       );
     if (exit) saved.exitId = textField(exit, 'id');
     if (forward) saved.forwardId = textField(forward, 'id');
-    const binding = snapshot.relay.bindings.find(
-      (b) => b.node_id === r.entryNodeId && b.exit_id === saved.exitId,
+    const binding = snapshot.relay.bindings.find((b) =>
+      saved.bindingId
+        ? b.id === saved.bindingId
+        : b.node_id === r.entryNodeId && b.exit_id === saved.exitId,
     );
     if (binding) saved.bindingId = textField(binding, 'id');
+    return { snapshot, name, exit, forward, binding };
+  }
+  private stepOwner(saved: Saved): Deployment {
+    return saved.migration?.phase === 'cleanup' ? saved.migration.previous : saved;
+  }
+  private advanceStep(saved: Saved) {
+    const step = saved.step;
+    if (!step) return;
+    if (saved.migration?.phase === 'retire') saved.migration.retireIndex++;
+    else {
+      const owner = this.stepOwner(saved);
+      if (step.operation.action === 'tunnel.apply') {
+        const params = step.operation.params;
+        if (params.id === owner.route.id) owner.entryTunnelRevision = String(params.revision);
+        else {
+          const hop = owner.hops.find((item) => item.id === params.id);
+          if (hop) hop.appliedRevision = String(params.revision);
+        }
+      }
+      owner.stage++;
+    }
+    delete saved.step;
+  }
+  private async acceptOwnTargetRevision(saved: Saved, task: ReturnType<MachineStore['task']>) {
+    if (
+      task.machineId !== saved.route.targetMachineId ||
+      task.expectedRevision !== saved.targetRevision
+    )
+      return;
+    const snapshot = await this.snapshot(task.machineId);
+    if (snapshot.revision !== task.resultRevision) return;
+    const node = snapshot.nodes.find((item) => item.id === saved.route.targetNodeId),
+      exported = snapshot.exports.find(
+        (item) => item.id === saved.route.targetNodeId && item.kind === 'node',
+      );
+    if (
+      node &&
+      exported &&
+      !snapshot.pendingCores.includes(node.core) &&
+      exported.uri === saved.targetUri &&
+      node.address === saved.targetHost &&
+      Number(node.port) === saved.targetPort &&
+      (typeof node.listen === 'string' ? node.listen : '0.0.0.0') === saved.targetListen &&
+      node.core === saved.targetCore &&
+      node.profile === saved.targetProfile &&
+      exported.tlsSpkiSha256 === saved.targetSpki
+    )
+      saved.targetRevision = snapshot.revision;
+  }
+  private async reconcileStep(saved: Saved) {
+    const task = this.taskFor(saved),
+      step = saved.step;
+    if (!step || !task) return;
+    if (active(task, this.machines)) throw new AppError('MACHINE_BUSY', '线路操作仍未结束。', 409);
+    if (task.status === 'applied') {
+      await this.acceptOwnTargetRevision(saved, task);
+      this.advanceStep(saved);
+      return;
+    }
+    if (task.status === 'unknown') {
+      const { action, params } = step.operation;
+      let observed: boolean;
+      if (action.startsWith('tunnel.')) {
+        const report = (await this.machines.getTunnelReports(step.machineId)).find(
+          (item) => item.id === params.id,
+        );
+        const completed =
+          action === 'tunnel.apply'
+            ? report?.revision === params.revision
+            : !report && !!step.reportedTunnelRevision;
+        if (completed) {
+          this.advanceStep(saved);
+          return;
+        }
+        observed = !!report;
+      } else {
+        const records = await this.nativeRecords(this.stepOwner(saved));
+        const native = action.startsWith('exit.')
+          ? records.exit
+          : action.startsWith('forward.')
+            ? records.forward
+            : records.binding;
+        observed = !!native;
+        if (!native && action.endsWith('.delete')) {
+          this.advanceStep(saved);
+          return;
+        }
+      }
+      if (!observed)
+        throw new AppError(
+          'RELAY_RESULT_UNKNOWN',
+          '执行结果未知且当前状态不能确认原资源；请核对机器状态后重新上报，未重放操作。',
+          409,
+        );
+    }
+    // A terminal receipt is retried only after resolving native IDs against the
+    // current snapshot; unconfirmed requests keep their original request ID.
+    delete saved.step;
+  }
+  private async nextStep(
+    saved: Saved,
+  ): Promise<{ machineId: string; operation: Operation } | null> {
+    const migration = saved.migration;
+    if (migration?.phase === 'cleanup') {
+      const previous = migration.previous;
+      const next =
+        previous.route.kind === 'tunnel'
+          ? await this.tunnelStep(previous, saved.route.kind === 'tunnel')
+          : await this.nativeStep(previous);
+      if (next) {
+        if (['forward.delete', 'binding.delete'].includes(next.operation.action))
+          await this.assertNativeReplacement(previous);
+        return next;
+      }
+      if (previous.route.kind === 'tunnel' && saved.route.kind !== 'tunnel')
+        await this.publishTunnel(previous, true);
+      migration.phase = 'deploy';
+      saved.stage = 0;
+    }
+    if (migration?.phase !== 'retire') {
+      if (
+        !saved.deleting &&
+        (await this.snapshot(saved.route.targetMachineId)).revision !== saved.targetRevision
+      )
+        throw new AppError('TARGET_CHANGED', '目标配置已变化，线路未继续应用。', 409);
+      const next =
+        saved.route.kind === 'tunnel' ? await this.tunnelStep(saved) : await this.nativeStep(saved);
+      if (next) {
+        if (
+          migration &&
+          next.operation.action === 'forward.edit' &&
+          migration.previous.route.listenPort !== saved.route.listenPort
+        ) {
+          const records = await this.nativeRecords(saved);
+          if (records.forward?.listen_port_start !== saved.route.listenPort)
+            await this.assertNativeReplacement(migration.previous);
+        }
+        return next;
+      }
+      if (!migration?.retire.length) return null;
+      if (saved.route.kind === 'tunnel') await this.publishTunnel(saved);
+      migration.phase = 'retire';
+    }
+    const retired = migration?.retire[migration.retireIndex];
+    if (!retired) return null;
+    const report = (await this.machines.getTunnelReports(retired.machineId)).find(
+      (item) => item.id === retired.id,
+    );
+    if (!report && !retired.revision) {
+      migration!.retireIndex++;
+      return this.nextStep(saved);
+    }
+    return {
+      machineId: retired.machineId,
+      operation: {
+        action: 'tunnel.delete',
+        params: {
+          id: retired.id,
+          'expected-tunnel-revision': report?.revision ?? retired.revision,
+        },
+      },
+    };
+  }
+  private async nativeStep(
+    saved: Deployment,
+  ): Promise<{ machineId: string; operation: Operation } | null> {
+    const r = saved.route,
+      { snapshot, name, exit, forward, binding } = await this.nativeRecords(saved);
     const task = (action: Operation['action'], params: Operation['params']) => ({
       machineId: r.entryMachineId,
       operation: { action, params: { ...params, 'install-deps': true } },
@@ -462,7 +885,7 @@ export class RelayStore {
       throw new AppError('ENTRY_BOUND', '入口已绑定其他出口，请先处理现有绑定。', 409);
     if (!exit || saved.stage === 0) {
       const params: Operation['params'] = {
-        name,
+        name: exit ? textField(exit, 'name') || name : name,
         uri: saved.targetUri,
         core,
         profile: saved.targetProfile,
@@ -476,7 +899,7 @@ export class RelayStore {
       if (!forward) delete saved.forwardId;
       return task(forward ? 'forward.edit' : 'forward.add', {
         ...(forward ? { id: saved.forwardId! } : {}),
-        name,
+        name: forward ? textField(forward, 'name') || name : name,
         'exit-id': saved.exitId!,
         'listen-ports': String(r.listenPort),
         network: r.network,
@@ -489,11 +912,12 @@ export class RelayStore {
     return null;
   }
   private async tunnelStep(
-    saved: Saved,
+    saved: Deployment,
+    preserveSource = false,
   ): Promise<{ machineId: string; operation: Operation } | null> {
     const r = saved.route;
     if (saved.deleting) {
-      await this.assertTunnelDeletable(saved);
+      if (!preserveSource) await this.assertTunnelDeletable(saved);
       const resources = [
         { machineId: r.entryMachineId, id: r.id, revision: saved.entryTunnelRevision },
         ...[...saved.hops]
@@ -506,7 +930,7 @@ export class RelayStore {
       const existing = reports.find((t) => t.id === current.id);
       if (!existing && !current.revision) {
         saved.stage++;
-        return this.tunnelStep(saved);
+        return this.tunnelStep(saved, preserveSource);
       }
       return {
         machineId: current.machineId,
@@ -579,14 +1003,14 @@ export class RelayStore {
       },
     };
   }
-  private async publishTunnel(saved: Saved, remove = false) {
+  private async publishTunnel(saved: Deployment, remove = false) {
     const content = remove
       ? ''
       : relayEndpoint(
           saved.targetUri,
           saved.route.address,
           saved.route.listenPort,
-          saved.route.name,
+          saved.sourceNodeName ?? saved.route.name,
         );
     if (content) {
       const result = await this.resources.client.convert(content, 'JSON', true);
@@ -631,7 +1055,7 @@ export class RelayStore {
       await this.resources.syncUnlocked();
     });
   }
-  private async assertTunnelDeletable(saved: Saved) {
+  private async assertTunnelDeletable(saved: Deployment) {
     await this.resources.sync();
     if (!this.resources.listResources().some((r) => r.id === saved.sourceId)) return;
     await this.resources.prepare([saved.sourceId]);
@@ -656,7 +1080,10 @@ export class RelayStore {
           ? [saved]
           : this.resources
               .files('relay-route')
-              .map(({ id }) => this.read(id).saved)
+              .flatMap(({ id }) => {
+                const entry = this.read(id).saved;
+                return [entry, ...(entry.migration ? [entry.migration.previous] : [])];
+              })
               .filter((s) => s.route.entryMachineId === saved.route.entryMachineId);
       const revision = hash(
         routes
@@ -671,6 +1098,18 @@ export class RelayStore {
       );
       await this.resources.syncUnlocked();
     });
+    const previous = saved.migration?.previous;
+    if (
+      previous &&
+      (previous.route.kind === 'tunnel'
+        ? saved.route.kind !== 'tunnel'
+        : saved.route.kind === 'tunnel' ||
+          previous.route.entryMachineId !== saved.route.entryMachineId)
+    )
+      await this.invalidateSource({
+        ...previous,
+        route: { ...previous.route, status: saved.route.status },
+      });
   }
   tick(): Promise<void> {
     return this.exclusive(async () => {
@@ -711,41 +1150,42 @@ export class RelayStore {
             if (task.status !== 'applied') {
               saved.route.status = 'failed';
               saved.route.message =
-                task.status === 'pending_restart'
+                (saved.migration?.phase === 'retire' ? '新入口已应用，旧隧道清理尚未完成：' : '') +
+                (task.status === 'pending_restart'
                   ? '配置尚待重启，完成应用后重试线路。'
-                  : '线路步骤失败：' + task.message;
+                  : '线路步骤失败：' + task.message);
               await this.save(saved, revision);
               await this.invalidateSource(saved);
               continue;
             }
-            if (saved.step.operation.action === 'tunnel.apply') {
-              const params = saved.step.operation.params;
-              if (params.id === saved.route.id) saved.entryTunnelRevision = String(params.revision);
-              else {
-                const hop = saved.hops.find((h) => h.id === params.id);
-                if (hop) hop.appliedRevision = String(params.revision);
-              }
-            }
-            saved.stage++;
-            delete saved.step;
+            await this.acceptOwnTargetRevision(saved, task);
+            this.advanceStep(saved);
           }
-          if (
-            !saved.deleting &&
-            (await this.snapshot(saved.route.targetMachineId)).revision !== saved.targetRevision
-          )
-            throw new AppError('TARGET_CHANGED', '目标配置已变化，线路未继续应用。', 409);
-          const next =
-            saved.route.kind === 'tunnel'
-              ? await this.tunnelStep(saved)
-              : await this.nativeStep(saved);
+          const next = await this.nextStep(saved);
           if (!next) {
             if (saved.route.kind === 'tunnel') await this.publishTunnel(saved, saved.deleting);
-            saved.route.status = saved.deleting ? 'deleted' : 'active';
+            const previous = saved.migration?.previous;
+            const changed =
+              !saved.deleting &&
+              (await this.snapshot(saved.route.targetMachineId)).revision !== saved.targetRevision;
+            saved.route.status = saved.deleting ? 'deleted' : changed ? 'stale' : 'active';
             saved.route.message = saved.deleting
               ? '线路资源已删除。'
-              : '机器已确认应用；连通性请在测试中心验证。';
+              : changed
+                ? '更新与旧资源清理已完成，但目标随后变化，请重新应用。'
+                : '机器已确认应用；连通性请在测试中心验证。';
+            delete saved.migration;
             await this.save(saved, revision);
             await this.invalidateSource(saved);
+            if (
+              previous &&
+              (previous.route.kind !== saved.route.kind ||
+                previous.route.entryMachineId !== saved.route.entryMachineId)
+            )
+              await this.invalidateSource({
+                ...previous,
+                route: { ...previous.route, status: 'deleted' },
+              });
             continue;
           }
           const snapshot = await this.snapshot(next.machineId);
@@ -754,10 +1194,24 @@ export class RelayStore {
             operation: next.operation,
             requestId: randomUUID(),
             expectedRevision: snapshot.revision,
+            ...(next.operation.action.startsWith('tunnel.')
+              ? {
+                  reportedTunnelRevision:
+                    (await this.machines.getTunnelReports(next.machineId)).find(
+                      (item) => item.id === next.operation.params.id,
+                    )?.revision ?? null,
+                }
+              : {}),
           };
           saved.route.taskIds.push(saved.step.requestId);
           saved.route.status = saved.deleting ? 'deleting' : 'applying';
-          saved.route.message = '等待机器执行第 ' + (saved.stage + 1) + ' 步。';
+          saved.route.message = saved.migration
+            ? saved.migration.phase === 'cleanup'
+              ? '正在清理旧入口资源；尚未部署新配置。'
+              : saved.migration.phase === 'retire'
+                ? '新入口已应用，正在清理旧隧道跳。'
+                : '正在应用更新，完成前保留旧目标引用。'
+            : '等待机器执行第 ' + (saved.stage + 1) + ' 步。';
           await this.save(saved, revision);
           await this.machines.enqueue(
             next.machineId,
@@ -783,6 +1237,9 @@ export function registerRelayRoutes(app: Hono, store: RelayStore) {
   app.get('/api/relays', async (c) => c.json(await store.list()));
   app.post('/api/relays', async (c) =>
     c.json(await store.create(await readJson(c.req.raw, 65536)), 201),
+  );
+  app.patch('/api/relays/:id', async (c) =>
+    c.json(await store.update(c.req.param('id'), await readJson(c.req.raw, 65536))),
   );
   const revision = async (request: Request) =>
     z.strictObject({ revision: revisionSchema }).parse(await readJson(request, 1024)).revision;

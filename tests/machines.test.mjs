@@ -157,6 +157,48 @@ test('complete private snapshots preserve native fields; ordinary details exclud
   assert.equal(response.snapshot.exports[0].tlsSpkiSha256, 'public-certificate-digest');
 });
 
+test('machine overview and editable native fields expose useful state without credentials', async (t) => {
+  const initial = snapshot('a', [exported()], ['sing-box']);
+  Object.assign(initial.nodes[0], {
+    address: 'tokyo.example.test',
+    port: 443,
+    ip_strategy: 'prefer_ipv4',
+    tls: {
+      mode: 'managed',
+      server_name: 'tls.example.test',
+      certificate_id: 'crt-0123456789abcdef',
+      certificate_path: '/private/cert.pem',
+      key_path: '/private/key.pem',
+      reality_guard: { enabled: true, listen_port: 1443 },
+    },
+    options: {
+      obfs_type: 'gecko',
+      obfs_password: secret,
+      up_mbps: 100,
+      down_mbps: 200,
+      bbr_profile: 'standard',
+      hop_ports: '20000-20100',
+    },
+  });
+  const f = await enrolled(t, initial);
+  const overview = await status(await f.request('/api/machines'), 200);
+  assert.deepEqual(overview.machines[0].summary.addresses, ['tokyo.example.test']);
+  assert.equal(overview.machines[0].summary.nodeCount, 1);
+  assert.deepEqual(overview.machines[0].summary.pendingCores, ['sing-box']);
+  const detail = await f.machines.detail(f.machine.id);
+  assert.equal(detail.snapshot.nodes[0].tls.server_name, 'tls.example.test');
+  assert.equal(detail.snapshot.nodes[0].tls.certificate_id, 'crt-0123456789abcdef');
+  assert.equal(detail.snapshot.nodes[0].tls.reality_guard.enabled, true);
+  assert.equal(detail.snapshot.nodes[0].options.obfs_type, 'gecko');
+  assert.equal(detail.snapshot.nodes[0].ip_strategy, 'prefer_ipv4');
+  const publicText = JSON.stringify({ overview, detail });
+  for (const hidden of [secret, '/private/', 'obfs_password', 'key_path'])
+    assert.equal(publicText.includes(hidden), false);
+  assert.deepEqual(await f.machines.getPrivateSnapshot(f.machine.id), initial);
+  await f.report(snapshot('b', []));
+  assert.equal((await f.machines.overview())[0].summary.nodeCount, 0);
+});
+
 test('pending cores retain applied exports, unchanged reports are stable, native rename/process survive, and empty exports clear the source', async (t) => {
   const oldSing = exported('sing', 'sing-box'),
     oldXray = exported('xray', 'xray');

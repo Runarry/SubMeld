@@ -7,7 +7,7 @@ import type { MachineStore } from './machines.js';
 
 export function registerMachineRoutes(app: Hono, store: MachineStore, _config?: Config) {
   void _config;
-  app.get('/api/machines', (c) => c.json({ machines: store.list() }));
+  app.get('/api/machines', async (c) => c.json({ machines: await store.overview() }));
   app.post('/api/machines', async (c) =>
     c.json(store.create(await readJson(c.req.raw, 4096)), 201),
   );

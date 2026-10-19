@@ -1,6 +1,6 @@
 /* global document, window */
 import { test, expect } from '@playwright/test';
-import { login } from './browser-helpers.mjs';
+import { login, navigate } from './browser-helpers.mjs';
 import { node } from './fixtures.mjs';
 import { toUpstream } from '../dist/server/converter/model.js';
 import { newSubscription } from '../dist/server/shared/subscriptions.js';
@@ -58,7 +58,7 @@ test('production HTTP supports login, native pages and honest clipboard fallback
       inputs: [{ kind: 'resource', id: resource.id }],
       formats: ['mihomo'],
     });
-    await page.getByRole('button', { name: '输出方案', exact: true }).click();
+    await navigate(page, '输出方案');
     await page
       .locator('.plan-row')
       .filter({ hasText: name })

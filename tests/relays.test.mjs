@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { fixture, subject } from './upstream-fixture.mjs';
 import { RelayStore, relayEndpoint } from '../dist/server/relays.js';
+import { createApp } from '../dist/server/app.js';
 
 const digest = (text) => createHash('sha256').update(text).digest('hex');
 function snapshot(seed, nodes = []) {
@@ -152,6 +153,33 @@ async function deployForward(f) {
   await f.routes.tick();
   assert.equal((await f.routes.list()).routes[0].status, 'active');
   return route;
+}
+
+async function currentRoute(f, id) {
+  return (await f.routes.list()).routes.find((route) => !id || route.id === id);
+}
+function savedRoute(f, id) {
+  return JSON.parse(f.resources.record(id).record.content);
+}
+async function failCommand(f, machine, status = 'failed') {
+  const { command } = await f.machines.poll(machine.machine.id, 'Bearer ' + machine.token, 0);
+  assert.ok(command);
+  await f.machines.result(
+    {
+      machineId: machine.machine.id,
+      result: {
+        schemaVersion: 1,
+        requestId: command.requestId,
+        status,
+        exitCode: 1,
+        message: '',
+        revision: machine.snapshot.revision,
+        snapshot: machine.snapshot,
+      },
+    },
+    'Bearer ' + machine.token,
+  );
+  return command;
 }
 
 test('relay endpoint preserves identity and TLS fields while replacing the public endpoint', () => {
@@ -425,4 +453,479 @@ test('a tunnel endpoint referenced by a client chain cannot be removed', async (
   await assert.rejects(f.routes.remove(route.id, route.revision), { code: 'NODE_IN_USE' });
   assert.equal(f.machines.activeTask(f.entry.machine.id), null);
   assert.equal((await f.routes.list()).routes[0].status, 'pending');
+});
+
+test('PATCH edits a forward in place with CAS, stable IDs, native renames and old/new target protection', async (t) => {
+  const f = await setup(t);
+  const route = await deployForward(f),
+    before = savedRoute(f, route.id);
+  const replacement = await createMachine(
+    f,
+    'replacement',
+    snapshot('replacement', [
+      {
+        id: 'node-replacement',
+        name: 'replacement',
+        core: 'sing-box',
+        profile: 'shadowsocks-aes-256-gcm',
+        address: 'replacement.example.com',
+        port: 8443,
+      },
+    ]),
+  );
+  f.entry.snapshot.relay.exits[0].name = 'user exit';
+  f.entry.snapshot.relay.forwards[0].name = 'user forward';
+  f.entry.snapshot.revision = digest('user native names');
+  await report(f, f.entry);
+  const current = await currentRoute(f);
+  const value = {
+    ...f.input,
+    name: 'edited route',
+    targetMachineId: replacement.machine.id,
+    targetNodeId: 'node-replacement',
+    listenPort: 24456,
+    address: 'new-entry.example.com',
+    network: 'tcp',
+    family: 'ipv4',
+  };
+  await assert.rejects(f.routes.update(route.id, { ...value, revision: route.revision }), {
+    code: 'REVISION_CONFLICT',
+  });
+  const app = createApp({ ...f, relays: f.routes });
+  const request = (body) =>
+    app.request('/api/relays/' + route.id, {
+      method: 'PATCH',
+      headers: {
+        Cookie: f.cookie,
+        Origin: f.config.publicOrigin,
+        'X-SubMeld-Request': '1',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  assert.equal(
+    (
+      await request({
+        ...value,
+        revision: current.revision,
+        outputResourceId: f.entry.machine.resourceId,
+      })
+    ).status,
+    400,
+  );
+  const response = await request({ ...value, revision: current.revision });
+  assert.equal(response.status, 200);
+  const updated = (await response.json()).route;
+  assert.equal(updated.id, route.id);
+  assert.equal(updated.status, 'pending');
+  assert.equal(savedRoute(f, route.id).sourceId, before.sourceId);
+  assert.equal(f.resources.files('relay-route').length, 1);
+  assert.equal((await currentRoute(f)).outputResourceId, f.entry.machine.resourceId);
+  for (const machine of [f.target, replacement])
+    await assert.rejects(
+      f.machines.enqueue(machine.machine.id, {
+        action: 'node.delete',
+        params: { id: machine.snapshot.nodes[0].id },
+        expectedRevision: machine.snapshot.revision,
+      }),
+      { code: 'RELAY_REFERENCED' },
+    );
+  await f.routes.tick();
+  await complete(f, f.entry, 'exit.edit', (s, p) => {
+    assert.equal(p.id, 'exit-route');
+    assert.equal(p.name, 'user exit');
+    assert.equal(p.uri, replacement.snapshot.exports[0].uri);
+    Object.assign(s.relay.exits[0], { name: p.name, uri: p.uri, core: p.core });
+  });
+  await f.routes.tick();
+  await complete(f, f.entry, 'forward.edit', (s, p) => {
+    assert.equal(p.id, 'forward-route');
+    assert.equal(p.name, 'user forward');
+    assert.equal(p['listen-ports'], '24456');
+    assert.equal(p.address, value.address);
+    assert.equal(p.network, 'tcp');
+    assert.equal(p.family, 'ipv4');
+    Object.assign(s.relay.forwards[0], {
+      listen_port_start: 24456,
+      listen_port_end: 24456,
+      name: p.name,
+    });
+  });
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'active');
+  assert.equal(savedRoute(f, route.id).migration, undefined);
+  assert.equal(f.entry.snapshot.relay.exits.length, 1);
+  assert.equal(f.entry.snapshot.relay.forwards.length, 1);
+  assert.equal(savedRoute(f, route.id).sourceId, before.sourceId);
+  const oldTarget = await f.machines.enqueue(f.target.machine.id, {
+    action: 'node.delete',
+    params: { id: 'node-target' },
+    expectedRevision: f.target.snapshot.revision,
+  });
+  await f.machines.cancel(f.target.machine.id, oldTarget.task.id);
+});
+
+test('busy edits fail and a failed update resumes its confirmed step after restarting the route store', async (t) => {
+  const f = await setup(t);
+  const { route } = await f.routes.create(f.input);
+  await assert.rejects(
+    f.routes.update(route.id, { ...f.input, name: 'too early', revision: route.revision }),
+    { code: 'MACHINE_BUSY' },
+  );
+  await f.routes.tick();
+  await complete(f, f.entry, 'exit.add', (s, p) =>
+    s.relay.exits.push({ id: 'exit-route', name: p.name, core: p.core }),
+  );
+  await f.routes.tick();
+  await complete(f, f.entry, 'forward.add', (s, p) =>
+    s.relay.forwards.push({ id: 'forward-route', name: p.name, exit_id: p['exit-id'] }),
+  );
+  await f.routes.tick();
+  await f.routes.update(route.id, {
+    ...f.input,
+    listenPort: 24456,
+    revision: (await currentRoute(f)).revision,
+  });
+  await f.routes.tick();
+  await complete(f, f.entry, 'exit.edit', (s, p) => {
+    s.relay.exits[0].uri = p.uri;
+  });
+  await f.routes.tick();
+  const failed = await failCommand(f, f.entry);
+  assert.equal(failed.action, 'forward.edit');
+  await f.routes.tick();
+  const stopped = await currentRoute(f);
+  assert.equal(stopped.status, 'failed');
+  assert.equal(savedRoute(f, route.id).stage, 1);
+  await f.routes.close();
+  f.routes = new RelayStore(f.machines, f.resources);
+  f.beforeClose(() => f.routes.close());
+  await f.routes.apply(route.id, stopped.revision);
+  await f.routes.tick();
+  const retried = await complete(f, f.entry, 'forward.edit', (s, p) => {
+    assert.equal(p.id, 'forward-route');
+    s.relay.forwards[0].listen_port_start = 24456;
+  });
+  assert.notEqual(retried.requestId, failed.requestId);
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'active');
+  assert.equal(f.resources.files('relay-route').length, 1);
+  assert.equal(f.entry.snapshot.relay.forwards.length, 1);
+});
+
+test('type and entry migration removes the old binding and resumes failed cleanup before creating the replacement', async (t) => {
+  const f = await setup(t);
+  f.entry.snapshot = snapshot('protocol entry', [
+    {
+      id: 'entry-node',
+      name: 'entry-node',
+      core: 'sing-box',
+      profile: 'shadowsocks-aes-256-gcm',
+      address: 'protocol.example.com',
+      port: 3443,
+    },
+  ]);
+  await report(f, f.entry);
+  const { route } = await f.routes.create({
+    ...f.input,
+    kind: 'protocol',
+    entryNodeId: 'entry-node',
+  });
+  await f.routes.tick();
+  await complete(f, f.entry, 'exit.add', (s, p) =>
+    s.relay.exits.push({ id: 'old-exit', name: p.name, core: p.core }),
+  );
+  await f.routes.tick();
+  await complete(f, f.entry, 'binding.add', (s, p) =>
+    s.relay.bindings.push({ id: 'old-binding', node_id: p['node-id'], exit_id: p['exit-id'] }),
+  );
+  await f.routes.tick();
+  const newEntry = await createMachine(f, 'new entry', snapshot('new entry'));
+  const sourceId = savedRoute(f, route.id).sourceId;
+  await f.routes.update(route.id, {
+    ...f.input,
+    entryMachineId: newEntry.machine.id,
+    revision: (await currentRoute(f)).revision,
+  });
+  await assert.rejects(
+    f.machines.enqueue(f.entry.machine.id, {
+      action: 'node.delete',
+      params: { id: 'entry-node' },
+      expectedRevision: f.entry.snapshot.revision,
+    }),
+    { code: 'RELAY_REFERENCED' },
+  );
+  await f.routes.tick();
+  await complete(f, f.entry, 'binding.delete', (s, p) => {
+    assert.equal(p.id, 'old-binding');
+    s.relay.bindings = [];
+  });
+  await f.routes.tick();
+  assert.equal((await failCommand(f, f.entry)).action, 'exit.delete');
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'failed');
+  assert.equal(f.machines.activeTask(newEntry.machine.id), null);
+  await f.routes.apply(route.id, (await currentRoute(f)).revision);
+  await f.routes.tick();
+  await complete(f, f.entry, 'exit.delete', (s, p) => {
+    assert.equal(p.id, 'old-exit');
+    s.relay.exits = [];
+  });
+  await f.routes.tick();
+  await complete(f, newEntry, 'exit.add', (s, p) =>
+    s.relay.exits.push({ id: 'new-exit', name: p.name, core: p.core }),
+  );
+  await f.routes.tick();
+  await complete(f, newEntry, 'forward.add', (s, p) =>
+    s.relay.forwards.push({ id: 'new-forward', name: p.name, exit_id: p['exit-id'] }),
+  );
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'active');
+  assert.deepEqual(f.entry.snapshot.relay, { exits: [], bindings: [], forwards: [] });
+  assert.equal(savedRoute(f, route.id).sourceId, sourceId);
+  assert.equal(f.resources.files('relay-route').length, 1);
+});
+
+test('forward edits cannot remove client-chain names when changing ports or moving the entry', async (t) => {
+  const f = await setup(t),
+    route = await deployForward(f);
+  const name = 'native forward:23456';
+  f.entry.snapshot.relay.forwards[0].name = 'native forward';
+  f.entry.snapshot.exports = [
+    {
+      id: 'forward-route:23456',
+      name,
+      core: 'sing-box',
+      kind: 'forward',
+      uri: relayEndpoint(
+        f.target.snapshot.exports[0].uri,
+        f.input.address,
+        f.input.listenPort,
+        name,
+      ),
+    },
+  ];
+  f.entry.snapshot.revision = digest('published forward');
+  await report(f, f.entry);
+  await f.chains.create({
+    name: 'forward consumer',
+    entry: { resourceId: f.entry.machine.resourceId, nodeName: name },
+    exit: { resourceId: f.target.machine.resourceId, nodeName: 'target' },
+  });
+  const revision = (await currentRoute(f)).revision;
+  await assert.rejects(f.routes.update(route.id, { ...f.input, listenPort: 24456, revision }), {
+    code: 'NODE_IN_USE',
+  });
+  const newEntry = await createMachine(f, 'new entry', snapshot('unbound machine'));
+  await assert.rejects(
+    f.routes.update(route.id, { ...f.input, entryMachineId: newEntry.machine.id, revision }),
+    { code: 'NODE_IN_USE' },
+  );
+  assert.equal((await currentRoute(f)).status, 'active');
+  assert.equal(f.machines.activeTask(f.entry.machine.id), null);
+});
+
+test('tunnel updates retain the source, published name and rules while retiring removed hops after entry cutover', async (t) => {
+  const f = await setup(t);
+  const middle = await createMachine(f, 'middle', snapshot('middle'));
+  const input = {
+    ...f.input,
+    kind: 'tunnel',
+    hops: [
+      { machineId: middle.machine.id, address: 'middle.example.com', port: 23457 },
+      { machineId: f.target.machine.id, address: 'target.example.com', port: 23458 },
+    ],
+  };
+  const { route } = await f.routes.create(input);
+  await f.routes.tick();
+  await complete(f, middle, 'tunnel.apply');
+  await f.routes.tick();
+  await complete(f, f.target, 'tunnel.apply');
+  await f.routes.tick();
+  await complete(f, f.entry, 'tunnel.apply');
+  await f.routes.tick();
+  const before = savedRoute(f, route.id),
+    source = f.resources.record(before.sourceId).record;
+  const process = [{ type: 'Regex Filter', args: { regex: ['.'], keep: true } }];
+  await f.client.api(
+    '/api/sub/' + encodeURIComponent(source.name),
+    { name: 'user-renamed-route', displayName: 'user display', process },
+    'PATCH',
+  );
+  await f.resources.sync();
+  const chain = await f.chains.create({
+    name: 'stable tunnel consumer',
+    entry: { resourceId: before.sourceId, nodeName: route.name },
+    exit: { resourceId: f.target.machine.resourceId, nodeName: 'target' },
+  });
+  await f.routes.update(route.id, {
+    ...input,
+    name: 'new route label',
+    listenPort: 25456,
+    hops: [input.hops[1]],
+    revision: (await currentRoute(f)).revision,
+  });
+  assert.equal(savedRoute(f, route.id).hops[0].id, before.hops[1].id);
+  assert.equal((await currentRoute(f)).outputResourceId, before.sourceId);
+  await f.routes.tick();
+  const retained = await complete(f, f.target, 'tunnel.apply');
+  assert.equal(retained.params.id, before.hops[1].id);
+  await f.routes.tick();
+  const entry = await complete(f, f.entry, 'tunnel.apply');
+  assert.equal(entry.params.id, route.id);
+  assert.equal(JSON.parse(entry.params.config).listenPort, 25456);
+  await f.routes.tick();
+  const published = f.resources.record(before.sourceId).record;
+  assert.match(published.content, /:25456#/);
+  assert.equal(published.name, 'user-renamed-route');
+  assert.equal(published.displayName, 'user display');
+  assert.deepEqual(published.process, process);
+  assert.equal((await f.chains.get(chain.id)).available, true);
+  const removed = await failCommand(f, middle);
+  assert.equal(removed.action, 'tunnel.delete');
+  assert.equal(removed.params.id, before.hops[0].id);
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'failed');
+  assert.match((await currentRoute(f)).message, /新入口已应用/);
+  await assert.rejects(
+    f.machines.enqueue(middle.machine.id, {
+      action: 'tunnel.delete',
+      params: { id: before.hops[0].id },
+      expectedRevision: middle.snapshot.revision,
+    }),
+    { code: 'RELAY_REFERENCED' },
+  );
+  await f.routes.apply(route.id, (await currentRoute(f)).revision);
+  await f.routes.tick();
+  await complete(f, middle, 'tunnel.delete');
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'active');
+  assert.equal(savedRoute(f, route.id).migration, undefined);
+  assert.equal(savedRoute(f, route.id).sourceId, before.sourceId);
+  assert.equal((await f.chains.get(chain.id)).available, true);
+  assert.equal(
+    f.resources
+      .listResources()
+      .filter((item) => f.resources.record(item.id).record._submeld?.role === 'relay-source')
+      .length,
+    1,
+  );
+});
+
+test('an unobserved unknown update is held until the exact native identity can be reconciled', async (t) => {
+  const f = await setup(t),
+    route = await deployForward(f);
+  const newEntry = await createMachine(f, 'replacement entry', snapshot('replacement entry'));
+  await f.routes.update(route.id, {
+    ...f.input,
+    entryMachineId: newEntry.machine.id,
+    revision: (await currentRoute(f)).revision,
+  });
+  await f.routes.tick();
+  await complete(f, f.entry, 'forward.delete', (s) => {
+    s.relay.forwards = [];
+  });
+  await f.routes.tick();
+  await complete(f, f.entry, 'exit.delete', (s) => {
+    s.relay.exits = [];
+  });
+  await f.routes.tick();
+  const unknown = await failCommand(f, newEntry, 'unknown');
+  assert.equal(unknown.action, 'exit.add');
+  await f.routes.tick();
+  const held = await currentRoute(f);
+  assert.equal(held.status, 'failed');
+  // Even another empty heartbeat is not proof that the original operation
+  // cannot still have created an unobserved resource; do not issue another add.
+  await report(f, newEntry);
+  await assert.rejects(f.routes.apply(route.id, held.revision), { code: 'RELAY_RESULT_UNKNOWN' });
+  assert.equal(f.machines.activeTask(newEntry.machine.id), null);
+  assert.equal(savedRoute(f, route.id).step.requestId, unknown.requestId);
+  newEntry.snapshot.relay.exits.push({
+    id: 'reconciled-exit',
+    name: unknown.params.name,
+    core: unknown.params.core,
+  });
+  newEntry.snapshot.revision = digest('identity confirmed by fresh snapshot');
+  await report(f, newEntry);
+  await f.routes.apply(route.id, (await currentRoute(f)).revision);
+  await f.routes.tick();
+  await complete(f, newEntry, 'exit.edit', (s, p) => {
+    assert.equal(p.id, 'reconciled-exit');
+    s.relay.exits[0].uri = p.uri;
+  });
+  await f.routes.tick();
+  await complete(f, newEntry, 'forward.add', (s, p) =>
+    s.relay.forwards.push({ id: 'reconciled-forward', name: p.name, exit_id: p['exit-id'] }),
+  );
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'active');
+  assert.equal(newEntry.snapshot.relay.exits.length, 1);
+});
+
+test('same-machine protocol migration accepts only its own confirmed revisions without stranding old bindings', async (t) => {
+  const f = await setup(t);
+  const targetNode = f.target.snapshot.nodes[0];
+  f.target.snapshot = snapshot('same-machine nodes', [
+    targetNode,
+    ...['old-entry', 'new-entry'].map((id, index) => ({
+      ...targetNode,
+      id,
+      name: id,
+      port: 8443 + index,
+    })),
+  ]);
+  await report(f, f.target);
+  const input = {
+    ...f.input,
+    kind: 'protocol',
+    entryMachineId: f.target.machine.id,
+    entryNodeId: 'old-entry',
+  };
+  const { route } = await f.routes.create(input);
+  await f.routes.tick();
+  await complete(f, f.target, 'exit.add', (s, p) =>
+    s.relay.exits.push({ id: 'same-old-exit', name: p.name, core: p.core }),
+  );
+  await f.routes.tick();
+  await complete(f, f.target, 'binding.add', (s, p) =>
+    s.relay.bindings.push({ id: 'same-old-binding', node_id: p['node-id'], exit_id: p['exit-id'] }),
+  );
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'active');
+  await f.routes.update(route.id, {
+    ...input,
+    entryNodeId: 'new-entry',
+    revision: (await currentRoute(f)).revision,
+  });
+  await f.routes.tick();
+  await complete(f, f.target, 'binding.delete', (s, p) => {
+    assert.equal(p.id, 'same-old-binding');
+    s.relay.bindings = [];
+  });
+  await f.routes.tick();
+  await complete(f, f.target, 'exit.delete', (s, p) => {
+    assert.equal(p.id, 'same-old-exit');
+    s.relay.exits = [];
+  });
+  await f.routes.tick();
+  await complete(f, f.target, 'exit.add', (s, p) =>
+    s.relay.exits.push({ id: 'same-new-exit', name: p.name, core: p.core }),
+  );
+  await f.routes.tick();
+  await complete(f, f.target, 'binding.add', (s, p) => {
+    assert.equal(p['node-id'], 'new-entry');
+    s.relay.bindings.push({ id: 'same-new-binding', node_id: p['node-id'], exit_id: p['exit-id'] });
+  });
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'active');
+  assert.deepEqual(
+    f.target.snapshot.relay.bindings.map((item) => item.id),
+    ['same-new-binding'],
+  );
+  assert.deepEqual(
+    f.target.snapshot.relay.exits.map((item) => item.id),
+    ['same-new-exit'],
+  );
+  assert.equal(savedRoute(f, route.id).migration, undefined);
 });

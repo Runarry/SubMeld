@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, api, cleanup, noOverflow } from './browser-helpers.mjs';
+import { login, api, cleanup, noOverflow, navigate } from './browser-helpers.mjs';
 import { node } from './fixtures.mjs';
 import { toUpstream } from '../dist/server/converter/model.js';
 test('unified nodes import a batch, show raw data, delete a single original node and logout', async ({
@@ -57,7 +57,7 @@ test('chain form directly selects native subscription nodes and exposes deletion
   });
   let chain;
   try {
-    await page.getByRole('button', { name: '两跳链', exact: true }).click();
+    await navigate(page, '两跳链');
     await page.getByRole('button', { name: '添加两跳链', exact: true }).click();
     await page.getByLabel('链名称', { exact: true }).fill('chain-' + info.project.name);
     for (const [label, name] of [
@@ -124,7 +124,7 @@ test('output form produces native files, shares immediate updates and revokes ad
   });
   let plan;
   try {
-    await page.getByRole('button', { name: '输出方案', exact: true }).click();
+    await navigate(page, '输出方案');
     await page.getByRole('button', { name: '添加输出方案', exact: true }).click();
     await page.getByLabel('方案名称', { exact: true }).fill(a.name);
     await page.getByRole('combobox', { name: '选择输入', exact: true }).selectOption(resource.id);

@@ -156,6 +156,12 @@ async function retire(page, machine) {
   );
   if (resource) await cleanup(page, { resource });
 }
+async function refreshMachineDetail(page) {
+  const menu = page.locator('summary[aria-label="机器更多操作"]');
+  await menu.click();
+  await page.getByRole('button', { name: '刷新机器', exact: true }).click();
+  await menu.click();
+}
 
 test('machines show one-time installation credentials and operate through typed action forms', async ({
   page,
@@ -182,9 +188,8 @@ test('machines show one-time installation credentials and operate through typed 
     await credentials.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(page.getByLabel('机器 Token', { exact: true })).toHaveCount(0);
     await report(page, machine);
-    await page.getByRole('button', { name: '刷新机器', exact: true }).click();
+    await refreshMachineDetail(page);
     const detail = page.getByRole('region', { name: '机器详情', exact: true });
-    await expect(detail).toContainText('browser-fixture');
     await expect(detail).not.toContainText('DO-NOT-SHOW-BROWSER-SECRET');
     await detail.getByRole('button', { name: '添加机器节点', exact: true }).click();
     const form = page.getByRole('dialog', { name: '添加机器节点', exact: true });
@@ -230,13 +235,17 @@ test('machines show one-time installation credentials and operate through typed 
       '浏览器夹具：配置已保存，等待重启',
       next,
     );
-    await page.getByRole('button', { name: '刷新机器', exact: true }).click();
-    await expect(detail).toContainText('待重启内核：sing-box');
-    await expect(detail.locator('.task-row').first()).toContainText('添加机器节点 · 待重启');
+    await refreshMachineDetail(page);
+    await expect(detail).toContainText('sing-box 有配置待应用');
+    await expect(detail.locator('.inline-task')).toContainText('添加机器节点 · 待重启');
     await expect(detail).toContainText('配置已保存，等待对应内核重启后生效。（退出码 0）');
     await expect(detail).not.toContainText('浏览器夹具：配置已保存，等待重启');
+    await page.getByRole('tab', { name: '机器设置', exact: true }).click();
+    await expect(detail).toContainText('browser-fixture');
     await detail.getByRole('button', { name: '禁用机器', exact: true }).click();
+    await page.getByRole('tab', { name: /^节点/ }).click();
     await expect(detail.getByRole('button', { name: '添加机器节点', exact: true })).toBeDisabled();
+    await page.getByRole('tab', { name: '机器设置', exact: true }).click();
     await detail.getByRole('button', { name: '启用机器', exact: true }).click();
     await detail.getByRole('button', { name: '轮换机器 Token', exact: true }).click();
     await expect(credentials.getByLabel('机器 Token', { exact: true })).not.toHaveValue(token);
@@ -268,25 +277,31 @@ test('machine refresh preserves edit inputs and requires resolving a changed sna
     const installDeps = form.getByLabel('自动安装所需依赖', { exact: true });
     await expect(installDeps).toBeChecked();
     await installDeps.uncheck();
-    await form.getByLabel('名称', { exact: true }).fill('保留正在编辑的名称');
+    await form.getByLabel('节点名称', { exact: true }).fill('保留正在编辑的名称');
     machine.snapshot = {
       ...machine.snapshot,
       revision: revision(machine.machine.id + 'external-change'),
     };
     await report(page, machine);
     await expect(form.getByRole('alert')).toContainText('机器版本已变化', { timeout: 10000 });
-    await expect(form.getByLabel('名称', { exact: true })).toHaveValue('保留正在编辑的名称');
+    await expect(form.getByLabel('节点名称', { exact: true })).toHaveValue('保留正在编辑的名称');
     await expect(installDeps).not.toBeChecked();
-    await expect(form.getByRole('button', { name: '提交任务', exact: true })).toBeDisabled();
+    await expect(form.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
     await form.getByRole('button', { name: '采用最新版本', exact: true }).click();
     const submission = page.waitForRequest(
       (request) => request.method() === 'POST' && request.url().endsWith('/commands'),
     );
-    await form.getByRole('button', { name: '提交任务', exact: true }).click();
+    await form.getByRole('button', { name: '保存修改', exact: true }).click();
     expect((await submission).postDataJSON().params).not.toHaveProperty('install-deps');
     const tasks = (await api(page, '/api/machines/' + machine.machine.id)).tasks;
     expect(tasks[0].expectedRevision).toBe(machine.snapshot.revision);
-    await page.getByRole('button', { name: '取消排队', exact: true }).click();
+    await form.getByRole('button', { name: '返回节点', exact: true }).click();
+    await page.getByRole('tab', { name: '任务记录', exact: true }).click();
+    await page
+      .locator('.task-row')
+      .first()
+      .getByRole('button', { name: '取消排队', exact: true })
+      .click();
     await expect(page.locator('.task-row').first()).toContainText('已取消');
     await noOverflow(page);
   } finally {
@@ -294,33 +309,41 @@ test('machine refresh preserves edit inputs and requires resolving a changed sna
   }
 });
 
-test('relay forms select real machine nodes and show failed deployment, retry and scoped removal', async ({
-  page,
-}, info) => {
+test('relay wizard shows failed deployment, retry and scoped removal', async ({ page }, info) => {
+  test.setTimeout(90000);
   await login(page);
   const suffix = info.project.name + '-' + randomUUID().slice(0, 8);
   const entry = await makeMachine(page, '入口-' + suffix);
-  const target = await makeMachine(page, '目标-' + suffix);
+  const target = await makeMachine(page, '落地-' + suffix);
   let route;
+  const choose = async (label, name) => {
+    await page.getByRole('combobox', { name: label, exact: true }).fill(name);
+    await page.getByRole('option', { name: new RegExp(name) }).click();
+  };
   try {
     await page.getByRole('button', { name: '中转线路', exact: true }).click();
     await page.getByRole('button', { name: '添加线路', exact: true }).click();
-    const form = page.getByRole('dialog', { name: '添加中转线路', exact: true });
-    await expect(form.getByLabel('线路类型', { exact: true })).toHaveValue('tunnel');
+    const form = page.getByRole('form', { name: '添加中转线路', exact: true });
     await form.getByLabel('线路名称', { exact: true }).fill('隧道-' + suffix);
-    await form.getByLabel('入口机器', { exact: true }).selectOption(entry.machine.id);
-    await form.getByLabel('目标机器', { exact: true }).selectOption(target.machine.id);
-    await form.getByLabel('目标节点', { exact: true }).selectOption(target.snapshot.nodes[0].id);
-    await expect(form.getByLabel('经过机器', { exact: true })).toHaveValue(target.machine.id);
+    await choose('入口机器', entry.machine.name);
+    await choose('落地机器', target.machine.name);
+    await expect(form.getByRole('combobox', { name: '落地节点', exact: true })).toHaveValue(
+      target.snapshot.nodes[0].name,
+    );
+    await page.getByRole('button', { name: '选择连接方式', exact: true }).click();
+    await expect(form.getByRole('combobox', { name: '第 1 跳机器', exact: true })).toHaveValue(
+      target.machine.name,
+    );
+    await form.getByRole('combobox', { name: '第 1 跳机器', exact: true }).click();
     await expect(
-      form
-        .getByLabel('经过机器', { exact: true })
-        .locator('option[value="' + entry.machine.id + '"]'),
-    ).toHaveCount(0);
+      page.getByRole('option', { name: new RegExp(entry.machine.name) }),
+    ).toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
     await form.getByLabel('入口连接地址', { exact: true }).fill('203.0.113.10');
-    await form.getByLabel('这一跳的可达地址', { exact: true }).fill('203.0.113.20');
+    await form.getByLabel('可达地址', { exact: true }).fill('203.0.113.20');
     await noOverflow(page);
-    await form.getByRole('button', { name: '创建并应用线路', exact: true }).click();
+    await page.getByRole('button', { name: '核对配置', exact: true }).click();
+    await page.getByRole('button', { name: '创建并应用线路', exact: true }).click();
     await expect(form).toHaveCount(0);
     route = (await api(page, '/api/relays')).routes.find((item) => item.name === '隧道-' + suffix);
     expect(route.hops).toEqual([
@@ -329,19 +352,19 @@ test('relay forms select real machine nodes and show failed deployment, retry an
     const command = await pollCommand(page, target);
     expect(command.action).toBe('tunnel.apply');
     await result(page, target, command, 'failed', '浏览器夹具：隧道端口被占用');
-    const row = page.locator('.relay-route').filter({ hasText: '隧道-' + suffix });
-    await expect(row).toContainText('机器执行失败，请在机器上检查详情。（退出码 1）', {
+    const overview = page.locator('.route-overview');
+    await expect(overview).toContainText('机器执行失败，请在机器上检查详情。（退出码 1）', {
       timeout: 15000,
     });
-    await expect(row).not.toContainText('浏览器夹具：隧道端口被占用');
-    await row.getByRole('button', { name: '重试应用', exact: true }).click();
-    await expect(row).toContainText(/等待编排|应用中/);
-    await row.getByRole('button', { name: '删除线路', exact: true }).click();
+    await expect(overview).not.toContainText('浏览器夹具：隧道端口被占用');
+    await page.getByRole('button', { name: '继续 / 重试应用', exact: true }).click();
+    await expect(overview).toContainText(/等待编排|应用中/);
+    await page.getByRole('button', { name: '删除线路', exact: true }).click();
     await page
       .getByRole('dialog', { name: '删除中转线路', exact: true })
       .getByRole('button', { name: '确认删除线路', exact: true })
       .click();
-    await expect(row).toContainText('已删除', { timeout: 15000 });
+    await expect(overview).toContainText('已删除', { timeout: 15000 });
     await noOverflow(page);
     await page.screenshot({ path: info.outputPath('relays.png'), fullPage: true });
   } finally {

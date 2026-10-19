@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, api, cleanup, noOverflow } from './browser-helpers.mjs';
+import { login, api, cleanup, noOverflow, navigate } from './browser-helpers.mjs';
 import { node } from './fixtures.mjs';
 import { toUpstream } from '../dist/server/converter/model.js';
 import { DEFAULT_PROBE_URL } from '../dist/server/shared/node-tests.js';
@@ -124,7 +124,7 @@ test('batch cancellation remains available after navigation', async ({ page }, i
       .click();
     await page.getByRole('button', { name: '三内核检查', exact: true }).click();
     const batchId = await startBatch(page);
-    await page.getByRole('button', { name: '输出方案', exact: true }).click();
+    await navigate(page, '输出方案');
     await page.getByRole('button', { name: '测试中心', exact: true }).click();
     await page.getByRole('button', { name: '三内核检查', exact: true }).click();
     await page.getByRole('button', { name: '取消测试', exact: true }).click();

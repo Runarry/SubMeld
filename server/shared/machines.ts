@@ -148,6 +148,14 @@ export const machineViewSchema = z.object({
   snapshotRevision: revisionSchema.nullable(),
   syncError: z.string().nullable(),
   resourceId: z.string().uuid(),
+  summary: z
+    .object({
+      addresses: z.array(z.string()),
+      nodeCount: z.number().int().nonnegative(),
+      cores: machineSnapshotSchema.shape.cores,
+      pendingCores: machineSnapshotSchema.shape.pendingCores,
+    })
+    .optional(),
 });
 export type MachineView = z.infer<typeof machineViewSchema>;
 export const machineTaskSchema = z.object({
@@ -184,6 +192,7 @@ export const queueMachineCommandSchema = machineOperationSchema.extend({
 
 export const relayRouteSchema = z.object({
   id: z.string().uuid(),
+  outputResourceId: z.string().uuid().optional(),
   name: z.string().trim().min(1).max(128),
   kind: z.enum(['forward', 'protocol', 'tunnel']),
   entryMachineId: z.string().uuid(),

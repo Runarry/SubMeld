@@ -148,6 +148,17 @@ const displayKeys = new Set([
   'short_id',
   'fingerprint',
   'alpn',
+  'server_name',
+  'ip_strategy',
+  'reality_guard',
+  'obfs_type',
+  'up_mbps',
+  'down_mbps',
+  'congestion_control',
+  'bbr_profile',
+  'hop_ports',
+  'listen_ports',
+  'certificate_id',
 ]);
 const displayContainers = new Set([
   'params',
@@ -168,7 +179,10 @@ function display(value: unknown): unknown {
   if (value && typeof value === 'object')
     return Object.fromEntries(
       Object.entries(value).flatMap(([key, item]) => {
-        if (/pass|secret|token|credential|private|uri|url|certificate|cert|keyfile/i.test(key))
+        if (
+          key !== 'certificate_id' &&
+          /pass|secret|token|credential|private|uri|url|certificate|cert|keyfile/i.test(key)
+        )
           return [];
         if (item && typeof item === 'object')
           return displayKeys.has(key) || displayContainers.has(key) ? [[key, display(item)]] : [];
@@ -298,6 +312,49 @@ export class MachineStore {
       .array(rowSchema)
       .parse(this.db.prepare('SELECT * FROM machines ORDER BY rowid').all())
       .map((row) => this.view(row));
+  }
+  async overview(): Promise<MachineView[]> {
+    const rows = z
+      .array(rowSchema)
+      .parse(this.db.prepare('SELECT * FROM machines ORDER BY rowid').all());
+    if (!rows.length) return [];
+    return this.resources.client.exclusive(async () => {
+      try {
+        await this.resources.syncUnlocked();
+      } catch {
+        return rows.map((row) => ({
+          ...this.view(row),
+          syncError: '机器摘要暂不可用，请检查 Sub-Store 连接。',
+        }));
+      }
+      return rows.map((row) => {
+        const machine = this.view(row);
+        try {
+          const snapshot = this.envelope(row)?.snapshot;
+          if (!snapshot) return machine;
+          const visible = publicSnapshot(snapshot);
+          return {
+            ...machine,
+            summary: {
+              addresses: [
+                ...new Set(
+                  visible.nodes.flatMap((node) =>
+                    typeof node.address === 'string' && node.address !== '[已隐藏]'
+                      ? [node.address]
+                      : [],
+                  ),
+                ),
+              ],
+              nodeCount: visible.nodes.length,
+              cores: visible.cores,
+              pendingCores: visible.pendingCores,
+            },
+          };
+        } catch {
+          return { ...machine, syncError: '机器摘要无法读取，请检查当前快照。' };
+        }
+      });
+    });
   }
   task(id: string): MachineTask {
     return this.taskView(this.taskRow(id));
