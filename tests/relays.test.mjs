@@ -6,6 +6,19 @@ import { RelayStore, relayEndpoint } from '../dist/server/relays.js';
 import { createApp } from '../dist/server/app.js';
 
 const digest = (text) => createHash('sha256').update(text).digest('hex');
+async function legacyChain(f, entry, exit) {
+  const file = {
+    name: 'legacy-chain-' + randomUUID(),
+    type: 'file',
+    source: 'local',
+    process: [],
+    content: JSON.stringify({ name: 'legacy chain', enabled: true, entry, exit }),
+    _submeld: { id: entry.resourceId, role: 'chain', version: 1 },
+  };
+  await f.client.api('/api/files', file);
+  await f.resources.sync();
+  return file;
+}
 function snapshot(seed, nodes = []) {
   return {
     schemaVersion: 1,
@@ -426,7 +439,7 @@ test('a terminal unknown receipt can be reconciled without leaving a route perma
   assert.equal(retry.command.params.id, 'exit-unknown');
 });
 
-test('a tunnel endpoint referenced by a client chain cannot be removed', async (t) => {
+test('legacy client-chain files do not block removing a tunnel endpoint', async (t) => {
   const f = await setup(t);
   const { route } = await f.routes.create({
     ...f.input,
@@ -445,14 +458,20 @@ test('a tunnel endpoint referenced by a client chain cannot be removed', async (
     _submeld: { id: saved.sourceId, role: 'relay-source', version: 1 },
   });
   await f.resources.sync();
-  await f.chains.create({
-    name: 'uses-tunnel',
-    entry: { resourceId: saved.sourceId, nodeName: 'tunnel' },
-    exit: { resourceId: f.target.machine.resourceId, nodeName: 'target' },
-  });
-  await assert.rejects(f.routes.remove(route.id, route.revision), { code: 'NODE_IN_USE' });
+  const legacy = await legacyChain(
+    f,
+    { resourceId: saved.sourceId, nodeName: 'tunnel' },
+    { resourceId: f.target.machine.resourceId, nodeName: 'target' },
+  );
+  await f.routes.remove(route.id, route.revision);
+  await f.routes.tick();
   assert.equal(f.machines.activeTask(f.entry.machine.id), null);
-  assert.equal((await f.routes.list()).routes[0].status, 'pending');
+  assert.equal((await f.routes.list()).routes[0].status, 'deleted');
+  assert.equal(f.resources.record(saved.sourceId).record.content, '');
+  assert.equal(
+    (await f.client.records('file')).find((file) => file.name === legacy.name).content,
+    legacy.content,
+  );
 });
 
 test('PATCH edits a forward in place with CAS, stable IDs, native renames and old/new target protection', async (t) => {
@@ -686,7 +705,7 @@ test('type and entry migration removes the old binding and resumes failed cleanu
   assert.equal(f.resources.files('relay-route').length, 1);
 });
 
-test('forward edits cannot remove client-chain names when changing ports or moving the entry', async (t) => {
+test('legacy client-chain files do not block forward edits or weaken actual relay ownership', async (t) => {
   const f = await setup(t),
     route = await deployForward(f);
   const name = 'native forward:23456';
@@ -707,22 +726,37 @@ test('forward edits cannot remove client-chain names when changing ports or movi
   ];
   f.entry.snapshot.revision = digest('published forward');
   await report(f, f.entry);
-  await f.chains.create({
-    name: 'forward consumer',
-    entry: { resourceId: f.entry.machine.resourceId, nodeName: name },
-    exit: { resourceId: f.target.machine.resourceId, nodeName: 'target' },
-  });
-  const revision = (await currentRoute(f)).revision;
-  await assert.rejects(f.routes.update(route.id, { ...f.input, listenPort: 24456, revision }), {
-    code: 'NODE_IN_USE',
-  });
-  const newEntry = await createMachine(f, 'new entry', snapshot('unbound machine'));
-  await assert.rejects(
-    f.routes.update(route.id, { ...f.input, entryMachineId: newEntry.machine.id, revision }),
-    { code: 'NODE_IN_USE' },
+  const legacy = await legacyChain(
+    f,
+    { resourceId: f.entry.machine.resourceId, nodeName: name },
+    { resourceId: f.target.machine.resourceId, nodeName: 'target' },
   );
+  const revision = (await currentRoute(f)).revision;
+  await f.routes.update(route.id, { ...f.input, listenPort: 24456, revision });
+  await assert.rejects(
+    f.machines.enqueue(f.entry.machine.id, {
+      action: 'forward.delete',
+      params: { id: 'forward-route' },
+      expectedRevision: f.entry.snapshot.revision,
+    }),
+    { code: 'RELAY_REFERENCED' },
+  );
+  await f.routes.tick();
+  await complete(f, f.entry, 'exit.edit', (s, p) => {
+    s.relay.exits[0].uri = p.uri;
+  });
+  await f.routes.tick();
+  await complete(f, f.entry, 'forward.edit', (s, p) => {
+    assert.equal(p['listen-ports'], '24456');
+    s.relay.forwards[0].listen_port_start = 24456;
+  });
+  await f.routes.tick();
   assert.equal((await currentRoute(f)).status, 'active');
   assert.equal(f.machines.activeTask(f.entry.machine.id), null);
+  assert.equal(
+    (await f.client.records('file')).find((file) => file.name === legacy.name).content,
+    legacy.content,
+  );
 });
 
 test('tunnel updates retain the source, published name and rules while retiring removed hops after entry cutover', async (t) => {
@@ -753,11 +787,11 @@ test('tunnel updates retain the source, published name and rules while retiring 
     'PATCH',
   );
   await f.resources.sync();
-  const chain = await f.chains.create({
-    name: 'stable tunnel consumer',
-    entry: { resourceId: before.sourceId, nodeName: route.name },
-    exit: { resourceId: f.target.machine.resourceId, nodeName: 'target' },
-  });
+  await legacyChain(
+    f,
+    { resourceId: before.sourceId, nodeName: route.name },
+    { resourceId: f.target.machine.resourceId, nodeName: 'target' },
+  );
   await f.routes.update(route.id, {
     ...input,
     name: 'new route label',
@@ -780,7 +814,7 @@ test('tunnel updates retain the source, published name and rules while retiring 
   assert.equal(published.name, 'user-renamed-route');
   assert.equal(published.displayName, 'user display');
   assert.deepEqual(published.process, process);
-  assert.equal((await f.chains.get(chain.id)).available, true);
+  assert.equal((await f.resources.preview(before.sourceId)).rows[0].view.name, route.name);
   const removed = await failCommand(f, middle);
   assert.equal(removed.action, 'tunnel.delete');
   assert.equal(removed.params.id, before.hops[0].id);
@@ -802,7 +836,7 @@ test('tunnel updates retain the source, published name and rules while retiring 
   assert.equal((await currentRoute(f)).status, 'active');
   assert.equal(savedRoute(f, route.id).migration, undefined);
   assert.equal(savedRoute(f, route.id).sourceId, before.sourceId);
-  assert.equal((await f.chains.get(chain.id)).available, true);
+  assert.equal((await f.resources.preview(before.sourceId)).rows[0].view.name, route.name);
   assert.equal(
     f.resources
       .listResources()

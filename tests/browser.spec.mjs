@@ -41,74 +41,71 @@ test('unified nodes import a batch, show raw data, delete a single original node
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '管理员登录', exact: true })).toBeVisible();
 });
-test('chain form directly selects native subscription nodes and exposes deletion protection', async ({
+test('output form selects a single native node and keeps its selection after editing', async ({
   page,
 }, info) => {
   await login(page);
   const a = node('ss'),
     b = node('ss');
-  a.name = 'entry-' + info.project.name;
-  b.name = 'exit-' + info.project.name;
+  a.name = 'single-A-' + info.project.name;
+  b.name = 'single-B-' + info.project.name;
   b.port = 444;
   const resource = await api(page, '/api/nodes', {
-    name: 'chain-source-' + info.project.name,
+    name: 'single-source-' + info.project.name,
     source: 'local',
     content: JSON.stringify({ proxies: [a, b].map(toUpstream) }),
   });
-  let chain;
+  let plan;
   try {
-    await navigate(page, '两跳链');
-    await page.getByRole('button', { name: '添加两跳链', exact: true }).click();
-    await page.getByLabel('链名称', { exact: true }).fill('chain-' + info.project.name);
-    for (const [label, name] of [
-      ['前置', a.name],
-      ['出口', b.name],
-    ]) {
-      const field = page.getByRole('group', { name: label, exact: true });
-      await field
-        .getByRole('combobox', { name: '所属订阅', exact: true })
-        .selectOption(resource.id);
-      await field
-        .getByRole('combobox', { name: label + '节点', exact: true })
-        .selectOption({ label: name + ' · ss' });
-    }
-    await page.getByRole('button', { name: '保存链', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '配置两跳链' })).toHaveCount(0);
-    chain = (await api(page, '/api/chains')).chains.find(
-      (c) => c.name === 'chain-' + info.project.name,
+    await navigate(page, '输出方案');
+    await page.getByRole('button', { name: '添加输出方案', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '管理输出方案', exact: true });
+    await dialog.getByLabel('方案名称', { exact: true }).fill('single-' + info.project.name);
+    await dialog.getByRole('combobox', { name: '输入类型', exact: true }).selectOption('node');
+    const field = dialog.getByRole('group', { name: '单个节点', exact: true });
+    await field.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
+    await field
+      .getByRole('combobox', { name: '单个节点节点', exact: true })
+      .selectOption({ label: b.name + ' · ss' });
+    await dialog.getByRole('button', { name: '加入输入', exact: true }).click();
+    await dialog.getByRole('button', { name: '保存方案', exact: true }).click();
+    await expect(dialog.getByRole('status')).toHaveText('方案与输出文件已保存到 Sub-Store。');
+    plan = (await api(page, '/api/subscriptions')).subscriptions.find(
+      (p) => p.name === 'single-' + info.project.name,
     ).id;
-    const chainRow = page.locator('.chain-row').filter({ hasText: 'chain-' + info.project.name });
-    await chainRow.getByRole('button', { name: '配置', exact: true }).click();
-    const chainDialog = page.getByRole('dialog', { name: '配置两跳链', exact: true });
-    await expect(chainDialog).toBeVisible();
-    await expect(chainDialog.getByLabel('链名称', { exact: true })).toHaveValue(
-      'chain-' + info.project.name,
-    );
-    const updatedName = 'chain-edited-' + info.project.name;
-    await chainDialog.getByLabel('链名称', { exact: true }).fill(updatedName);
-    await chainDialog.getByRole('button', { name: '保存链', exact: true }).click();
-    await expect(chainDialog).toHaveCount(0);
-    await page.reload();
-    await expect(
-      page.locator('.chain-row').getByRole('heading', { name: updatedName, exact: true }),
-    ).toBeVisible();
-    const updatedChain = await api(page, '/api/chains/' + chain);
-    expect(updatedChain.entry).toEqual({ resourceId: resource.id, nodeName: a.name });
-    expect(updatedChain.exit).toEqual({ resourceId: resource.id, nodeName: b.name });
-    await page.screenshot({ path: info.outputPath('native-chain.png'), fullPage: true });
-    await noOverflow(page);
-    await page.getByRole('button', { name: '节点', exact: true }).click();
-    await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await page
-      .locator('.node-row')
-      .filter({ hasText: a.name })
-      .getByRole('button', { name: '删除', exact: true })
+      .locator('.plan-row')
+      .filter({ hasText: 'single-' + info.project.name })
+      .getByRole('button', { name: '管理方案', exact: true })
       .click();
-    await page.getByRole('button', { name: '确认删除', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '删除节点' })).toContainText('正在被两跳链引用');
-    await page.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(dialog.locator('.input-list li > span')).toHaveText(
+      b.name + ' · ' + resource.name,
+    );
+    const updatedName = 'single-edited-' + info.project.name;
+    await dialog.getByLabel('方案名称', { exact: true }).fill(updatedName);
+    await dialog.getByRole('button', { name: '保存方案', exact: true }).click();
+    await expect(dialog.getByRole('status')).toHaveText('方案与输出文件已保存到 Sub-Store。');
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.reload();
+    await page
+      .locator('.plan-row')
+      .filter({ hasText: updatedName })
+      .getByRole('button', { name: '管理方案', exact: true })
+      .click();
+    await expect(dialog.getByLabel('方案名称', { exact: true })).toHaveValue(updatedName);
+    const updatedPlan = await api(page, '/api/subscriptions/' + plan);
+    expect(updatedPlan.inputs).toEqual([
+      { kind: 'node', resourceId: resource.id, nodeName: b.name },
+    ]);
+    await dialog.getByRole('combobox', { name: '预览格式', exact: true }).selectOption('uri');
+    await dialog.getByRole('button', { name: '预览输出', exact: true }).click();
+    await expect(dialog.getByLabel('生成结果', { exact: true })).toHaveValue(/single-B-/);
+    await expect(dialog.getByLabel('生成结果', { exact: true })).not.toHaveValue(/single-A-/);
+    await page.screenshot({ path: info.outputPath('native-single-output.png'), fullPage: true });
+    await noOverflow(page);
   } finally {
-    await cleanup(page, { resource, chain });
+    await cleanup(page, { resource, plan });
   }
 });
 test('output form produces native files, shares immediate updates and revokes addresses', async ({

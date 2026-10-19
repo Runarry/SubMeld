@@ -175,9 +175,9 @@ async function save() {
           v-model="installDeps"
           type="checkbox"
           :disabled="busy || !!submitted"
-        />自动安装所需依赖</label
+        />自动安装必要系统工具</label
       >
-      <p class="editor-help">只安装当前操作所必需的系统工具。未修改、未知和敏感字段不回写。</p>
+      <p class="editor-help">只安装必要系统工具，不包含代理内核。未修改、未知和敏感字段不回写。</p>
       <div class="change-summary" role="region" aria-label="节点变更摘要">
         <strong>{{ changes.length }} 项修改</strong>
         <p v-if="!changes.length">修改字段后在这里核对变更。</p>

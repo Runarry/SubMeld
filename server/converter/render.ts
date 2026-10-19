@@ -3,8 +3,6 @@ import { stringify } from 'yaml';
 import { AppError } from '../errors.js';
 import {
   MAX_BYTES,
-  MAX_NODES,
-  isChain,
   type Diagnostic,
   diagnostic,
   renderRequestSchema,
@@ -126,30 +124,11 @@ export async function renderInput(
   const { target, listenPort, items } = parsed.data;
   if (new Set(items.map((item) => item.nodeIndex)).size !== items.length)
     throw new AppError('INVALID_REQUEST', '节点序号不能重复。', 400);
-  if (items.reduce((n, item) => n + (isChain(item) ? 2 : 1), 0) > MAX_NODES)
-    throw new AppError('INPUT_LIMIT_EXCEEDED', '展开后的节点数量超过 2,000。', 413);
   const included = items.filter((item) => !item.excluded);
   if (!included.length) throw new AppError('EMPTY_OUTPUT', '至少保留一个有效节点。');
   const diagnostics: Diagnostic[] = [];
   for (const item of included) {
-    if (isChain(item)) {
-      if (!item.available)
-        diagnostics.push(
-          diagnostic(
-            item.nodeIndex,
-            'CHAIN_NODE_DISABLED',
-            '链式代理的前置或出口节点已停用，请启用节点或停用此链。',
-          ),
-        );
-      for (const role of ['entry', 'exit'] as const)
-        diagnostics.push(
-          ...validateDraft(item[role], item.nodeIndex).map((d) => ({
-            ...d,
-            field: role + (d.field ? '.' + d.field : ''),
-            message: (role === 'entry' ? '前置代理：' : '出口代理：') + d.message,
-          })),
-        );
-    } else if (item.draft) diagnostics.push(...validateDraft(item.draft, item.nodeIndex));
+    if (item.draft) diagnostics.push(...validateDraft(item.draft, item.nodeIndex));
     else
       diagnostics.push(
         diagnostic(item.nodeIndex, 'NODE_REQUIRED', '此项尚未解析成功，请修正或明确排除。'),
@@ -175,14 +154,7 @@ export async function renderInput(
       );
     return name;
   }
-  async function convert(
-    draft: NodeDraft,
-    name: string,
-    index: number,
-    role?: 'entry' | 'exit',
-    detour?: string,
-    entry?: NodeDraft,
-  ) {
+  async function convert(draft: NodeDraft, name: string, index: number) {
     const node = structuredClone(draft);
     node.name = name;
     const report = (
@@ -191,15 +163,7 @@ export async function renderInput(
       field?: string,
       level: 'error' | 'warning' = 'error',
     ) => {
-      diagnostics.push(
-        diagnostic(
-          index,
-          code,
-          (role ? (role === 'entry' ? '前置代理：' : '出口代理：') : '') + message,
-          role ? role + (field ? '.' + field : '') : field,
-          level,
-        ),
-      );
+      diagnostics.push(diagnostic(index, code, message, field, level));
     };
     const pinnedHy2 = node.protocol === 'hysteria2' && !!node.protocolOptions.pinSHA256;
     if (target === 'xray' && (node.protocol === 'tuic' || (node.tls.insecure && !pinnedHy2))) {
@@ -212,14 +176,6 @@ export async function renderInput(
       return;
     }
     if (target === 'xray' && node.protocol === 'hysteria2') {
-      if (detour && node.protocolOptions.ports) {
-        report(
-          'TARGET_UNSUPPORTED',
-          'Xray 26.3.27 不支持 HY2 链出口同时使用端口跳跃。',
-          'protocolOptions.ports',
-        );
-        return;
-      }
       if (node.protocolOptions.hopInterval !== null && node.protocolOptions.hopInterval < 5) {
         report(
           'TARGET_UNSUPPORTED',
@@ -256,7 +212,7 @@ export async function renderInput(
             'HY2 自动证书解析尚未就绪，请检查配套文件与 SubMeld 服务。',
             422,
           );
-        const request = hy2CertificateRequest(node, entry);
+        const request = hy2CertificateRequest(node);
         publicKeyPin = verifyCertificateProof(
           request.pinSHA256,
           await resolveCertificate(request, signal),
@@ -269,12 +225,7 @@ export async function renderInput(
         );
       }
       const raw: unknown = await produceUpstream(
-        [
-          {
-            ...structuredClone(toUpstream(node)),
-            ...(detour ? { 'underlying-proxy': detour } : {}),
-          },
-        ],
+        [structuredClone(toUpstream(node))],
         target === 'mihomo' ? 'Mihomo' : 'sing-box',
         'internal',
         client,
@@ -289,7 +240,6 @@ export async function renderInput(
       }
       if (target === 'mihomo') checkMihomo(output, node);
       else checkSingbox(output, node, publicKeyPin);
-      if (detour) equal(output[target === 'mihomo' ? 'dialer-proxy' : 'detour'], detour);
       return output;
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
@@ -304,33 +254,7 @@ export async function renderInput(
   const nodes: Record<string, unknown>[] = [],
     names: string[] = [];
   for (const item of included) {
-    if (isChain(item)) {
-      const name = allocate(item.name, item.nodeIndex);
-      const entryName = allocate(item.name.slice(0, 480) + ' · 前置', item.nodeIndex);
-      const entry = await convert(item.entry, entryName, item.nodeIndex, 'entry');
-      const exit = await convert(item.exit, name, item.nodeIndex, 'exit', entryName, item.entry);
-      if (!entry || !exit) continue;
-      if (['hysteria2', 'tuic'].includes(item.exit.protocol)) {
-        diagnostics.push(
-          diagnostic(
-            item.nodeIndex,
-            'CHAIN_UDP_REQUIRED',
-            '出口使用 UDP 协议，前置代理服务端必须支持 UDP 转发。',
-            'entry',
-            'warning',
-          ),
-        );
-        if (target === 'mihomo') entry.udp = true;
-      }
-      if (target === 'xray') {
-        const stream = exit.streamSettings;
-        if (!record(stream)) throw new AppError('CONVERSION_FAILED', 'Xray 链式配置缺少传输设置。');
-        stream.sockopt = { dialerProxy: entryName };
-      }
-      // The visible exit stays first; the helper is never a selector/default choice.
-      nodes.push(exit, entry);
-      names.push(name);
-    } else if (item.draft) {
+    if (item.draft) {
       const name = allocate(item.draft.name, item.nodeIndex);
       const output = await convert(item.draft, name, item.nodeIndex);
       if (output) {

@@ -1,17 +1,13 @@
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import {
-  subscriptionConfigSchema,
-  outputFormatSchema,
-  outputGroup,
-} from './shared/subscriptions.js';
-import { chainConfigSchema } from './shared/chains.js';
+import { outputFormatSchema, outputGroup } from './shared/subscriptions.js';
+import { readStoredSubscription } from './shared/legacy-chain-inputs.js';
 import { upstreamIdentitySchema, type UpstreamRecord } from './sub-store.js';
 import { checkedDraft } from './converter/normalized.js';
 import { renderInput } from './converter/render.js';
 import { produceInput } from './converter/engine.js';
 import { fillTemplate } from './templates/basic.js';
-import { diagnostic, isChain, type RenderItem, type NodeDraft } from './shared/contracts.js';
+import { diagnostic, type RenderItem, type NodeDraft } from './shared/contracts.js';
 import { remoteCertificateResolver } from './converter/hy2-resolver-client.js';
 import type { Hy2CertificateResolver } from './shared/hy2-certificates.js';
 type Native = {
@@ -51,13 +47,12 @@ export async function generate(native: Native, planId: string, requested: string
       throw new AppError('REFERENCE_INVALID', '上游引用缺失或 UUID 重复，请重新选择。', 422);
     return matches[0]!;
   };
-  const plan = subscriptionConfigSchema.parse(
-    JSON.parse(String(byId(files, planId, 'plan').content)),
-  );
+  const plan = readStoredSubscription(JSON.parse(String(byId(files, planId, 'plan').content)));
   const format = outputFormatSchema.parse(requested),
     group = outputGroup(format);
   if (!plan.enabled || !plan.formats.includes(format))
     throw new AppError('OUTPUT_DISABLED', '方案或输出格式已停用。', 422);
+  if (!plan.inputs.length) return { content: '', diagnostics: [] };
   const cache = new Map<string, Record<string, unknown>[]>();
   const readNodes = async (id: string) => {
     const cached = cache.get(id);
@@ -92,14 +87,13 @@ export async function generate(native: Native, planId: string, requested: string
     const list = (await readNodes(ref.resourceId)).filter((n) => n.name === ref.nodeName);
     if (list.length !== 1)
       throw new AppError(
-        'CHAIN_REFERENCE_INVALID',
+        'NODE_REFERENCE_INVALID',
         '节点「' + ref.nodeName + '」不存在或名称重复，请重新选择。',
         422,
       );
     return list[0]!;
   };
   const items: RenderItem[] = [];
-  const warnings = [];
   const excluded = (name: string, types: string[]) =>
     (!!plan.includeName && !name.includes(plan.includeName)) ||
     (!!plan.excludeName && name.includes(plan.excludeName)) ||
@@ -126,50 +120,13 @@ export async function generate(native: Native, planId: string, requested: string
     }
   };
   for (const ref of plan.inputs) {
-    if (ref.kind === 'chain') {
-      const chain = chainConfigSchema.parse(
-        JSON.parse(String(byId(files, ref.id, 'chain').content)),
-      );
-      if (!chain.enabled) continue;
-      if (group === 'uri') {
-        warnings.push(
-          diagnostic(
-            items.length,
-            'CHAIN_URI_EXCLUDED',
-            'URI／Base64 不包含链「' + chain.name + '」。',
-            undefined,
-            'warning',
-          ),
-        );
-        continue;
-      }
-      const entry = await select(chain.entry),
-        exit = await select(chain.exit);
-      if (JSON.stringify(chain.entry) === JSON.stringify(chain.exit))
-        throw new AppError('CHAIN_INVALID', '链的前置和出口必须不同。', 422);
-      if (entry['underlying-proxy'] || exit['underlying-proxy'])
-        throw new AppError('CHAIN_INVALID', '链成员已包含前置代理，请选择普通节点。', 422);
-      const skip = excluded(chain.name, [String(entry.type), String(exit.type)]);
+    const list = ref.kind === 'node' ? [await select(ref)] : await readNodes(ref.id);
+    for (const raw of list) {
+      const skip = excluded(String(raw.name), [String(raw.type)]);
       if (skip) continue;
-      items.push({
-        kind: 'chain',
-        nodeIndex: items.length,
-        name: plan.prefix + chain.name + plan.suffix,
-        entry: draft(entry, items.length),
-        exit: draft(exit, items.length),
-        available: true,
-        excluded: false,
-        diagnostics: [],
-      });
-    } else {
-      const list = ref.kind === 'node' ? [await select(ref)] : await readNodes(ref.id);
-      for (const raw of list) {
-        const skip = excluded(String(raw.name), [String(raw.type)]);
-        if (skip) continue;
-        const node = draft(raw, items.length);
-        node.name = plan.prefix + node.name + plan.suffix;
-        items.push({ nodeIndex: items.length, draft: node, excluded: false, diagnostics: [] });
-      }
+      const node = draft(raw, items.length);
+      node.name = plan.prefix + node.name + plan.suffix;
+      items.push({ nodeIndex: items.length, draft: node, excluded: false, diagnostics: [] });
     }
   }
   const client = {
@@ -207,7 +164,7 @@ export async function generate(native: Native, planId: string, requested: string
   };
   let content: string;
   if (group === 'uri') {
-    const result = await produceInput({ items: items.filter((item) => !isChain(item)) }, client);
+    const result = await produceInput({ items }, client);
     const output = format === 'base64' ? result.base64 : result.uri;
     if (output === null)
       throw new AppError('OUTPUT_LIMIT_EXCEEDED', 'Base64 输出超过允许大小。', 422);
@@ -247,5 +204,5 @@ export async function generate(native: Native, planId: string, requested: string
     ])
   )
     throw new AppError('REVISION_CONFLICT', '生成期间上游配置已变化，请重试。', 409);
-  return { content, diagnostics: warnings };
+  return { content, diagnostics: [] };
 }

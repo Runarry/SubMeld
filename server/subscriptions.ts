@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AppError } from './errors.js';
 import { UpstreamFiles, outputRecord } from './upstream-files.js';
 import { marker, type UpstreamResources } from './upstream-resources.js';
+import { readStoredSubscription } from './shared/legacy-chain-inputs.js';
 import {
   subscriptionConfigSchema,
   MAX_SUBSCRIPTIONS,
@@ -10,13 +11,13 @@ import {
   type Subscription,
   type SubscriptionDetail,
 } from './shared/subscriptions.js';
-export const ENGINE_VERSION = 'upstream-native-6';
+export const ENGINE_VERSION = 'upstream-native-7';
 export function createSubscriptionStore(resources: UpstreamResources, files: UpstreamFiles) {
   function get(id: string): Subscription {
     const value = files.get(id, 'plan');
     try {
       return {
-        ...subscriptionConfigSchema.parse(JSON.parse(String(value.record.content))),
+        ...readStoredSubscription(JSON.parse(String(value.record.content))),
         id,
         revision: value.revision,
       };
@@ -26,6 +27,11 @@ export function createSubscriptionStore(resources: UpstreamResources, files: Ups
   }
   const outputs = (id: string) =>
     resources.files('output').filter((f) => marker(f.record)?.parent === id);
+  const visiblePlans = () =>
+    resources
+      .files('plan')
+      .map((f) => get(f.id))
+      .filter((plan) => plan.inputs.length > 0);
   async function detail(id: string, origin: string): Promise<SubscriptionDetail> {
     const plan = get(id),
       urls: SubscriptionDetail['urls'] = {},
@@ -54,12 +60,10 @@ export function createSubscriptionStore(resources: UpstreamResources, files: Ups
       throw new AppError('INVALID_REQUEST', '请填写有效的方案名称、输入和输出格式。', 400);
     return resources.client.exclusive(async () => {
       await resources.syncUnlocked();
-      if (!id && resources.files('plan').length >= MAX_SUBSCRIPTIONS)
+      if (!id && visiblePlans().length >= MAX_SUBSCRIPTIONS)
         throw new AppError('LIMIT_EXCEEDED', '方案数量达到上限。', 400);
-      for (const ref of parsed.data.inputs) {
-        if (ref.kind === 'chain') files.get(ref.id, 'chain');
-        else resources.resource(ref.kind === 'node' ? ref.resourceId : ref.id);
-      }
+      for (const ref of parsed.data.inputs)
+        resources.resource(ref.kind === 'node' ? ref.resourceId : ref.id);
       await files.initialize();
       id = await files.put('plan', parsed.data, id, revision);
       for (const format of parsed.data.formats) {
@@ -92,9 +96,9 @@ export function createSubscriptionStore(resources: UpstreamResources, files: Ups
     detail,
     outputs,
     list(page = 0) {
-      const all = resources.files('plan');
+      const all = visiblePlans();
       return {
-        subscriptions: all.slice(page * 25, page * 25 + 25).map((f) => get(f.id)),
+        subscriptions: all.slice(page * 25, page * 25 + 25),
         total: all.length,
       };
     },
@@ -138,6 +142,8 @@ export function createSubscriptionStore(resources: UpstreamResources, files: Ups
       const plan = get(id);
       if (!plan.enabled || !plan.formats.includes(format))
         throw new AppError('OUTPUT_DISABLED', '方案或输出格式未启用。', 422);
+      if (!plan.inputs.length) return { format, content: '' };
+      await files.ensureLegacyChainCompatibility();
       const list = outputs(id).filter((f) => marker(f.record)?.format === format);
       if (list.length !== 1)
         throw new AppError('OUTPUT_MISSING', '输出文件缺失或重复，请重新保存方案。', 409);

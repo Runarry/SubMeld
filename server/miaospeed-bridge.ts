@@ -162,7 +162,7 @@ export async function launchBridge(
         return child?.output ?? '';
       },
       payload: JSON.stringify({
-        name: 'chain-bridge',
+        name: 'node-bridge',
         type: 'socks5',
         server: host,
         port,

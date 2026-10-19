@@ -2,13 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
 import { type UpstreamResources, rawDraft } from './upstream-resources.js';
-import type { ChainStore } from './chains.js';
 import { inlineNodeEntries } from './inline-node-input.js';
 import { produceUpstream } from './converter/engine.js';
 import { MAX_NODES, type RenderItem } from './shared/contracts.js';
 import { previewInputSchema, type SpeedPreview, type SpeedSubject } from './shared/miaospeed.js';
-import { sameSubject } from './shared/node-tests.js';
-import { nodeRefSchema } from './shared/resources.js';
 import { record } from './converter/model.js';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -18,15 +15,12 @@ export type CapturedNode = {
   protocol: string;
   raw: Raw | null;
   error: string | null;
-  entry?: Raw;
-  exit?: Raw;
 };
 export class MiaospeedInput {
   private previews = new Map<string, { expires: number; nodes: CapturedNode[] }>();
   private timer: ReturnType<typeof setInterval>;
   constructor(
     readonly resources: UpstreamResources,
-    private chains: ChainStore,
     private now = Date.now,
   ) {
     this.timer = setInterval(() => this.cleanup(), 60000);
@@ -113,15 +107,7 @@ export class MiaospeedInput {
     const saved = subjects.filter((subject) => subject.kind !== 'temporary');
     if (!saved.length) return;
     await this.resources.sync();
-    const ids = saved.flatMap((subject) =>
-      subject.kind === 'node'
-        ? [subject.resourceId]
-        : (() => {
-            const chain = this.chains.definition(subject.id);
-            return [chain.entry.resourceId, chain.exit.resourceId];
-          })(),
-    );
-    await this.resources.prepare(ids);
+    await this.resources.prepare(saved.map((subject) => subject.resourceId));
   }
   capture(subject: SpeedSubject): CapturedNode {
     if (subject.kind === 'temporary') {
@@ -133,30 +119,8 @@ export class MiaospeedInput {
       preview.expires = this.now() + 30 * 60 * 1000;
       return structuredClone(node);
     }
-    if (subject.kind === 'node') {
-      const row = this.resources.current(subject);
-      return this.describe(row.processed ?? row.original ?? {});
-    }
-    const chain = this.chains.definition(subject.id);
-    const entry = this.resources.resolve(chain.entry),
-      exit = this.resources.resolve(chain.exit);
-    const current = {
-      kind: 'chain' as const,
-      id: chain.id,
-      revision: chain.revision,
-      entry: nodeRefSchema.strip().parse(entry.view),
-      exit: nodeRefSchema.strip().parse(exit.view),
-    };
-    if (!chain.enabled || !sameSubject(subject, current))
-      throw new AppError('REVISION_CONFLICT', '两跳链内容已变化或停用，请重新选择。', 409);
-    return {
-      name: chain.name,
-      protocol: String(entry.processed?.type) + ' → ' + String(exit.processed?.type),
-      raw: null,
-      error: null,
-      entry: structuredClone(entry.processed!),
-      exit: structuredClone(exit.processed!),
-    };
+    const row = this.resources.current(subject);
+    return this.describe(row.processed ?? row.original ?? {});
   }
   matches(subject: SpeedSubject) {
     if (subject.kind === 'temporary') return true;
@@ -169,11 +133,7 @@ export class MiaospeedInput {
   }
   async payload(raw: Raw, name: string, signal?: AbortSignal) {
     if (['dialer-proxy', 'underlying-proxy', 'detour'].some((key) => raw[key]))
-      throw new AppError(
-        'TARGET_UNSUPPORTED',
-        '此节点依赖其他代理，请通过已定义的两跳链测试。',
-        422,
-      );
+      throw new AppError('TARGET_UNSUPPORTED', '此节点依赖其他代理，无法作为独立节点测试。', 422);
     const converted = await produceUpstream(
       [raw],
       'Mihomo',
@@ -206,23 +166,12 @@ export class MiaospeedInput {
     return JSON.stringify({ ...output, name });
   }
   bridgeItem(node: CapturedNode): RenderItem {
-    if (node.raw)
-      return {
-        nodeIndex: 0,
-        excluded: false,
-        diagnostics: [],
-        draft: rawDraft(node.raw),
-      };
-    if (!node.entry || !node.exit) throw new AppError('INVALID_REQUEST', '此对象不是两跳链。', 400);
+    if (!node.raw) throw new AppError('INVALID_REQUEST', '此节点没有有效配置。', 400);
     return {
-      kind: 'chain',
       nodeIndex: 0,
       excluded: false,
       diagnostics: [],
-      name: node.name,
-      entry: rawDraft(node.entry),
-      exit: rawDraft(node.exit),
-      available: true,
+      draft: rawDraft(node.raw),
     };
   }
   close() {

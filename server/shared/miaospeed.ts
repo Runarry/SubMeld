@@ -41,7 +41,6 @@ export const speedSettingsSchema = z.strictObject({
   requestTimeoutMs: z.number().int().min(10).max(10000).default(5000),
   timeoutSeconds: z.number().int().min(10).max(10000).default(120),
   nodeCore: z.enum(['native', ...renderTargetSchema.options]).default('native'),
-  chainCore: renderTargetSchema.default('mihomo'),
 });
 export type SpeedSettings = z.infer<typeof speedSettingsSchema>;
 export const speedCoreLabels = { native: 'miaospeed 内置 Mihomo', ...coreLabels };
@@ -56,8 +55,8 @@ export const temporarySubjectSchema = z.strictObject({
 });
 export const speedSubjectSchema = z.union([testSubjectSchema, temporarySubjectSchema]);
 export type SpeedSubject = z.infer<typeof speedSubjectSchema>;
-export function executionCore(settings: SpeedSettings, subject: SpeedSubject) {
-  return subject.kind === 'chain' ? settings.chainCore : settings.nodeCore;
+export function executionCore(settings: SpeedSettings) {
+  return settings.nodeCore;
 }
 export const speedRequestSchema = z
   .strictObject({

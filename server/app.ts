@@ -13,7 +13,6 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import type { Auth } from './auth.js';
 import type { NodeStore } from './nodes.js';
-import type { ChainStore } from './chains.js';
 
 import type { SubscriptionStore } from './subscriptions.js';
 
@@ -47,7 +46,6 @@ export type AppOptions = {
   webRoot?: string;
   tester?: NodeTester;
   nodes: NodeStore;
-  chains: ChainStore;
   subscriptions: SubscriptionStore;
   config: Config;
   auth: Auth;
@@ -66,7 +64,6 @@ export function createApp({
   config,
   auth,
   nodes,
-  chains,
   subscriptions,
 }: AppOptions) {
   const app = new Hono();
@@ -77,7 +74,6 @@ export function createApp({
     '/api/auth/login',
     '/api/auth/logout',
     '/api/nodes',
-    '/api/chains',
     '/api/subscriptions',
     '/api/node-tests',
     '/api/kernels',
@@ -106,7 +102,6 @@ export function createApp({
       writes.has(context.req.path) ||
       [
         '/api/nodes/',
-        '/api/chains/',
         '/api/subscriptions/',
         '/api/node-tests/',
         '/api/kernels/',
@@ -147,7 +142,7 @@ export function createApp({
   });
   app.use('/api/*', async (c, next) => {
     if (
-      /^\/api\/(nodes|chains|subscriptions)(?:\/|$)/.test(c.req.path) &&
+      /^\/api\/(nodes|subscriptions)(?:\/|$)/.test(c.req.path) &&
       !/\/(artifacts|cancel)(?:\/|$)/.test(c.req.path)
     )
       await resources.sync();
@@ -322,6 +317,7 @@ export function createApp({
     const url = new URL(c.req.url);
     const path = url.pathname.replace(/^\/upstream\/sub-store(?=\/share\/)/, '');
     await assertPrivateFileNotShared(resources, path);
+    if (path.startsWith('/share/file/')) await supportFiles.ensureLegacyChainCompatibility();
     const response = await frontend.request(path + url.search, {
       method: c.req.method,
       headers: { 'user-agent': c.req.header('User-Agent') ?? 'SubMeld' },
@@ -343,6 +339,8 @@ export function createApp({
     const path = url.pathname.slice('/upstream/sub-store'.length);
     const body = write ? await readJson(c.req.raw, 26 * 1024 * 1024, true) : undefined;
     await assertPrivateFileNotShared(resources, path, body);
+    if (!write && path.startsWith('/api/file/'))
+      await supportFiles.ensureLegacyChainCompatibility();
     const forward = () =>
       resources.client.request(path + url.search, {
         method: c.req.method,
@@ -354,8 +352,7 @@ export function createApp({
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     const pure = /^\/api\/(proxy|rule|preview)(?:\/|$)/.test(path);
-    const response =
-      write && !pure ? await resources.write(forward, path, c.req.method, body) : await forward();
+    const response = write && !pure ? await resources.write(forward) : await forward();
     response.headers.delete('set-cookie');
     response.headers.delete('access-control-allow-origin');
     response.headers.delete('access-control-allow-credentials');
@@ -486,19 +483,6 @@ export function createApp({
     const target = renderTargetSchema.safeParse(c.req.param('target'));
     if (!target.success) throw new AppError('INVALID_REQUEST', '内核目标无效。', 400);
     return c.json(testing().kernels.update(target.data), 202);
-  });
-  app.get('/api/chains', async (c) => c.json(await chains.list(listPage(c.req.query('page')))));
-  app.post('/api/chains', async (c) =>
-    c.json(await chains.create(await readJson(c.req.raw, 16 * 1024)), 201),
-  );
-  app.get('/api/chains/:id', async (c) => c.json(await chains.get(c.req.param('id'))));
-  app.patch('/api/chains/:id', async (c) => {
-    const body = await updateBody(c.req.raw);
-    return c.json(await chains.update(c.req.param('id'), body.config, body.revision));
-  });
-  app.delete('/api/chains/:id', async (c) => {
-    await chains.delete(c.req.param('id'), await requestRevision(c.req.raw));
-    return c.json({ deleted: true });
   });
   app.get('/api/subscriptions', (c) => c.json(subscriptions.list(listPage(c.req.query('page')))));
   app.post('/api/subscriptions', async (c) => {

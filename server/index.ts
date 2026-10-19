@@ -34,12 +34,7 @@ async function main() {
   }
   const auth = new Auth(passwordHash);
   const kernels = new KernelManager(config.dataDir);
-  const certificates = new Hy2Certificates(
-    settings.resources,
-    settings.certificateResolverToken(),
-    config.dataDir,
-    kernels,
-  );
+  const certificates = new Hy2Certificates(settings.resources, settings.certificateResolverToken());
   settings.files.configureCertificateResolver({
     url: config.hy2ResolverOrigin + '/api/internal/hy2-certificates/resolve',
     token: settings.certificateResolverToken(),
@@ -82,7 +77,6 @@ async function main() {
 
       nodes: settings.nodes,
       nodeReporting: settings.nodeReporting,
-      chains: settings.chains,
 
       subscriptions: settings.subscriptions,
     });

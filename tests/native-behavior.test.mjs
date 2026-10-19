@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fixture, ref, waitFor } from './upstream-fixture.mjs';
 import { node, UUID } from './fixtures.mjs';
 import { toUpstream } from '../dist/server/converter/model.js';
@@ -84,7 +85,7 @@ test('remote deletion appends an exact escaped filter, follows native refresh an
     code: 'NODE_DELETE_UNSAFE',
   });
 });
-test('collection exclusions affect only the collection, and renamed collection members protect their original nodes', async (t) => {
+test('collection exclusions affect only the collection and preserve the original nodes', async (t) => {
   const f = await fixture(t),
     resource = await local(f);
   await f.client.api('/api/collections', {
@@ -106,17 +107,6 @@ test('collection exclusions affect only the collection, and renamed collection m
   assert.equal((await f.nodes.list()).total, 2);
   const grouped = await f.nodes.list(collection.id);
   assert.equal(grouped.total, 2);
-  const chain = await f.chains.create({
-    name: 'protected',
-    enabled: true,
-    entry: { resourceId: collection.id, nodeName: 'group-entry' },
-    exit: { resourceId: collection.id, nodeName: 'group-exit' },
-  });
-  const original = await f.nodes.list(resource.id);
-  await assert.rejects(() => f.nodes.delete({ nodes: [ref(original.nodes[0])] }), {
-    code: 'NODE_IN_USE',
-  });
-  await f.chains.delete(chain.id, chain.revision);
   await f.nodes.delete({ nodes: [ref(grouped.nodes[0])] });
   assert.equal((await f.nodes.list(resource.id)).nodes.filter((n) => n.available).length, 2);
   assert.equal((await f.nodes.list(collection.id)).nodes.filter((n) => n.available).length, 1);
@@ -353,7 +343,7 @@ test('native VLESS URI defaults remain testable and exportable without accepting
   }
 });
 
-test('broken chain files can be repaired through the native gateway; lost identities do not bind replacement resources', async (t) => {
+test('broken retired chain files remain editable through the native gateway and do not block ordinary node deletion', async (t) => {
   const f = await fixture(t),
     resource = await local(f);
   const config = {
@@ -362,9 +352,15 @@ test('broken chain files can be repaired through the native gateway; lost identi
     entry: { resourceId: resource.id, nodeName: 'entry' },
     exit: { resourceId: resource.id, nodeName: 'exit' },
   };
-  const chain = await f.chains.create(config),
-    file = f.resources.record(chain.id).record;
-  await f.client.api('/api/file/' + file.name, { content: 'invalid-json' }, 'PATCH');
+  const file = {
+    name: 'retired-chain',
+    type: 'file',
+    source: 'local',
+    content: 'invalid-json',
+    process: [],
+    _submeld: { id: randomUUID(), role: 'chain', version: 1 },
+  };
+  await f.client.api('/api/files', file);
   assert.equal(
     (
       await f.request(
@@ -375,11 +371,13 @@ test('broken chain files can be repaired through the native gateway; lost identi
     ).status,
     200,
   );
-  assert.equal((await f.chains.get(chain.id)).available, true);
   await f.client.api('/api/sub/' + resource.upstreamName, { _submeld: null }, 'PATCH');
   await f.resources.sync();
   const list = await f.nodes.list();
   assert.notEqual(list.nodes[0].resourceId, resource.id);
   await f.nodes.delete({ nodes: [ref(list.nodes[0])] });
-  assert.equal((await f.chains.get(chain.id)).available, false);
+  assert.equal(
+    (await f.client.records('file')).find((record) => record.name === file.name).content,
+    JSON.stringify(config),
+  );
 });

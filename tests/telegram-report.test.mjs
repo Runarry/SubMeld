@@ -53,7 +53,7 @@ function fixture(count = 17) {
     createdAt: '2026-10-01T03:04:05.000Z',
     finishedAt: '2026-10-01T03:05:05.000Z',
     backendVersion: '4.7.6',
-    settings: { nodeCore: 'xray', chainCore: 'mihomo' },
+    settings: { nodeCore: 'xray' },
     metrics,
     scripts,
     total: count + 2,
@@ -132,15 +132,15 @@ function fixture(count = 17) {
         index,
         subject:
           index === 1
-            ? { kind: 'chain', id, revision, entry: node, exit: { ...node, nodeIndex: 1 } }
+            ? { kind: 'node', ...node }
             : { kind: 'temporary', previewId: id, nodeIndex: index },
         name: `节点-${index + 1} 🇸🇬 👨‍👩‍👧‍👦 中文${index === 0 ? '长名称 🌐'.repeat(100) : ''}`,
-        protocol: index === 1 ? 'chain' : 'vless',
+        protocol: 'vless',
         state: ['completed', 'partial', 'failed', 'unsupported', 'cancelled'][index % 5],
         stale: index === 1,
         message: index % 5 === 2 ? '没有完成本节点测试' : '',
         testedAt: '2026-10-01T03:05:00.000Z',
-        coreVersion: index === 2 ? null : index === 1 ? 'Mihomo v1.20.0' : 'Xray 26.9.27',
+        coreVersion: index === 2 ? null : 'Xray 26.9.27',
         measurements: values,
       };
     }),
@@ -206,7 +206,7 @@ test('shared CSV keeps all rows, chosen metrics/scripts, units, raw samples and 
   }
   assert.equal(records[3][7], '2.00 MiB/s');
   assert.equal(records[4][3], '是');
-  assert.equal(records[4][4], 'Mihomo');
+  assert.equal(records[4][4], 'Xray');
   assert.equal(records[3][4], 'Xray');
   assert.equal(records[3][5], 'Xray 26.9.27');
   assert.match(reportCsv(report), /2001:db8::9/);
@@ -305,7 +305,6 @@ test('PNG pages decode and cover every node and selected column with Chinese, em
     '已取消',
     '快照已过期',
     'Xray 26.9.27',
-    'Mihomo v1.20.0',
     '2.00 MiB/s',
     '完整参数、原始单位、采样及 IP/ASN 拓扑',
   ])

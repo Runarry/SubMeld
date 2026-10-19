@@ -31,3 +31,19 @@ await writeFile(
   'const SubMeldNet = require("node:net"), SubMeldUrl = require("node:url"), SubMeldCrypto = require("node:crypto");\n' +
     (await readFile(path, 'utf8')),
 );
+await build({
+  configFile: false,
+  logLevel: 'warn',
+  build: {
+    target: 'es2022',
+    outDir: 'dist/upstream',
+    emptyOutDir: false,
+    minify: false,
+    lib: {
+      entry: 'server/shared/legacy-chain-inputs.ts',
+      name: 'SubMeldLegacyChainInputs',
+      formats: ['iife'],
+      fileName: () => 'legacy-chain-inputs.js',
+    },
+  },
+});

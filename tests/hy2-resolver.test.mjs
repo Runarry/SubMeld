@@ -27,18 +27,12 @@ test('certificate resolution merges subscribers, keeps remaining callers alive a
   const gate = new Promise((resolve) => {
     release = resolve;
   });
-  const service = new Hy2Certificates(
-    f.resources,
-    f.certificateResolverToken(),
-    f.directory,
-    undefined,
-    async () => {
-      calls++;
-      started();
-      await gate;
-      return certificateProof(fixturePin, testCertificate);
-    },
-  );
+  const service = new Hy2Certificates(f.resources, f.certificateResolverToken(), async () => {
+    calls++;
+    started();
+    await gate;
+    return certificateProof(fixturePin, testCertificate);
+  });
   f.beforeClose(() => service.close());
   const abort = new AbortController();
   const first = service.resolve(input(), abort.signal);
@@ -75,24 +69,18 @@ test('certificate probe concurrency is bounded at four and queued requests retai
   const full = new Promise((resolve) => {
     filled = resolve;
   });
-  const service = new Hy2Certificates(
-    f.resources,
-    f.certificateResolverToken(),
-    f.directory,
-    undefined,
-    async () => {
-      calls++;
-      active++;
-      maximum = Math.max(maximum, active);
-      if (active === 4) filled();
-      try {
-        await gate;
-        throw new AppError('HY2_CERTIFICATE_MISMATCH', 'Controlled certificate mismatch', 422);
-      } finally {
-        active--;
-      }
-    },
-  );
+  const service = new Hy2Certificates(f.resources, f.certificateResolverToken(), async () => {
+    calls++;
+    active++;
+    maximum = Math.max(maximum, active);
+    if (active === 4) filled();
+    try {
+      await gate;
+      throw new AppError('HY2_CERTIFICATE_MISMATCH', 'Controlled certificate mismatch', 422);
+    } finally {
+      active--;
+    }
+  });
   f.beforeClose(() => service.close());
   const pending = Array.from({ length: 9 }, (_, i) =>
     service.resolve({ ...input(), pinSHA256: (i + 1).toString(16).padStart(64, '0') }),

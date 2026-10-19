@@ -7,12 +7,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -24,21 +22,14 @@ import (
 	"golang.org/x/crypto/blake2b"
 )
 
-type socksProxy struct {
-	Server   string `json:"server"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
 type request struct {
-	Server       string      `json:"server"`
-	Port         int         `json:"port"`
-	Ports        string      `json:"ports"`
-	ServerName   string      `json:"serverName"`
-	Obfs         string      `json:"obfs"`
-	ObfsPassword string      `json:"obfsPassword"`
-	Pin          string      `json:"pinSHA256"`
-	Proxy        *socksProxy `json:"proxy,omitempty"`
+	Server       string `json:"server"`
+	Port         int    `json:"port"`
+	Ports        string `json:"ports"`
+	ServerName   string `json:"serverName"`
+	Obfs         string `json:"obfs"`
+	ObfsPassword string `json:"obfsPassword"`
+	Pin          string `json:"pinSHA256"`
 }
 type response struct {
 	CertificatePEM string `json:"certificatePem,omitempty"`
@@ -141,11 +132,7 @@ func probe(ctx context.Context, r request) (string, string) {
 func handshake(ctx context.Context, r request, remote *net.UDPAddr, pin []byte) (string, string) {
 	var socket net.PacketConn
 	var err error
-	if r.Proxy == nil {
-		socket, err = net.ListenUDP("udp", nil)
-	} else {
-		socket, err = socksPacket(ctx, *r.Proxy)
-	}
+	socket, err = net.ListenUDP("udp", nil)
 	if err != nil {
 		return "", "HY2_CERTIFICATE_UNREACHABLE"
 	}
@@ -242,147 +229,4 @@ func (s *salamander) ReadFrom(p []byte) (int, net.Addr, error) {
 		}
 		return count, address, nil
 	}
-}
-
-type socksUDP struct {
-	net.PacketConn
-	control net.Conn
-	relay   *net.UDPAddr
-}
-
-func (s *socksUDP) Close() error { _ = s.control.Close(); return s.PacketConn.Close() }
-func (s *socksUDP) WriteTo(p []byte, address net.Addr) (int, error) {
-	target, ok := address.(*net.UDPAddr)
-	if !ok {
-		return 0, errors.New("UDP address required")
-	}
-	header := []byte{0, 0, 0}
-	if ip := target.IP.To4(); ip != nil {
-		header = append(append(header, 1), ip...)
-	} else {
-		header = append(append(header, 4), target.IP.To16()...)
-	}
-	header = binary.BigEndian.AppendUint16(header, uint16(target.Port))
-	_, err := s.PacketConn.WriteTo(append(header, p...), s.relay)
-	if err != nil {
-		return 0, err
-	}
-	return len(p), nil
-}
-func (s *socksUDP) ReadFrom(p []byte) (int, net.Addr, error) {
-	packet := make([]byte, 65535)
-	for {
-		n, sender, err := s.PacketConn.ReadFrom(packet)
-		if err != nil {
-			return 0, sender, err
-		}
-		if sender.String() != s.relay.String() || n < 4 || packet[0] != 0 || packet[1] != 0 || packet[2] != 0 {
-			continue
-		}
-		var size int
-		switch packet[3] {
-		case 1:
-			size = 4
-		case 4:
-			size = 16
-		default:
-			continue
-		}
-		if n < 6+size {
-			continue
-		}
-		address := &net.UDPAddr{IP: append(net.IP{}, packet[4:4+size]...), Port: int(binary.BigEndian.Uint16(packet[4+size : 6+size]))}
-		return copy(p, packet[6+size:n]), address, nil
-	}
-}
-
-func socksPacket(ctx context.Context, proxy socksProxy) (_ net.PacketConn, err error) {
-	if len(proxy.Username) > 255 || len(proxy.Password) > 255 {
-		return nil, errors.New("SOCKS auth length")
-	}
-	control, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(proxy.Server, strconv.Itoa(proxy.Port)))
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			control.Close()
-		}
-	}()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = control.SetDeadline(deadline)
-	}
-	if _, err = control.Write([]byte{5, 1, 2}); err != nil {
-		return nil, err
-	}
-	response := make([]byte, 2)
-	if _, err = io.ReadFull(control, response); err != nil {
-		return nil, err
-	}
-	if response[0] != 5 || response[1] != 2 {
-		return nil, errors.New("SOCKS auth required")
-	}
-	credentials := append([]byte{1, byte(len(proxy.Username))}, []byte(proxy.Username)...)
-	credentials = append(append(credentials, byte(len(proxy.Password))), []byte(proxy.Password)...)
-	if _, err = control.Write(credentials); err != nil {
-		return nil, err
-	}
-	if _, err = io.ReadFull(control, response); err != nil {
-		return nil, err
-	}
-	if response[0] != 1 || response[1] != 0 {
-		return nil, errors.New("SOCKS auth failed")
-	}
-	if _, err = control.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
-		return nil, err
-	}
-	header := make([]byte, 4)
-	if _, err = io.ReadFull(control, header); err != nil {
-		return nil, err
-	}
-	if header[0] != 5 || header[1] != 0 || header[2] != 0 {
-		return nil, errors.New("SOCKS UDP rejected")
-	}
-	var host string
-	switch header[3] {
-	case 1, 4:
-		size := 4
-		if header[3] == 4 {
-			size = 16
-		}
-		ip := make(net.IP, size)
-		if _, err = io.ReadFull(control, ip); err != nil {
-			return nil, err
-		}
-		host = ip.String()
-		if ip.IsUnspecified() {
-			host = proxy.Server
-		}
-	case 3:
-		length := []byte{0}
-		if _, err = io.ReadFull(control, length); err != nil {
-			return nil, err
-		}
-		name := make([]byte, int(length[0]))
-		if _, err = io.ReadFull(control, name); err != nil {
-			return nil, err
-		}
-		host = string(name)
-	default:
-		return nil, errors.New("SOCKS address")
-	}
-	port := make([]byte, 2)
-	if _, err = io.ReadFull(control, port); err != nil {
-		return nil, err
-	}
-	relay, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, fmt.Sprint(binary.BigEndian.Uint16(port))))
-	if err != nil {
-		return nil, err
-	}
-	socket, err := net.ListenUDP("udp", nil)
-	if err != nil {
-		return nil, err
-	}
-	_ = control.SetDeadline(time.Time{})
-	return &socksUDP{PacketConn: socket, control: control, relay: relay}, nil
 }

@@ -200,24 +200,9 @@ export function blankDraft(protocol: Protocol): NodeDraft {
 
 export const renderTargetSchema = z.enum(['mihomo', 'singbox', 'xray']);
 export type RenderTarget = z.infer<typeof renderTargetSchema>;
-export const chainItemSchema = z.strictObject({
-  kind: z.literal('chain'),
-  nodeIndex: itemSchema.shape.nodeIndex,
-  excluded: z.boolean(),
-  diagnostics: itemSchema.shape.diagnostics,
-  name: z.string().min(1).max(512),
-  entry: draftSchema,
-  exit: draftSchema,
-  available: z.boolean().default(true),
-});
-export type ChainItem = z.infer<typeof chainItemSchema>;
-export const renderItemSchema = z.union([itemSchema, chainItemSchema]);
-export type RenderItem = z.infer<typeof renderItemSchema>;
-export function isChain(item: RenderItem): item is ChainItem {
-  return 'kind' in item && item.kind === 'chain';
-}
+export type RenderItem = WorkbenchItem;
 export const renderRequestSchema = z.strictObject({
-  items: z.array(renderItemSchema).max(MAX_NODES),
+  items: z.array(itemSchema).max(MAX_NODES),
   target: renderTargetSchema,
   listenPort: z.number().int().min(1).max(65535).default(1080),
 });

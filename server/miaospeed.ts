@@ -294,7 +294,7 @@ export class MiaospeedTester {
               }
               const name = 'sm-' + row.index;
               let payload: string;
-              const core = executionCore(settings, row.subject);
+              const core = executionCore(settings);
               if (core !== 'native') {
                 const binary = heldLease.binaries.get(core);
                 if (!binary)
@@ -360,7 +360,7 @@ export class MiaospeedTester {
                 checkedAt: new Date().toISOString(),
                 error: null,
               };
-              const entry = node.entry ?? (bridge ? node.raw : null);
+              const entry = bridge ? node.raw : null;
               if (entry && value.metrics.includes('GEOIP_INBOUND')) {
                 const entryMetric = row.measurements.find((m) => m.id === 'GEOIP_INBOUND')!;
                 try {
@@ -380,9 +380,7 @@ export class MiaospeedTester {
                       [],
                     )[0],
                   );
-                  entryMetric.message = node.entry
-                    ? '真实前置节点地址信息；出口与性能由整条链测得。'
-                    : '真实节点地址信息；出口与性能经所选内核测得。';
+                  entryMetric.message = '真实节点地址信息；出口与性能经所选内核测得。';
                 } catch (error) {
                   if (signal.aborted) throw error;
                   Object.assign(entryMetric, {

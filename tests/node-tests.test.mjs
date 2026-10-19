@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fixture, ref, subject, waitFor } from './upstream-fixture.mjs';
+import { fixture, subject, waitFor } from './upstream-fixture.mjs';
 import { NodeTester } from '../dist/server/node-tests.js';
 import { AppError } from '../dist/server/errors.js';
 import { coreTargets, DEFAULT_PROBE_URL } from '../dist/server/shared/node-tests.js';
@@ -95,27 +95,14 @@ test('HY2 certificate errors stay specific without folding pin warnings into the
   assert.equal(results.find((result) => result.core === 'mihomo').status, 'passed');
   assert.equal(results.find((result) => result.core === 'xray').status, 'passed');
 });
-test('excluded raw nodes and complete chains test sequentially without changing upstream plans', async (t) => {
+test('ordinary and excluded raw nodes test sequentially without changing upstream plans', async (t) => {
   const f = await setup(t);
-  const chain = await f.chains.create({
-    name: 'chain',
-    enabled: true,
-    entry: { resourceId: f.resource.id, nodeName: 'entry' },
-    exit: { resourceId: f.resource.id, nodeName: 'exit' },
-  });
   const plan = await f.subscriptions.create({
     ...newSubscription(),
     name: 'unchanged',
-    inputs: [{ kind: 'chain', id: chain.id }],
+    inputs: [{ kind: 'resource', id: f.resource.id }],
   });
-  const chainSubject = {
-    kind: 'chain',
-    id: chain.id,
-    revision: chain.revision,
-    entry: ref(chain.entryNode),
-    exit: ref(chain.exitNode),
-  };
-  f.tester.start({ subjects: [chainSubject] });
+  f.tester.start({ subjects: f.rows.map(subject) });
   assert.equal(
     (await finished(f)).results.every((r) => r.status === 'passed'),
     true,
@@ -162,7 +149,7 @@ test('a late result cannot be saved against reordered subscription positions', a
   assert.equal(fresh[0].name, 'exit');
   assert.equal(f.nodeTests.results([subject(fresh[0])], f.kernels.versions()).results.length, 0);
 });
-test('chain member credentials changing during a test make the result stale', async (t) => {
+test('node credentials changing during a test make the result stale', async (t) => {
   const entered = deferred(),
     release = deferred();
   const f = await setup(t, async () => {
@@ -170,23 +157,7 @@ test('chain member credentials changing during a test make the result stale', as
     await release.promise;
     return { latencyMs: 1, httpStatus: 204 };
   });
-  const chain = await f.chains.create({
-    name: 'chain',
-    enabled: true,
-    entry: { resourceId: f.resource.id, nodeName: 'entry' },
-    exit: { resourceId: f.resource.id, nodeName: 'exit' },
-  });
-  f.tester.start({
-    subjects: [
-      {
-        kind: 'chain',
-        id: chain.id,
-        revision: chain.revision,
-        entry: ref(chain.entryNode),
-        exit: ref(chain.exitNode),
-      },
-    ],
-  });
+  f.tester.start({ subjects: [subject(f.rows[1])] });
   await entered.promise;
   f.b.auth.password = 'public-test-changed';
   await f.client.api(

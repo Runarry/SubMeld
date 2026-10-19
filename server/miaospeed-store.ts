@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { AppError } from './errors.js';
+import { storedSpeedSettings } from './legacy-test-data.js';
+import { record } from './converter/model.js';
 import {
   speedReportSchema,
   speedRowSchema,
@@ -10,6 +12,29 @@ import {
   type SpeedRow,
 } from './shared/miaospeed.js';
 
+const resultCounts = `SELECT report_id,
+  SUM(CASE WHEN json_extract(result,'$.subject.kind')='chain' THEN 1 ELSE 0 END) retired,
+  SUM(CASE WHEN json_extract(result,'$.subject.kind')='chain' THEN 0 ELSE 1 END) visible,
+  SUM(CASE WHEN json_extract(result,'$.subject.kind')='chain' OR json_extract(result,'$.state') IN ('pending','running') THEN 0 ELSE 1 END) finished
+  FROM speed_results GROUP BY report_id`;
+const visibleReports = `FROM speed_reports r LEFT JOIN (${resultCounts}) c ON r.id=c.report_id
+  WHERE COALESCE(c.retired,0)=0 OR c.visible>0`;
+const countsSchema = z.object({ retired: z.number(), visible: z.number(), finished: z.number() });
+function storedSummary(input: unknown) {
+  return reportSummarySchema.parse(
+    record(input) ? { ...input, settings: storedSpeedSettings(input.settings) } : input,
+  );
+}
+function legacyProgress<T extends z.infer<typeof reportSummarySchema>>(report: T): T {
+  if (report.state !== 'running') return report;
+  return {
+    ...report,
+    state: 'interrupted',
+    current: null,
+    error: '服务重启，未完成的任务已中断。',
+  };
+}
+
 export class MiaospeedStore {
   constructor(private db: Database.Database) {
     db.exec(
@@ -18,7 +43,9 @@ export class MiaospeedStore {
     for (const entry of z
       .array(z.object({ id: z.string(), metadata: z.string() }))
       .parse(db.prepare('SELECT id,metadata FROM speed_reports').all())) {
-      const meta = reportSummarySchema.parse(JSON.parse(entry.metadata));
+      // Retired mixed reports are exposed as a read-only view; never rewrite their original rows.
+      if (this.counts(entry.id).retired) continue;
+      const meta = storedSummary(JSON.parse(entry.metadata));
       if (meta.state !== 'running') continue;
       const report = this.get(entry.id);
       report.state = 'interrupted';
@@ -39,7 +66,7 @@ export class MiaospeedStore {
       .object({ value: z.string() })
       .optional()
       .parse(this.db.prepare("SELECT value FROM settings WHERE key='miaospeed.settings'").get());
-    return speedSettingsSchema.parse(row ? JSON.parse(row.value) : {});
+    return storedSpeedSettings(row ? JSON.parse(row.value) : {});
   }
   updateSettings(input: unknown) {
     const value = speedSettingsSchema.parse(input);
@@ -84,26 +111,70 @@ export class MiaospeedStore {
           .prepare('SELECT result FROM speed_results WHERE report_id=? ORDER BY position')
           .all(id),
       );
-    return speedReportSchema.parse({
-      ...JSON.parse(row.metadata),
-      results: results.map((row) => JSON.parse(row.result)),
+    const raw: unknown[] = results.map((row) => JSON.parse(row.result));
+    const visible = raw.filter(
+      (value) => !(record(value) && record(value.subject) && value.subject.kind === 'chain'),
+    );
+    const retired = visible.length !== raw.length;
+    if (retired && !visible.length) throw new AppError('NOT_FOUND', '测试报告已不存在。', 404);
+    const report = speedReportSchema.parse({
+      ...storedSummary(JSON.parse(row.metadata)),
+      results: visible,
     });
+    if (!retired) return report;
+    report.total = report.results.length;
+    report.completed = report.results.filter(
+      (value) => !['pending', 'running'].includes(value.state),
+    ).length;
+    report.current = null;
+    if (report.state === 'running') {
+      for (const value of report.results)
+        if (value.state === 'pending' || value.state === 'running') {
+          value.state = 'cancelled';
+          value.message = '服务重启，凭据副本已清除；请重新发起测试。';
+        }
+    }
+    return legacyProgress(report);
+  }
+  private counts(id: string) {
+    return countsSchema.parse(
+      this.db
+        .prepare(`SELECT retired,visible,finished FROM (${resultCounts}) WHERE report_id=?`)
+        .get(id) ?? { retired: 0, visible: 0, finished: 0 },
+    );
   }
   list(page: number) {
     return {
       reports: z
-        .array(z.object({ metadata: z.string() }))
+        .array(
+          z.object({
+            metadata: z.string(),
+            retired: z.number(),
+            visible: z.number(),
+            finished: z.number(),
+          }),
+        )
         .parse(
           this.db
             .prepare(
-              'SELECT metadata FROM speed_reports ORDER BY created_at DESC LIMIT 25 OFFSET ?',
+              `SELECT r.metadata,COALESCE(c.retired,0) retired,COALESCE(c.visible,0) visible,COALESCE(c.finished,0) finished ${visibleReports} ORDER BY r.created_at DESC LIMIT 25 OFFSET ?`,
             )
             .all(page * 25),
         )
-        .map((row) => reportSummarySchema.parse(JSON.parse(row.metadata))),
+        .map((row) => {
+          const meta = storedSummary(JSON.parse(row.metadata));
+          return row.retired
+            ? legacyProgress({
+                ...meta,
+                total: row.visible,
+                completed: row.finished,
+                current: null,
+              })
+            : meta;
+        }),
       total: z
         .object({ n: z.number() })
-        .parse(this.db.prepare('SELECT COUNT(*) n FROM speed_reports').get()).n,
+        .parse(this.db.prepare(`SELECT COUNT(*) n ${visibleReports}`).get()).n,
     };
   }
   remove(id: string) {

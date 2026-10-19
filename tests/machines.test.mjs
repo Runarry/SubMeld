@@ -25,6 +25,19 @@ const exported = (id = 'entry', core = 'sing-box', port = 443) => ({
   uri: uri(id, port),
   tlsSpkiSha256: 'public-certificate-digest',
 });
+async function legacyChain(f, entry, exit) {
+  const file = {
+    name: 'legacy-chain-' + randomUUID(),
+    type: 'file',
+    source: 'local',
+    process: [],
+    content: JSON.stringify({ name: 'legacy chain', enabled: true, entry, exit }),
+    _submeld: { id: f.machine.resourceId, role: 'chain', version: 1 },
+  };
+  await f.client.api('/api/files', file);
+  await f.resources.sync();
+  return file;
+}
 function snapshot(letter = 'a', exports = [exported()], pendingCores = []) {
   return {
     schemaVersion: 1,
@@ -424,26 +437,31 @@ test('only queued tasks can cancel; stale queued revisions are never delivered a
   );
 });
 
-test('deleting a pending renamed node still protects the chain that uses its last applied name', async (t) => {
+test('legacy client-chain files do not block deleting a pending renamed machine node', async (t) => {
   const entry = exported('entry'),
     exit = exported('exit', 'xray', 444);
   const f = await enrolled(t, snapshot('a', [entry, exit]));
-  await f.chains.create({
-    name: 'machine-chain',
-    entry: { resourceId: f.machine.resourceId, nodeName: entry.name },
-    exit: { resourceId: f.machine.resourceId, nodeName: exit.name },
-  });
+  const legacy = await legacyChain(
+    f,
+    { resourceId: f.machine.resourceId, nodeName: entry.name },
+    { resourceId: f.machine.resourceId, nodeName: exit.name },
+  );
   const renamed = { ...entry, name: 'renamed-entry', uri: uri('renamed-entry') };
   await f.report(snapshot('b', [renamed, exit], ['sing-box']));
-  await assert.rejects(
-    f.machines.enqueue(f.machine.id, {
-      action: 'node.delete',
-      params: { id: entry.id },
-      expectedRevision: revision('b'),
-    }),
-    { code: 'NODE_IN_USE' },
+  const { task } = await f.machines.enqueue(f.machine.id, {
+    action: 'node.delete',
+    params: { id: entry.id },
+    expectedRevision: revision('b'),
+  });
+  assert.equal(task.status, 'queued');
+  assert.equal(
+    (await f.machines.poll(f.machine.id, f.authorization, 0)).command.action,
+    'node.delete',
   );
-  assert.equal(f.machines.activeTask(f.machine.id), null);
+  assert.equal(
+    (await f.client.records('file')).find((file) => file.name === legacy.name).content,
+    legacy.content,
+  );
 });
 
 test('forward publication changes only the URI fragment, retaining credentials and unique exported names', async (t) => {
@@ -485,7 +503,7 @@ test('forward publication changes only the URI fragment, retaining credentials a
   assert.deepEqual(await f.machines.getPrivateSnapshot(f.machine.id), initial);
 });
 
-test('forward deletion, cascading exit deletion and all-core uninstall protect applied forwarding chain members', async (t) => {
+test('legacy client-chain files do not block forward deletion, cascading exit deletion or all-core uninstall', async (t) => {
   const forwarding = {
     id: 'forward-a:7443',
     name: 'forward-entry:7443',
@@ -493,7 +511,7 @@ test('forward deletion, cascading exit deletion and all-core uninstall protect a
     kind: 'forward',
     uri: uri('target-name', 7443),
   };
-  const exit = exported('chain-exit', 'xray', 7444);
+  const exit = exported('exit', 'xray', 7444);
   const initial = snapshot('a', [forwarding, exit]);
   initial.nodes = initial.nodes.filter((node) => node.id === exit.id);
   initial.relay.exits = [{ id: 'exit-a', name: 'remote-exit', uri: uri('remote') }];
@@ -507,11 +525,11 @@ test('forward deletion, cascading exit deletion and all-core uninstall protect a
     },
   ];
   const f = await enrolled(t, initial);
-  await f.chains.create({
-    name: 'forward-chain',
-    entry: { resourceId: f.machine.resourceId, nodeName: forwarding.name },
-    exit: { resourceId: f.machine.resourceId, nodeName: exit.name },
-  });
+  await legacyChain(
+    f,
+    { resourceId: f.machine.resourceId, nodeName: forwarding.name },
+    { resourceId: f.machine.resourceId, nodeName: exit.name },
+  );
   const pending = structuredClone(initial);
   pending.revision = revision('b');
   pending.pendingCores = ['sing-box'];
@@ -523,17 +541,14 @@ test('forward deletion, cascading exit deletion and all-core uninstall protect a
     ['forward.delete', { id: 'forward-a' }],
     ['exit.delete', { id: 'exit-a', cascade: true, 'confirm-cascade': true }],
     ['core.uninstall', { core: 'all', purge: true, 'confirm-purge': true }],
-  ])
-    await assert.rejects(
-      f.machines.enqueue(f.machine.id, { action, params, expectedRevision: pending.revision }),
-      { code: 'NODE_IN_USE' },
-    );
+  ]) {
+    const { task } = await f.machines.enqueue(f.machine.id, {
+      action,
+      params,
+      expectedRevision: pending.revision,
+    });
+    assert.equal(task.status, 'queued');
+    assert.equal((await f.machines.cancel(f.machine.id, task.id)).task.status, 'cancelled');
+  }
   assert.equal(f.machines.activeTask(f.machine.id), null);
-  // An ID that only shares the prefix must not select this forward's exports.
-  const unrelated = await f.machines.enqueue(f.machine.id, {
-    action: 'forward.delete',
-    params: { id: 'forward' },
-    expectedRevision: pending.revision,
-  });
-  assert.equal((await f.machines.cancel(f.machine.id, unrelated.task.id)).task.status, 'cancelled');
 });

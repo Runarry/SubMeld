@@ -18,7 +18,7 @@ export function reportColumns(report: SpeedReport): { id: string; label: string 
 }
 
 export function reportTitle(report: SpeedReport): string {
-  return `${report.name} · ${report.createdAt} · miaospeed ${report.backendVersion ?? '未知'} · 节点内核 ${speedCoreLabels[report.settings.nodeCore]} · 链内核 ${speedCoreLabels[report.settings.chainCore]}`;
+  return `${report.name} · ${report.createdAt} · miaospeed ${report.backendVersion ?? '未知'} · 节点内核 ${speedCoreLabels[report.settings.nodeCore]}`;
 }
 
 function cell(input: unknown) {
@@ -52,7 +52,7 @@ export function reportCsv(
       row.protocol,
       row.state,
       row.stale ? '是' : '否',
-      speedCoreLabels[executionCore(report.settings, row.subject)],
+      speedCoreLabels[executionCore(report.settings)],
       row.coreVersion,
       ...columns.map((column) => {
         const metric = row.measurements.find((measurement) => measurement.id === column.id);

@@ -1,25 +1,14 @@
-import { nodeRefSchema, revisionSchema } from './resources.js';
+import { nodeRefSchema } from './resources.js';
 import { z } from 'zod';
 import { MAX_NODES, renderTargetSchema } from './contracts.js';
 
 export const DEFAULT_PROBE_URL = 'https://cp.cloudflare.com/generate_204';
 export const coreTargets = ['mihomo', 'singbox', 'xray'] as const;
 export const coreLabels = { mihomo: 'Mihomo', singbox: 'sing-box', xray: 'Xray' };
-export const testSubjectSchema = z.discriminatedUnion('kind', [
-  nodeRefSchema.extend({ kind: z.literal('node') }),
-  z.strictObject({
-    kind: z.literal('chain'),
-    id: z.string().uuid(),
-    revision: revisionSchema,
-    entry: nodeRefSchema,
-    exit: nodeRefSchema,
-  }),
-]);
+export const testSubjectSchema = nodeRefSchema.extend({ kind: z.literal('node') });
 export type TestSubject = z.infer<typeof testSubjectSchema>;
 export function subjectKey(subject: TestSubject) {
-  return subject.kind === 'node'
-    ? 'node:' + subject.resourceId + ':' + subject.nodeIndex
-    : 'chain:' + subject.id;
+  return 'node:' + subject.resourceId + ':' + subject.nodeIndex;
 }
 export function sameSubject(a: TestSubject, b: TestSubject) {
   return JSON.stringify(testSubjectSchema.parse(a)) === JSON.stringify(testSubjectSchema.parse(b));

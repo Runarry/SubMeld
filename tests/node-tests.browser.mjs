@@ -75,6 +75,7 @@ test('unified batch testing includes excluded originals and retains results and 
     await page.getByRole('button', { name: '节点', exact: true }).click();
     await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
     await expect(page.locator('.node-row')).toHaveCount(2);
+    await expect(page.getByRole('combobox', { name: '所属订阅', exact: true })).toBeEnabled();
     for (const checkbox of await page.locator('.node-row input[type=checkbox]').all())
       await checkbox.check();
     await expect(page.locator('.selection-bar')).toContainText('已选 2');

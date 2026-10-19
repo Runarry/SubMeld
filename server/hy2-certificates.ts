@@ -13,20 +13,10 @@ import {
 } from './shared/hy2-certificates.js';
 import { certificateProof, verifyCertificateProof } from './converter/certificate-pin.js';
 import { hysteriaPortRanges } from './converter/hysteria2.js';
-import { validateDraft } from './converter/model.js';
-import { renderInput } from './converter/render.js';
-import { freeBridgePort, launchBridge } from './miaospeed-bridge.js';
-import type { KernelManager } from './kernels.js';
 import { startProcess } from './kernel-process.js';
 
 type Job = { controller: AbortController; promise: Promise<Hy2Certificate>; users: number };
 const cacheSchema = z.record(z.string().regex(/^[a-f0-9]{64}$/), z.unknown());
-const proxySchema = z.object({
-  server: z.string(),
-  port: z.number(),
-  username: z.string(),
-  password: z.string(),
-});
 const messages: Record<string, string> = {
   HY2_CERTIFICATE_MISMATCH: 'HY2 服务端证书与 pinSHA256 不匹配，未生成公钥固定校验。',
   HY2_CERTIFICATE_TIMEOUT: 'HY2 证书握手超时；节点不可达且没有已验证缓存时无法生成 sing-box 配置。',
@@ -36,7 +26,7 @@ const messages: Record<string, string> = {
   HY2_PROBE_INVALID: 'HY2 证书探测参数无效。',
 };
 
-/** Only public certificate proofs are persisted; probe inputs and bridge credentials stay in memory. */
+/** Only public certificate proofs are persisted; probe inputs stay in memory. */
 export class Hy2Certificates {
   private jobs = new Map<string, Job>();
   private waiters = new Set<() => void>();
@@ -45,8 +35,6 @@ export class Hy2Certificates {
   constructor(
     readonly resources: UpstreamResources,
     private readonly token: string,
-    private readonly dataDir: string,
-    private readonly kernels?: KernelManager,
     private readonly probeOverride?: Hy2CertificateResolver,
   ) {}
 
@@ -66,8 +54,6 @@ export class Hy2Certificates {
     } catch {
       throw new AppError('HY2_PROBE_INVALID', 'HY2 证书探测端口范围无效。', 422);
     }
-    if (request.entry && validateDraft(request.entry, 0).some((d) => d.level === 'error'))
-      throw new AppError('HY2_PROBE_INVALID', '采证前置节点参数无效。', 422);
     let job = this.jobs.get(request.pinSHA256);
     if (!job || job.controller.signal.aborted) {
       const controller = new AbortController();
@@ -223,48 +209,11 @@ export class Hy2Certificates {
   }
 
   private async probe(request: Hy2CertificateRequest, signal: AbortSignal) {
-    let bridge: Awaited<ReturnType<typeof launchBridge>> | undefined;
-    let lease: ReturnType<KernelManager['snapshot']> | undefined;
     let child: ReturnType<typeof startProcess> | undefined;
     const abort = () => {
       void child?.stop();
     };
     try {
-      if (request.entry) {
-        lease = this.kernels?.snapshot();
-        const binary = lease?.binaries.get('mihomo');
-        if (!binary)
-          throw new AppError(
-            'HY2_RESOLVER_UNAVAILABLE',
-            '经前置采证需要已安装的 Mihomo 内核。',
-            422,
-          );
-        const port = await freeBridgePort('127.0.0.1');
-        const rendered = await renderInput(
-          {
-            target: 'mihomo',
-            listenPort: port,
-            items: [{ nodeIndex: 0, excluded: false, diagnostics: [], draft: request.entry }],
-          },
-          this.resources.client,
-          signal,
-        );
-        bridge = await launchBridge(
-          binary,
-          rendered.full,
-          port,
-          this.dataDir,
-          '127.0.0.1',
-          signal,
-          '127.0.0.1',
-        );
-      }
-      const target = { ...request };
-      delete target.entry;
-      const input = {
-        ...target,
-        ...(bridge ? { proxy: proxySchema.parse(JSON.parse(bridge.payload)) } : {}),
-      };
       const binary = fileURLToPath(
         new URL(
           (import.meta.url.endsWith('.ts') ? '../dist/' : '../') +
@@ -274,7 +223,7 @@ export class Hy2Certificates {
         ),
       );
       signal.throwIfAborted();
-      child = startProcess(binary, [], undefined, JSON.stringify(input));
+      child = startProcess(binary, [], undefined, JSON.stringify(request));
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) abort();
       await child.done;
@@ -299,8 +248,6 @@ export class Hy2Certificates {
     } finally {
       signal.removeEventListener('abort', abort);
       await child?.stop();
-      await bridge?.close();
-      await lease?.release();
     }
   }
 

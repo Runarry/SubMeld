@@ -7,11 +7,7 @@ import { readJson } from './input.js';
 import { identityKey } from './sub-store.js';
 import { hash, marker, type UpstreamResources } from './upstream-resources.js';
 import { tunnelCertificate } from './machine-assets.js';
-import {
-  relayRouteSchema,
-  machineOperationSchema,
-  machineExportSchema,
-} from './shared/machines.js';
+import { relayRouteSchema, machineOperationSchema } from './shared/machines.js';
 import { revisionSchema } from './shared/resources.js';
 
 const createSchema = relayRouteSchema
@@ -438,55 +434,6 @@ export class RelayStore {
       return undefined;
     }
   }
-  private async assertNativeReplacement(saved: Deployment) {
-    const machine = this.machines.list().find((item) => item.id === saved.route.entryMachineId);
-    if (!machine) throw new AppError('MACHINE_NOT_FOUND', '入口机器不存在。', 404);
-    await this.resources.sync();
-    const privateFiles = this.resources
-      .files('machine-snapshot')
-      .filter((file) => marker(file.record)?.parent === machine.id);
-    if (privateFiles.length !== 1)
-      throw new AppError('MACHINE_SNAPSHOT_INVALID', '无法唯一核对入口已生效节点。', 409);
-    let applied: z.infer<typeof machineExportSchema>[];
-    try {
-      const value = z
-        .object({
-          applied: z.record(z.string(), z.object({ exports: z.array(machineExportSchema) })),
-        })
-        .parse(JSON.parse(String(privateFiles[0]!.record.content)));
-      applied = Object.values(value.applied).flatMap((item) => item.exports);
-    } catch {
-      throw new AppError(
-        'MACHINE_SNAPSHOT_INVALID',
-        '无法核对入口已生效节点，请等待有效上报。',
-        409,
-      );
-    }
-    const names = new Set(
-      applied
-        .filter((item) =>
-          saved.route.kind === 'forward'
-            ? item.kind === 'forward' &&
-              !!saved.forwardId &&
-              item.id.startsWith(saved.forwardId + ':')
-            : item.kind === 'node' && item.id === saved.route.entryNodeId,
-        )
-        .map((item) => item.name),
-    );
-    if (
-      !names.size ||
-      !this.resources.listResources().some((item) => item.id === machine.resourceId)
-    )
-      return;
-    const snapshot = await this.resources.preview(machine.resourceId);
-    await this.resources.assertDeletable(
-      snapshot.rows
-        .filter((row) =>
-          names.has(String(row.original?.name ?? row.processed?.name ?? row.view.name)),
-        )
-        .map((row) => row.view),
-    );
-  }
   async update(id: string, input: unknown) {
     const { revision, ...value } = updateSchema.parse(input);
     return this.exclusive(async () => {
@@ -564,14 +511,6 @@ export class RelayStore {
         previous.route.kind === value.kind &&
         previous.route.entryMachineId === value.entryMachineId &&
         (value.kind !== 'protocol' || previous.route.entryNodeId === value.entryNodeId);
-      if (
-        !compatible ||
-        (value.kind === 'forward' && value.listenPort !== previous.route.listenPort)
-      ) {
-        if (previous.route.kind === 'tunnel') {
-          if (value.kind !== 'tunnel') await this.assertTunnelDeletable(previous);
-        } else await this.assertNativeReplacement(previous);
-      }
       if (compatible && value.kind !== 'tunnel') {
         saved.exitId = previous.exitId;
         saved.forwardId = previous.forwardId;
@@ -658,7 +597,6 @@ export class RelayStore {
           '线路更新尚未完成，请先重试应用并完成旧资源清理。',
           409,
         );
-      if (saved.route.kind === 'tunnel') await this.assertTunnelDeletable(saved);
       if (saved.step) {
         let task;
         try {
@@ -804,13 +742,9 @@ export class RelayStore {
       const previous = migration.previous;
       const next =
         previous.route.kind === 'tunnel'
-          ? await this.tunnelStep(previous, saved.route.kind === 'tunnel')
+          ? await this.tunnelStep(previous)
           : await this.nativeStep(previous);
-      if (next) {
-        if (['forward.delete', 'binding.delete'].includes(next.operation.action))
-          await this.assertNativeReplacement(previous);
-        return next;
-      }
+      if (next) return next;
       if (previous.route.kind === 'tunnel' && saved.route.kind !== 'tunnel')
         await this.publishTunnel(previous, true);
       migration.phase = 'deploy';
@@ -824,18 +758,7 @@ export class RelayStore {
         throw new AppError('TARGET_CHANGED', '目标配置已变化，线路未继续应用。', 409);
       const next =
         saved.route.kind === 'tunnel' ? await this.tunnelStep(saved) : await this.nativeStep(saved);
-      if (next) {
-        if (
-          migration &&
-          next.operation.action === 'forward.edit' &&
-          migration.previous.route.listenPort !== saved.route.listenPort
-        ) {
-          const records = await this.nativeRecords(saved);
-          if (records.forward?.listen_port_start !== saved.route.listenPort)
-            await this.assertNativeReplacement(migration.previous);
-        }
-        return next;
-      }
+      if (next) return next;
       if (!migration?.retire.length) return null;
       if (saved.route.kind === 'tunnel') await this.publishTunnel(saved);
       migration.phase = 'retire';
@@ -913,11 +836,9 @@ export class RelayStore {
   }
   private async tunnelStep(
     saved: Deployment,
-    preserveSource = false,
   ): Promise<{ machineId: string; operation: Operation } | null> {
     const r = saved.route;
     if (saved.deleting) {
-      if (!preserveSource) await this.assertTunnelDeletable(saved);
       const resources = [
         { machineId: r.entryMachineId, id: r.id, revision: saved.entryTunnelRevision },
         ...[...saved.hops]
@@ -930,7 +851,7 @@ export class RelayStore {
       const existing = reports.find((t) => t.id === current.id);
       if (!existing && !current.revision) {
         saved.stage++;
-        return this.tunnelStep(saved, preserveSource);
+        return this.tunnelStep(saved);
       }
       return {
         machineId: current.machineId,
@@ -1054,14 +975,6 @@ export class RelayStore {
         });
       await this.resources.syncUnlocked();
     });
-  }
-  private async assertTunnelDeletable(saved: Deployment) {
-    await this.resources.sync();
-    if (!this.resources.listResources().some((r) => r.id === saved.sourceId)) return;
-    await this.resources.prepare([saved.sourceId]);
-    await this.resources.assertDeletable(
-      this.resources.cached(saved.sourceId).rows.map((row) => row.view),
-    );
   }
   private async invalidateSource(saved: Saved) {
     const machine = this.machines.list().find((m) => m.id === saved.route.entryMachineId);

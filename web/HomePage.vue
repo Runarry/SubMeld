@@ -18,7 +18,7 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1>订阅与测试</h1>
-        <p>用 Sub-Store 管理订阅，在测试中心检查节点与两跳链的质量。</p>
+        <p>用 Sub-Store 管理订阅，在测试中心检查节点质量。</p>
       </div>
     </header>
     <div class="panel">

@@ -392,16 +392,25 @@ test('restarting preserves the reporting identity and token without a second nod
   }
 });
 
-test('chains follow same-name updates and become invalid on removal; late results cannot overwrite current ones', async (t) => {
+test('legacy chain files do not block reports or bypass stale test-result protection', async (t) => {
   const f = await enabledFixture(t),
     id = randomUUID();
   await expectStatus(await report(f, id, payload([rawNode('entry'), rawNode('exit', 444)])), 201);
-  const chain = await f.chains.create({
-    name: 'reported-chain',
-    enabled: true,
-    entry: { resourceId: id, nodeName: 'entry' },
-    exit: { resourceId: id, nodeName: 'exit' },
-  });
+  const legacy = {
+    name: 'legacy-reported-chain',
+    source: 'local',
+    type: 'file',
+    process: [],
+    content: JSON.stringify({
+      name: 'legacy chain',
+      enabled: true,
+      entry: { resourceId: id, nodeName: 'entry' },
+      exit: { resourceId: id, nodeName: 'exit' },
+    }),
+    _submeld: { id, role: 'chain', version: 1 },
+  };
+  await f.client.api('/api/files', legacy);
+  await f.resources.sync();
   const before = subject((await f.nodes.list(id)).nodes[0]);
   const result = {
     subject: before,
@@ -421,9 +430,8 @@ test('chains follow same-name updates and become invalid on removal; late result
     await report(f, id, payload([rawNode('entry', 8443), rawNode('exit', 444)])),
     200,
   );
-  const updated = await f.chains.get(chain.id);
-  assert.equal(updated.available, true);
-  assert.equal(f.resources.resolve(updated.entry).processed.port, 8443);
+  await f.resources.preview(id);
+  assert.equal(f.resources.resolve({ resourceId: id, nodeName: 'entry' }).processed.port, 8443);
   assert.equal(f.miaospeedInput.matches(before), false);
   assert.equal(f.nodeTests.fresh(result, new Map([['mihomo', 'test']])).stale, true);
   const current = subject((await f.nodes.list(id)).nodes[0]);
@@ -435,8 +443,94 @@ test('chains follow same-name updates and become invalid on removal; late result
     9,
   );
   await expectStatus(await report(f, id, payload([rawNode('exit', 444)])), 200);
-  const missing = await f.chains.get(chain.id);
-  assert.equal(missing.available, false);
-  assert.match(missing.error, /删除|改名|排除/);
+  const remaining = await f.nodes.list(id);
+  assert.deepEqual(
+    remaining.nodes.map((node) => node.name),
+    ['exit'],
+  );
   assert.equal(f.resources.record(id).record._submeld.id, id);
+  assert.equal(
+    (await f.client.records('file')).find((file) => file.name === legacy.name).content,
+    legacy.content,
+  );
+});
+
+test('legacy chain files are ignored before identity checks and remain untouched during node and native resource writes', async (t) => {
+  const f = await enabledFixture(t),
+    id = randomUUID();
+  await expectStatus(await report(f, id, payload([rawNode('entry'), rawNode('exit', 444)])), 201);
+  const files = [
+    {
+      name: 'legacy-valid',
+      content: JSON.stringify({
+        name: 'legacy',
+        enabled: true,
+        entry: { resourceId: id, nodeName: 'entry' },
+        exit: { resourceId: id, nodeName: 'exit' },
+      }),
+      _submeld: { id, role: 'chain', version: 1 },
+    },
+    {
+      name: 'legacy-duplicate',
+      content: '{broken JSON',
+      _submeld: { id, role: 'chain', version: 1 },
+    },
+    {
+      name: 'legacy-invalid-marker',
+      content: 'not JSON',
+      _submeld: { id: 'invalid UUID', role: 'chain', version: 'unsupported' },
+    },
+  ].map((file) => ({ ...file, type: 'file', source: 'local', process: [] }));
+  for (const file of files) await f.client.api('/api/files', file);
+  await f.resources.sync();
+  assert.equal(f.resources.record(id).type, 'sub');
+  assert.equal(f.resources.files().length, 0);
+  assert.equal((await f.nodes.list(id)).total, 2);
+  const { resourceId, revision, snapshotHash, nodeIndex } = (await f.nodes.list(id)).nodes[0];
+  assert.equal(
+    (await f.nodes.delete({ nodes: [{ resourceId, revision, snapshotHash, nodeIndex }] })).deleted,
+    1,
+  );
+  assert.deepEqual(
+    (await f.nodes.list(id)).nodes.map((node) => node.name),
+    ['exit'],
+  );
+  const source = f.resources.record(id).record;
+  await assert.rejects(
+    f.resources.write(async () => {
+      await f.client.api(
+        '/api/sub/' + encodeURIComponent(source.name),
+        { displayName: 'updated before controlled failure' },
+        'PATCH',
+      );
+      throw new AppError('CONTROLLED_WRITE_FAILURE', 'controlled failure', 502);
+    }),
+    { code: 'CONTROLLED_WRITE_FAILURE' },
+  );
+  assert.equal(f.resources.resource(id).name, 'updated before controlled failure');
+  const response = await f.resources.write(() =>
+    f.client.request('/api/sub/' + encodeURIComponent(source.name), { method: 'DELETE' }),
+  );
+  assert.equal(response.ok, true);
+  assert.equal(f.resources.listResources().length, 0);
+  const stored = await f.client.records('file');
+  for (const file of files) {
+    const found = stored.find((item) => item.name === file.name);
+    assert.equal(found.content, file.content);
+    assert.deepEqual(found._submeld, file._submeld);
+  }
+  // Only the retired role is ignored; active file identities still conflict.
+  await expectStatus(await report(f, id, payload()), 201);
+  await f.client.api('/api/files', {
+    name: 'active-duplicate',
+    source: 'local',
+    type: 'file',
+    content: '{}',
+    process: [],
+    _submeld: { id, role: 'template', version: 1 },
+  });
+  await assert.rejects(f.resources.sync(), { code: 'UPSTREAM_ID_DUPLICATE' });
+  await f.client.api('/api/file/active-duplicate', undefined, 'DELETE');
+  await f.resources.sync();
+  assert.equal(f.resources.record(id).type, 'sub');
 });

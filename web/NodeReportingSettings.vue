@@ -129,7 +129,7 @@ onMounted(() => void act(load));
         支持节点链接、Base64 和含内联节点的 YAML/JSON，最多 4 MiB、2,000
         个节点。空内容或解析失败保留旧列表。
       </p>
-      <p>节点移除或改名后，引用它的两跳链会显示失效。网页修改的节点内容会被下次有效上报覆盖。</p>
+      <p>网页修改的节点内容会被下次有效上报覆盖。</p>
     </form>
     <p v-if="message" class="notice" role="status">{{ message }}</p>
     <template #footer>

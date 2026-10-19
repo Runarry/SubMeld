@@ -64,7 +64,7 @@ test('Telegram saves an independent complete preset and handles write-only secre
         proxyUrl: 'http://browser-user:' + originalProxySecret + '@127.0.0.1:8080',
         allowedUserIds: ['123456789'],
         profile: {
-          settings: { ...webSettings, chainCore: 'singbox' },
+          settings: webSettings,
           metrics: ['TEST_PING_RTT'],
           scriptIds: [],
         },
@@ -119,7 +119,6 @@ test('Telegram saves an independent complete preset and handles write-only secre
     expect(stored.profile).toEqual({
       settings: {
         ...webSettings,
-        chainCore: 'singbox',
         nodeCore: 'xray',
         pingUrl: strings['HTTPS 连通性目标'],
         downloadUrl: strings.下载目标,

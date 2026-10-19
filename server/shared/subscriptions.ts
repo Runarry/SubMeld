@@ -37,7 +37,6 @@ export function outputGroup(format: OutputFormat): TargetGroup {
 }
 export const inputRefSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('resource'), id: z.string().uuid() }),
-  z.strictObject({ kind: z.literal('chain'), id: z.string().uuid() }),
   nodeSelectorSchema.extend({ kind: z.literal('node') }),
 ]);
 export type InputRef = z.infer<typeof inputRefSchema>;

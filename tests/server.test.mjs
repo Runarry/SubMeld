@@ -32,7 +32,6 @@ before(async () => {
       auth,
 
       nodes: settings.nodes,
-      chains: settings.chains,
 
       subscriptions: settings.subscriptions,
     }).fetch,
@@ -159,7 +158,6 @@ test('login creates an HttpOnly Strict cookie and production adds Secure and __H
     auth: new Auth(hash),
 
     nodes: settings.nodes,
-    chains: settings.chains,
 
     subscriptions: settings.subscriptions,
   });
@@ -183,7 +181,6 @@ test('opt-in production HTTP sessions authenticate and logout without weakening 
     config: { ...config, development: false, publicOrigin },
     auth: new Auth(hash),
     nodes: settings.nodes,
-    chains: settings.chains,
     subscriptions: settings.subscriptions,
   });
   const headers = {

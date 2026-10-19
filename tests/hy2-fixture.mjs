@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { fixture } from './upstream-fixture.mjs';
 import { node } from './fixtures.mjs';
-import { start, dualPort } from './chain-connections.mjs';
+import { start, dualPort } from './kernel-fixture.mjs';
 import { testCertificate, testKey } from './source-tls-fixture.mjs';
 import { KernelManager } from '../dist/server/kernels.js';
 import { Hy2Certificates } from '../dist/server/hy2-certificates.js';
@@ -24,12 +24,7 @@ export async function hy2Fixture(t) {
   const f = await fixture(t, {
     makeCertificates(store, directory) {
       kernels = new KernelManager(directory);
-      return new Hy2Certificates(
-        store.resources,
-        store.certificateResolverToken(),
-        directory,
-        kernels,
-      );
+      return new Hy2Certificates(store.resources, store.certificateResolverToken());
     },
   });
   await kernels.initialize();
@@ -127,32 +122,15 @@ export async function hy2Fixture(t) {
     };
   }
   async function plan(value, formats = ['mihomo', 'singbox', 'xray'], listenPort = 1080) {
-    const chain = value.kind === 'chain';
-    const drafts = chain
-      ? [
-          { ...value.entry, name: 'entry' },
-          { ...value.exit, name: 'exit' },
-        ]
-      : [value];
     const resource = await f.nodes.create({
       name: 'HY2 controlled ' + ++sequence,
       source: 'local',
-      content: JSON.stringify({ proxies: drafts.map(toUpstream) }),
+      content: JSON.stringify({ proxies: [toUpstream(value)] }),
     });
-    let input = { kind: 'resource', id: resource.id };
-    if (chain) {
-      const saved = await f.chains.create({
-        name: value.name,
-        enabled: true,
-        entry: { resourceId: resource.id, nodeName: 'entry' },
-        exit: { resourceId: resource.id, nodeName: 'exit' },
-      });
-      input = { kind: 'chain', id: saved.id };
-    }
     return f.subscriptions.create({
       ...newSubscription(),
       name: 'HY2 plan ' + sequence,
-      inputs: [input],
+      inputs: [{ kind: 'resource', id: resource.id }],
       formats,
       listenPort,
     });
@@ -194,7 +172,7 @@ export async function hy2Fixture(t) {
   const http = createServer((_req, res) => {
     counts.tcp++;
     res.writeHead(200);
-    res.end('SubMeld-loopback-chain');
+    res.end('SubMeld-loopback-node');
   });
   http.listen(0, '127.0.0.1');
   await once(http, 'listening');

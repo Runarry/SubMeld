@@ -116,7 +116,7 @@ test('home opens upstream nodes and test center; support files and test settings
   await expect(page.getByRole('region', { name: '配套文件管理', exact: true })).toBeVisible();
   await expect(page).toHaveURL(/#\/support-files$/);
   await expect(page.getByLabel('HTTPS 测试地址', { exact: true })).toHaveCount(0);
-  for (const name of ['管理节点', '管理两跳链', '管理输出方案', '管理测试任务与结果'])
+  for (const name of ['管理节点', '管理输出方案', '管理测试任务与结果'])
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('support-files.png'), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(

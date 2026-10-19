@@ -17,7 +17,6 @@ import {
   type InputRef,
   type OutputFormat,
 } from '../server/shared/subscriptions';
-import { chainListSchema, type Chain } from '../server/shared/chains';
 import { resourceSchema, type Resource, type NodeSelector } from '../server/shared/resources';
 import { ApiError } from './api';
 import type { Diagnostic } from '../server/shared/contracts';
@@ -34,8 +33,7 @@ const rows = ref<Subscription[]>([]),
   form = ref<SubscriptionConfig | null>(null),
   baseline = ref<SubscriptionDetail | null>(null);
 const resources = ref<Resource[]>([]),
-  chains = ref<Chain[]>([]),
-  inputKind = ref<'resource' | 'node' | 'chain'>('resource'),
+  inputKind = ref<'resource' | 'node'>('resource'),
   candidate = ref(''),
   node = ref<NodeSelector | null>(null),
   preview = ref(''),
@@ -68,22 +66,13 @@ async function candidates() {
   resources.value = z
     .object({ resources: z.array(resourceSchema) })
     .parse(await props.api('/api/nodes/resources')).resources;
-  const all: Chain[] = [];
-  for (let page = 0; ; page++) {
-    const value = chainListSchema.parse(await props.api('/api/chains?page=' + page));
-    all.push(...value.chains);
-    if (all.length >= value.total) break;
-  }
-  chains.value = all;
 }
 function label(input: InputRef) {
   return input.kind === 'node'
     ? input.nodeName +
         ' · ' +
         (resources.value.find((r) => r.id === input.resourceId)?.name ?? '引用失效')
-    : input.kind === 'chain'
-      ? '链 · ' + (chains.value.find((c) => c.id === input.id)?.name ?? '引用失效')
-      : (resources.value.find((r) => r.id === input.id)?.name ?? '引用失效');
+    : (resources.value.find((r) => r.id === input.id)?.name ?? '引用失效');
 }
 async function create() {
   baseline.value = null;
@@ -211,7 +200,7 @@ onMounted(() => void act(load));
     <header class="page-header">
       <div>
         <h1>输出方案</h1>
-        <p>选择订阅、节点或链，由 Sub-Store 按需生成和分享。</p>
+        <p>选择订阅或节点，由 Sub-Store 按需生成和分享。</p>
       </div>
       <button class="primary" :disabled="busy" @click="act(create)">添加输出方案</button>
     </header>
@@ -266,20 +255,13 @@ onMounted(() => void act(load));
               >输入类型<select v-model="inputKind" @change="candidate = ''">
                 <option value="resource">订阅或组合</option>
                 <option value="node">单个节点</option>
-                <option value="chain">两跳链</option>
               </select></label
             ><label v-if="inputKind !== 'node'"
               >选择输入<select v-model="candidate">
                 <option value="">请选择</option>
-                <template v-if="inputKind === 'resource'"
-                  ><option v-for="r in resources" :key="r.id" :value="r.id">
-                    {{ r.name }}{{ r.type === 'collection' ? '（组合）' : '' }}
-                  </option></template
-                ><template v-else
-                  ><option v-for="c in chains" :key="c.id" :value="c.id">
-                    {{ c.name }}
-                  </option></template
-                >
+                <option v-for="r in resources" :key="r.id" :value="r.id">
+                  {{ r.name }}{{ r.type === 'collection' ? '（组合）' : '' }}
+                </option>
               </select></label
             ><button v-if="inputKind !== 'node'" type="button" @click="add">加入输入</button>
           </div>
@@ -316,7 +298,6 @@ onMounted(() => void act(load));
               }}</label
             >
           </div>
-          <p>URI／Base64 只输出普通节点，不包含两跳链。</p>
         </fieldset>
         <details>
           <summary>筛选与完整配置设置</summary>
@@ -416,7 +397,7 @@ onMounted(() => void act(load));
       ><h2>{{ confirming === 'delete' ? '删除输出方案' : '撤销全部分享地址' }}</h2>
       <p>
         已有客户端地址将失效。{{
-          confirming === 'delete' ? '上游节点和链会保留。' : '重新创建分享将获得新的地址。'
+          confirming === 'delete' ? '上游节点会保留。' : '重新创建分享将获得新的地址。'
         }}
       </p>
       <template #footer

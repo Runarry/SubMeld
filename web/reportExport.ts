@@ -65,7 +65,7 @@ export async function exportPng(
     ctx.fillStyle = '#16222f';
     ctx.font = 'bold 19px sans-serif';
     ctx.fillText(
-      `${row.name} · ${row.protocol} · ${row.stale ? '内容已变化' : row.state} · ${speedCoreLabels[executionCore(report.settings, row.subject)]} ${row.coreVersion ?? ''}`.slice(
+      `${row.name} · ${row.protocol} · ${row.stale ? '内容已变化' : row.state} · ${speedCoreLabels[executionCore(report.settings)]} ${row.coreVersion ?? ''}`.slice(
         0,
         140,
       ),

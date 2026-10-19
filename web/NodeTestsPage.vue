@@ -132,7 +132,7 @@ onBeforeUnmount(() => {
       <div>
         <h1>节点测试</h1>
         <p class="muted">
-          从部署 SubMeld 的主机，经真实内核访问 HTTPS 地址。请在节点或两跳链列表中选择测试对象。
+          从部署 SubMeld 的主机，经真实内核访问 HTTPS 地址。请在节点列表中选择测试对象。
         </p>
       </div>
     </div>
@@ -239,12 +239,7 @@ onBeforeUnmount(() => {
       <ul class="test-results">
         <li
           v-for="result in results"
-          :key="
-            result.subject.kind +
-            (result.subject.kind === 'node' ? result.subject.resourceId : result.subject.id) +
-            ('nodeIndex' in result.subject ? result.subject.nodeIndex : '') +
-            result.core
-          "
+          :key="result.subject.resourceId + ':' + result.subject.nodeIndex + ':' + result.core"
         >
           <div class="toolbar">
             <strong>{{ result.name }}</strong

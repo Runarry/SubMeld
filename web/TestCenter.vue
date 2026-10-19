@@ -8,8 +8,7 @@ import TelegramSettings from './TelegramSettings.vue';
 import ListPagination from './ui/ListPagination.vue';
 import { formatTime } from './format';
 import { nodeListSchema, type NodeView, type Resource } from '../server/shared/resources';
-import { chainListSchema, type Chain } from '../server/shared/chains';
-import { coreLabels, type TestSubject } from '../server/shared/node-tests';
+import { type TestSubject } from '../server/shared/node-tests';
 import {
   metricDefinitions,
   metricIds,
@@ -49,14 +48,13 @@ const inputKind = ref<'text' | 'url' | 'file'>('text'),
   fileName = ref('临时节点'),
   preview = ref<SpeedPreview | null>(null),
   temporaryIndices = ref<number[]>([]);
-const picker = ref<'nodes' | 'chains' | ''>(''),
+const picker = ref(false),
   pickerPage = ref(0),
   pickerTotal = ref(0),
   search = ref(''),
   resource = ref(''),
   resources = ref<Resource[]>([]),
-  nodes = ref<NodeView[]>([]),
-  chains = ref<Chain[]>([]);
+  nodes = ref<NodeView[]>([]);
 const historyPage = ref(0),
   history = ref<z.infer<typeof reportListSchema>>({ reports: [], total: 0 });
 let alive = true,
@@ -69,24 +67,7 @@ const subject = (node: NodeView): TestSubject => ({
   snapshotHash: node.snapshotHash,
   nodeIndex: node.nodeIndex,
 });
-function chainRef(chain: Chain): TestSubject | null {
-  if (!chain.entryNode || !chain.exitNode) return null;
-  const ref = (node: NodeView) => ({
-    resourceId: node.resourceId,
-    revision: node.revision,
-    snapshotHash: node.snapshotHash,
-    nodeIndex: node.nodeIndex,
-  });
-  return {
-    kind: 'chain',
-    id: chain.id,
-    revision: chain.revision,
-    entry: ref(chain.entryNode),
-    exit: ref(chain.exitNode),
-  };
-}
-const key = (value: TestSubject) =>
-  value.kind === 'node' ? value.resourceId + ':' + value.nodeIndex : 'chain:' + value.id;
+const key = (value: TestSubject) => value.resourceId + ':' + value.nodeIndex;
 function chosen(value: TestSubject) {
   return saved.value.some((v) => key(v) === key(value));
 }
@@ -130,33 +111,25 @@ async function act(action: () => Promise<void>) {
   }
 }
 async function loadPicker() {
-  if (picker.value === 'nodes') {
-    const data = nodeListSchema.parse(
-      await props.api(
-        '/api/nodes?page=' +
-          pickerPage.value +
-          '&resourceId=' +
-          encodeURIComponent(resource.value) +
-          '&search=' +
-          encodeURIComponent(search.value),
-      ),
-    );
-    if (alive) {
-      nodes.value = data.nodes;
-      resources.value = data.resources;
-      pickerTotal.value = data.total;
-      if (data.errors.length) message.value = data.errors.map((e) => e.message).join(' ');
-    }
-  } else if (picker.value === 'chains') {
-    const data = chainListSchema.parse(await props.api('/api/chains?page=' + pickerPage.value));
-    if (alive) {
-      chains.value = data.chains;
-      pickerTotal.value = data.total;
-    }
+  const data = nodeListSchema.parse(
+    await props.api(
+      '/api/nodes?page=' +
+        pickerPage.value +
+        '&resourceId=' +
+        encodeURIComponent(resource.value) +
+        '&search=' +
+        encodeURIComponent(search.value),
+    ),
+  );
+  if (alive) {
+    nodes.value = data.nodes;
+    resources.value = data.resources;
+    pickerTotal.value = data.total;
+    if (data.errors.length) message.value = data.errors.map((e) => e.message).join(' ');
   }
 }
-async function choose(kind: 'nodes' | 'chains') {
-  picker.value = kind;
+async function choose() {
+  picker.value = true;
   pickerPage.value = 0;
   sourceMode.value = 'saved';
   await act(loadPicker);
@@ -344,7 +317,7 @@ onBeforeUnmount(() => {
       <div>
         <p class="eyebrow">SUBMELD / MIAOSPEED</p>
         <h1>测试中心</h1>
-        <p class="muted">从当前部署位置测试节点与两跳链的速度、稳定性、解锁和拓扑。</p>
+        <p class="muted">从当前部署位置测试节点的速度、稳定性、解锁和拓扑。</p>
       </div>
       <span class="report-state">{{
         status?.active ? '有任务运行中' : status?.configured ? '后端已配置' : '等待后端配置'
@@ -381,7 +354,7 @@ onBeforeUnmount(() => {
             :class="{ primary: sourceMode === 'saved' }"
             @click="sourceMode = 'saved'"
           >
-            已保存节点 / 链</button
+            已保存节点</button
           ><button
             v-if="tab === 'comprehensive'"
             type="button"
@@ -392,56 +365,42 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <template v-if="sourceMode === 'saved'"
-          ><p>已选 {{ saved.length }} 项；可从节点与两跳链页面选择，或在这里添加。</p>
+          ><p>已选 {{ saved.length }} 项；可从节点页面选择，或在这里添加。</p>
           <div class="toolbar">
-            <button type="button" :disabled="busy" @click="choose('nodes')">选择节点</button
-            ><button type="button" :disabled="busy" @click="choose('chains')">选择两跳链</button
+            <button type="button" :disabled="busy" @click="choose">选择节点</button
             ><button type="button" :disabled="!saved.length" @click="saved = []">清空所选</button>
           </div>
           <div v-if="picker" class="test-picker">
             <div class="toolbar">
-              <template v-if="picker === 'nodes'"
-                ><select
-                  v-model="resource"
-                  aria-label="选择订阅"
-                  @change="
-                    pickerPage = 0;
-                    act(loadPicker);
-                  "
-                >
-                  <option value="">全部订阅</option>
-                  <option v-for="item in resources" :key="item.id" :value="item.id">
-                    {{ item.name }}
-                  </option></select
-                ><input v-model="search" placeholder="搜索节点" aria-label="搜索测试节点" /><button
-                  type="button"
-                  @click="
-                    pickerPage = 0;
-                    act(loadPicker);
-                  "
-                >
-                  搜索
-                </button></template
-              ><button type="button" @click="picker = ''">收起选择</button>
+              <select
+                v-model="resource"
+                aria-label="选择订阅"
+                @change="
+                  pickerPage = 0;
+                  act(loadPicker);
+                "
+              >
+                <option value="">全部订阅</option>
+                <option v-for="item in resources" :key="item.id" :value="item.id">
+                  {{ item.name }}
+                </option></select
+              ><input v-model="search" placeholder="搜索节点" aria-label="搜索测试节点" /><button
+                type="button"
+                @click="
+                  pickerPage = 0;
+                  act(loadPicker);
+                "
+              >
+                搜索</button
+              ><button type="button" @click="picker = false">收起选择</button>
             </div>
             <div class="test-options">
-              <template v-if="picker === 'nodes'"
-                ><label v-for="node in nodes" :key="key(subject(node))"
-                  ><input
-                    type="checkbox"
-                    :checked="chosen(subject(node))"
-                    @change="toggle(subject(node))"
-                  />{{ node.name }} · {{ node.protocol }}</label
-                ></template
-              ><template v-else
-                ><label v-for="chain in chains" :key="chain.id"
-                  ><input
-                    type="checkbox"
-                    :disabled="!chain.available || !chainRef(chain)"
-                    :checked="!!chainRef(chain) && chosen(chainRef(chain)!)"
-                    @change="toggle(chainRef(chain)!)"
-                  />{{ chain.name }} {{ chain.error }}</label
-                ></template
+              <label v-for="node in nodes" :key="key(subject(node))"
+                ><input
+                  type="checkbox"
+                  :checked="chosen(subject(node))"
+                  @change="toggle(subject(node))"
+                />{{ node.name }} · {{ node.protocol }}</label
               >
             </div>
             <ListPagination
@@ -559,12 +518,6 @@ onBeforeUnmount(() => {
             ><label
               >节点执行内核<select v-model="settings.nodeCore">
                 <option v-for="(label, core) in speedCoreLabels" :key="core" :value="core">
-                  {{ label }}
-                </option>
-              </select></label
-            ><label
-              >链执行内核<select v-model="settings.chainCore">
-                <option v-for="(label, core) in coreLabels" :key="core" :value="core">
                   {{ label }}
                 </option>
               </select></label
@@ -706,7 +659,7 @@ onBeforeUnmount(() => {
         act(async () => {
           if (report) {
             await api('/api/miaospeed/tests/' + report.id + '/cancel', {});
-            message = '正在取消；临时链入口立即关闭，已发出的后端单节点探测结束前不会启动新批次。';
+            message = '正在取消；已发出的后端单节点探测结束前不会启动新批次。';
             followCurrent = true;
             await refresh();
           }

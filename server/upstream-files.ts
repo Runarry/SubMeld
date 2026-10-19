@@ -6,6 +6,45 @@ import { identityKey, type UpstreamRecord } from './sub-store.js';
 import { defaultTemplates } from './templates/basic.js';
 import { hy2ResolverConnectionSchema } from './shared/hy2-certificates.js';
 export const SCRIPT_VERSION = 1;
+let legacyChainOperatorContent: string | undefined;
+function legacyChainOperator() {
+  legacyChainOperatorContent ??=
+    '$content += ' +
+    JSON.stringify(
+      '\n;' +
+        readFileSync(
+          new URL(
+            import.meta.url.endsWith('.ts')
+              ? '../dist/upstream/legacy-chain-inputs.js'
+              : '../upstream/legacy-chain-inputs.js',
+            import.meta.url,
+          ),
+          'utf8',
+        ) +
+        '\n;SubMeldLegacyChainInputs.installLegacyChainAdapter(SubMeldRuntime);\n',
+    ) +
+    ';';
+  return {
+    type: 'Script Operator',
+    args: { mode: 'script', content: legacyChainOperatorContent },
+    _submeldLegacyChainAdapter: 1,
+  };
+}
+function isLegacyChainOperator(value: unknown) {
+  if (!value || typeof value !== 'object') return false;
+  const operator = value as Record<string, unknown>;
+  const args = operator.args;
+  return (
+    operator.type === 'Script Operator' &&
+    operator._submeldLegacyChainAdapter === 1 &&
+    !!args &&
+    typeof args === 'object' &&
+    'mode' in args &&
+    args.mode === 'script' &&
+    'content' in args &&
+    args.content === legacyChainOperator().args.content
+  );
+}
 export class UpstreamFiles {
   private certificateConnection?: string;
   constructor(readonly resources: UpstreamResources) {}
@@ -26,7 +65,7 @@ export class UpstreamFiles {
       throw new AppError('FILE_INVALID', '上游文件用途或格式版本不兼容。', 409);
     return { record: entry.record, revision: hash(entry.record) };
   }
-  async put(role: 'chain' | 'plan', config: { name: string }, id?: string, revision?: string) {
+  async put(role: 'plan', config: { name: string }, id?: string, revision?: string) {
     const client = this.resources.client;
     if (id) {
       const old = this.get(id, role);
@@ -118,7 +157,11 @@ export class UpstreamFiles {
               record.content === seed.content &&
               record.source === 'local' &&
               record.type === 'file' &&
-              (!Array.isArray(record.process) || !record.process.length) &&
+              (!Array.isArray(record.process) ||
+                !record.process.length ||
+                (meta.role === 'runtime' &&
+                  record.process.length === 1 &&
+                  isLegacyChainOperator(record.process[0]))) &&
               !['localFirst', 'remoteFirst'].includes(String(record.mergeSources)),
           },
         ];
@@ -143,7 +186,7 @@ export class UpstreamFiles {
           source: 'local',
           url: '',
           mergeSources: null,
-          process: [],
+          process: meta?.role === 'runtime' ? [legacyChainOperator()] : [],
           [identityKey]: { ...meta, version: SCRIPT_VERSION },
         },
         'PATCH',
@@ -176,6 +219,33 @@ export class UpstreamFiles {
           ...(seed.format ? { format: seed.format } : {}),
         },
       });
+      await this.resources.syncUnlocked();
+    }
+    await this.ensureLegacyChainCompatibilityUnlocked();
+  }
+  async ensureLegacyChainCompatibility() {
+    return this.resources.client.exclusive(async () => {
+      await this.resources.syncUnlocked();
+      await this.ensureLegacyChainCompatibilityUnlocked();
+    });
+  }
+  private async ensureLegacyChainCompatibilityUnlocked() {
+    for (const { id, record } of this.resources.files('runtime')) {
+      if (marker(record)?.version !== SCRIPT_VERSION) continue;
+      if (record.process !== undefined && !Array.isArray(record.process))
+        throw new AppError('FILE_INVALID', '运行脚本的处理规则无效，请在原生页面修正。', 409);
+      const process = Array.isArray(record.process) ? record.process : [];
+      if (process.some(isLegacyChainOperator)) continue;
+      const revision = hash(record);
+      await this.resources.syncUnlocked();
+      const current = this.get(id, 'runtime');
+      if (current.revision !== revision)
+        throw new AppError('REVISION_CONFLICT', '运行脚本已被修改，请重试。', 409);
+      await this.resources.client.api(
+        '/api/file/' + encodeURIComponent(current.record.name),
+        { process: [...process, legacyChainOperator()] },
+        'PATCH',
+      );
       await this.resources.syncUnlocked();
     }
   }

@@ -140,7 +140,7 @@ test('HTTP requires loopback development or an explicit production opt-in', () =
   );
 });
 
-test('listener configuration validates ports and the IPv4 chain bind address', () => {
+test('listener configuration validates ports and the IPv4 test bridge bind address', () => {
   const env = { PUBLIC_ORIGIN: 'https://submeld.example', DATA_DIR: 'data' };
   assert.equal(loadConfig(false, env).port, 3000);
   assert.equal(loadConfig(false, env).miaospeedBridgeBind, '0.0.0.0');

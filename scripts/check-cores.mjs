@@ -7,8 +7,6 @@ import assert from 'node:assert/strict';
 import { nativeRenderer } from '../tests/native-render-fixture.mjs';
 import { items } from '../tests/fixtures.mjs';
 import { renderFixtures } from '../tests/render-fixtures.mjs';
-import { chainFixtures } from '../tests/chain-fixtures.mjs';
-import { checkChainConnections } from '../tests/chain-connections.mjs';
 import { checkNodeTestConnections } from '../tests/node-test-connections.mjs';
 const locks = JSON.parse(
   await readFile(new URL('../tests/kernels.lock.json', import.meta.url), 'utf8'),
@@ -76,7 +74,7 @@ try {
     const ordinary = items(...renderFixtures(target));
     const generated = await native.render({
       target,
-      items: [...ordinary, ...chainFixtures(target, ordinary.length)],
+      items: ordinary,
       listenPort: 1080,
     });
     const config = join(results, target + (target === 'mihomo' ? '.yaml' : '.json'));
@@ -98,8 +96,6 @@ try {
         ' nodes, complete configuration',
     );
   }
-
-  await checkChainConnections(binaries, results, native.render);
 
   await checkNodeTestConnections(binaries, results, locks, native.render);
 } finally {

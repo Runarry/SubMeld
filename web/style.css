@@ -1036,15 +1036,6 @@ summary {
   }
 }
 
-.chain-library {
-  margin-top: 2rem;
-  border-top: 1px solid var(--border);
-  padding-top: 1.5rem;
-}
-.chain-path {
-  overflow-wrap: anywhere;
-}
-
 .node-test-summary {
   display: flex;
   flex-wrap: wrap;

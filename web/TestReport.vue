@@ -102,8 +102,7 @@ async function png() {
           {{ formatTime(report.createdAt) }} ·
           {{ report.origin === 'telegram' ? 'Telegram' : '网页' }} · miaospeed
           {{ report.backendVersion || '待返回' }} · 节点内核
-          {{ speedCoreLabels[report.settings.nodeCore] }} · 链内核
-          {{ speedCoreLabels[report.settings.chainCore] }}
+          {{ speedCoreLabels[report.settings.nodeCore] }}
         </p>
       </div>
       <span class="report-state">{{ labels[report.state] }}</span>
@@ -209,7 +208,7 @@ async function png() {
       </div>
       <p>{{ selected.message }}</p>
       <p>
-        执行内核：{{ speedCoreLabels[executionCore(report.settings, selected.subject)] }}
+        执行内核：{{ speedCoreLabels[executionCore(report.settings)] }}
         {{ selected.coreVersion }}
       </p>
       <p v-if="selected.stale" class="warning-note">对象内容已变化，此报告仅代表当时的测试快照。</p>

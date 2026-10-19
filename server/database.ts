@@ -6,7 +6,6 @@ import { SubStoreClient } from './sub-store.js';
 import { UpstreamResources } from './upstream-resources.js';
 import { UpstreamFiles } from './upstream-files.js';
 import { createNodeStore } from './nodes.js';
-import { createChainStore } from './chains.js';
 import { createSubscriptionStore } from './subscriptions.js';
 import { createNodeTestStore } from './node-test-store.js';
 import { TestActivity } from './test-activity.js';
@@ -85,9 +84,8 @@ export function openSettings(dataDir: string, development: boolean, client = new
       resources = new UpstreamResources(client),
       files = new UpstreamFiles(resources);
     const nodes = createNodeStore(resources),
-      chains = createChainStore(resources, files),
       subscriptions = createSubscriptionStore(resources, files);
-    input = new MiaospeedInput(resources, chains);
+    input = new MiaospeedInput(resources);
     const miaospeedStore = new MiaospeedStore(database);
     const miaospeedScripts = new MiaospeedScripts(resources);
     const telegramStore = new TelegramStore(database, () => ({
@@ -105,14 +103,13 @@ export function openSettings(dataDir: string, development: boolean, client = new
       nodes,
       nodeReporting: new NodeReporting(database, resources),
       machines,
-      chains,
       subscriptions,
       testActivity: new TestActivity(),
       miaospeedStore,
       miaospeedScripts,
       telegramStore,
       miaospeedInput: input,
-      nodeTests: createNodeTestStore(database, resources, chains),
+      nodeTests: createNodeTestStore(database, resources),
       certificateResolverToken(): string {
         const key = 'hy2_certificate_resolver_token';
         const row: unknown = database.prepare('SELECT value FROM settings WHERE key=?').get(key);

@@ -7,27 +7,17 @@ import LoginView from './LoginView.vue';
 import NodeLibrary from './NodeLibrary.vue';
 import { testActionsKey } from './nodeTests';
 import { type TestSubject } from '../server/shared/node-tests';
-import ChainLibrary from './ChainLibrary.vue';
 import SubscriptionLibrary from './SubscriptionLibrary.vue';
 import MachinesPage from './MachinesPage.vue';
 import RelaysPage from './RelaysPage.vue';
 
 import { ApiError, request } from './api';
 
-type View =
-  | 'home'
-  | 'library'
-  | 'chains'
-  | 'subscriptions'
-  | 'tests'
-  | 'supportFiles'
-  | 'machines'
-  | 'relays';
+type View = 'home' | 'library' | 'subscriptions' | 'tests' | 'supportFiles' | 'machines' | 'relays';
 const nav = [
   { view: 'machines' as const, hash: 'machines', label: '机器' },
   { view: 'library' as const, hash: 'nodes', label: '节点' },
   { view: 'relays' as const, hash: 'relays', label: '中转线路' },
-  { view: 'chains' as const, hash: 'chains', label: '两跳链' },
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
   { view: 'tests' as const, hash: 'tests', label: '测试中心' },
   { view: 'supportFiles' as const, hash: 'support-files', label: '配套文件' },
@@ -65,7 +55,7 @@ function parseHash(): View {
   if (key === 'koipy') return 'tests';
   if (key === 'support-files' || key === 'tools') return 'supportFiles';
   if (key === 'tests') return 'tests';
-  if (key === 'chains') return 'chains';
+  if (key === 'chains') return 'relays';
   if (key === 'machines') return 'machines';
   if (key === 'relays') return 'relays';
   if (key === 'sources' || key === 'workbench') return 'library';
@@ -85,8 +75,9 @@ function onHashChange() {
   if (authenticated.value) {
     const next = parseHash();
     const canonical = nav.find((item) => item.view === next)!.hash;
-    if (location.hash.replace(/^#\/?/, '').split('?')[0] !== canonical) {
-      const query = location.hash.split('?')[1];
+    const key = location.hash.replace(/^#\/?/, '').split('?')[0];
+    if (key !== canonical) {
+      const query = key === 'chains' ? undefined : location.hash.split('?')[1];
       history.replaceState(null, '', '#/' + canonical + (query ? '?' + query : ''));
     }
     lastRoutes.set(next, location.hash);
@@ -200,12 +191,6 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
             d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5zM4 5h8v1.5H4zm0 3h5v1.5H4z"
           />
         </svg>
-        <svg v-else-if="item.view === 'chains'" viewBox="0 0 16 16" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M8 1.5a4 4 0 0 0-3.46 6H3a2.5 2.5 0 0 0 0 5h10a2.5 2.5 0 0 0 0-5h-1.54A4 4 0 0 0 8 1.5"
-          />
-        </svg>
         <svg v-else-if="item.view === 'library'" viewBox="0 0 16 16" aria-hidden="true">
           <path
             fill="currentColor"
@@ -264,7 +249,6 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
         :initial-tab="testInitialTab"
       />
       <NodeLibrary v-if="view === 'library'" :api="api" />
-      <ChainLibrary v-if="view === 'chains'" :api="api" />
       <SubscriptionLibrary v-if="view === 'subscriptions'" :api="api" />
       <MachinesPage v-if="view === 'machines'" :api="api" />
       <RelaysPage v-if="view === 'relays'" :api="api" />

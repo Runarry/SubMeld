@@ -110,7 +110,6 @@ const app = createApp({
 
   nodes: settings.nodes,
   nodeReporting: settings.nodeReporting,
-  chains: settings.chains,
 
   subscriptions: settings.subscriptions,
 });
@@ -152,7 +151,6 @@ const httpApp = createApp({
   webRoot: fileURLToPath(new URL('../dist/web/', import.meta.url)),
   auth,
   nodes: settings.nodes,
-  chains: settings.chains,
   subscriptions: settings.subscriptions,
 });
 const httpServer = serve({

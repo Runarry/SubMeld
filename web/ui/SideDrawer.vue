@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, onUnmounted, ref } from 'vue';
 const props = withDefaults(
-  defineProps<{ label: string; dismissible?: boolean; returnFocusTo?: HTMLElement | null }>(),
+  defineProps<{
+    label: string;
+    dismissible?: boolean;
+    returnFocusTo?: HTMLElement | null;
+    wide?: boolean;
+  }>(),
   {
     dismissible: true,
     returnFocusTo: null,
+    wide: false,
   },
 );
 const emit = defineEmits<{ close: [] }>();
@@ -100,6 +106,7 @@ onUnmounted(async () => {
       <section
         ref="panel"
         class="side-drawer"
+        :class="{ wide }"
         role="dialog"
         aria-modal="true"
         :aria-label="label"
@@ -152,6 +159,9 @@ onUnmounted(async () => {
   gap: 20px;
   padding: 24px 28px 20px;
   border-bottom: 1px solid var(--border);
+}
+.side-drawer.wide {
+  width: min(720px, 100vw);
 }
 .drawer-header h2 {
   font-size: 21px;

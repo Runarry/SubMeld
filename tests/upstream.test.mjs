@@ -194,7 +194,7 @@ test('official upstream independently generates all eight formats, native shares
   );
   assert.equal((await f.client.request('/api/file/' + output.name)).status, 200);
 });
-test('chains use ordinary nodes, follow renamed resources and same-name updates; deletion, duplicates and identity loss are explicit', async (t) => {
+test('selected ordinary nodes follow resource renames and same-name updates; duplicates and identity loss are explicit', async (t) => {
   const f = await fixture(t);
   const a = node('ss'),
     b = node('vless');
@@ -202,39 +202,14 @@ test('chains use ordinary nodes, follow renamed resources and same-name updates;
   b.name = 'exit';
   b.tls.insecure = false;
   const resource = await add(f, [a, b]);
-  const chain = await f.chains.create({
-    name: 'route',
-    enabled: true,
-    entry: { resourceId: resource.id, nodeName: 'entry' },
-    exit: { resourceId: resource.id, nodeName: 'exit' },
-  });
   const saved = await f.subscriptions.create(
-    plan([
-      { kind: 'chain', id: chain.id },
-      { kind: 'node', resourceId: resource.id, nodeName: 'entry' },
-    ]),
+    plan([{ kind: 'node', resourceId: resource.id, nodeName: 'entry' }]),
   );
   const yaml = parse((await f.subscriptions.artifact(saved.id, 'mihomo')).content);
-  assert.equal(yaml.proxies[0]['dialer-proxy'], yaml.proxies[1].name);
-  assert.equal(
-    JSON.parse((await f.subscriptions.artifact(saved.id, 'singbox')).content).outbounds[1].detour,
-    'route · 前置',
-  );
-  assert.equal(
-    JSON.parse((await f.subscriptions.artifact(saved.id, 'xray')).content).outbounds[0]
-      .streamSettings.sockopt.dialerProxy,
-    'route · 前置',
-  );
+  assert.equal(yaml.proxies.length, 1);
+  assert.equal(yaml.proxies[0]['dialer-proxy'], undefined);
   assert.equal((await f.subscriptions.artifact(saved.id, 'uri')).content.split('\n').length, 1);
-  const list = await f.nodes.list();
-  await assert.rejects(() => f.nodes.delete({ nodes: [ref(list.nodes[0])] }), {
-    code: 'NODE_IN_USE',
-  });
   const record = f.resources.record(resource.id).record;
-  assert.equal(
-    (await f.request('/upstream/sub-store/api/sub/' + record.name, undefined, 'DELETE')).status,
-    409,
-  );
   await f.client.api(
     '/api/sub/' + record.name,
     {
@@ -246,9 +221,8 @@ test('chains use ordinary nodes, follow renamed resources and same-name updates;
     'PATCH',
   );
   await f.resources.sync();
-  assert.equal((await f.chains.get(chain.id)).available, true);
   assert.equal(
-    parse((await f.subscriptions.artifact(saved.id, 'mihomo')).content).proxies[1].server,
+    parse((await f.subscriptions.artifact(saved.id, 'mihomo')).content).proxies[0].server,
     'updated.example.com',
   );
   await f.client.api(
@@ -257,9 +231,8 @@ test('chains use ordinary nodes, follow renamed resources and same-name updates;
     'PATCH',
   );
   await f.resources.sync();
-  assert.equal((await f.chains.get(chain.id)).available, false);
   await assert.rejects(() => f.subscriptions.artifact(saved.id, 'mihomo'), {
-    code: 'CHAIN_REFERENCE_INVALID',
+    code: 'NODE_REFERENCE_INVALID',
   });
   await f.client.api('/api/sub/renamed', { _submeld: null }, 'PATCH');
   await f.resources.sync();

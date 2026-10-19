@@ -1,6 +1,5 @@
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import type { ChainStore } from './chains.js';
 import { rawDraft, type UpstreamResources } from './upstream-resources.js';
 import type { RenderItem, RenderTarget } from './shared/contracts.js';
 import { AppError } from './errors.js';
@@ -14,61 +13,26 @@ import {
   type TestSubject,
   type TestResult,
 } from './shared/node-tests.js';
-export function createNodeTestStore(
-  db: Database.Database,
-  resources: UpstreamResources,
-  chains: ChainStore,
-) {
+export function createNodeTestStore(db: Database.Database, resources: UpstreamResources) {
   function inspect(subject: TestSubject): { subject: TestSubject; name: string; item: RenderItem } {
-    if (subject.kind === 'node') {
-      const snapshot = resources.cached(subject.resourceId),
-        row = snapshot.rows[subject.nodeIndex];
-      if (!row) throw new AppError('NOT_FOUND', '节点已不存在。', 404);
-      const view = row.view;
-      return {
-        subject: {
-          kind: 'node',
-          resourceId: view.resourceId,
-          revision: view.revision,
-          snapshotHash: view.snapshotHash,
-          nodeIndex: view.nodeIndex,
-        },
-        name: view.name,
-        item: {
-          nodeIndex: 0,
-          excluded: false,
-          diagnostics: [],
-          draft: rawDraft(row.processed ?? row.original),
-        },
-      };
-    }
-    const chain = chains.definition(subject.id);
-    const entry = resources.resolve(chain.entry),
-      exit = resources.resolve(chain.exit);
-    const ref = (node: typeof entry.view) => ({
-      resourceId: node.resourceId,
-      revision: node.revision,
-      snapshotHash: node.snapshotHash,
-      nodeIndex: node.nodeIndex,
-    });
+    const snapshot = resources.cached(subject.resourceId),
+      row = snapshot.rows[subject.nodeIndex];
+    if (!row) throw new AppError('NOT_FOUND', '节点已不存在。', 404);
+    const view = row.view;
     return {
       subject: {
-        kind: 'chain',
-        id: chain.id,
-        revision: chain.revision,
-        entry: ref(entry.view),
-        exit: ref(exit.view),
+        kind: 'node',
+        resourceId: view.resourceId,
+        revision: view.revision,
+        snapshotHash: view.snapshotHash,
+        nodeIndex: view.nodeIndex,
       },
-      name: chain.name,
+      name: view.name,
       item: {
-        kind: 'chain',
         nodeIndex: 0,
         excluded: false,
         diagnostics: [],
-        name: chain.name,
-        entry: rawDraft(entry.processed),
-        exit: rawDraft(exit.processed),
-        available: true,
+        draft: rawDraft(row.processed ?? row.original),
       },
     };
   }
@@ -105,12 +69,7 @@ export function createNodeTestStore(
   return {
     async refresh(subjects: TestSubject[]) {
       await resources.sync();
-      const ids = subjects.flatMap((subject) => {
-        if (subject.kind === 'node') return [subject.resourceId];
-        const chain = chains.definition(subject.id);
-        return [chain.entry.resourceId, chain.exit.resourceId];
-      });
-      await resources.prepare(ids);
+      await resources.prepare(subjects.map((subject) => subject.resourceId));
     },
     inspect,
     matches,

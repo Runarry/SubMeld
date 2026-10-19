@@ -8,7 +8,6 @@ import {
   type UpstreamRecord,
 } from './sub-store.js';
 import { checkedDraft } from './converter/normalized.js';
-import { chainConfigSchema } from './shared/chains.js';
 import {
   addResourceSchema,
   deleteNodesSchema,
@@ -90,6 +89,15 @@ export class UpstreamResources {
     ).flat();
     const next = new Map<string, Entry>();
     for (const entry of catalog) {
+      const legacy = entry.record[identityKey];
+      if (
+        entry.type === 'file' &&
+        legacy !== null &&
+        typeof legacy === 'object' &&
+        'role' in legacy &&
+        legacy.role === 'chain'
+      )
+        continue;
       let id = marker(entry.record);
       if (!id && entry.type === 'file') continue;
       if (!id) {
@@ -318,41 +326,6 @@ export class UpstreamResources {
       return this.resource(id);
     });
   }
-  chainDefinitions() {
-    return this.files('chain').map(({ id, record }) => {
-      try {
-        return { id, ...chainConfigSchema.parse(JSON.parse(String(record.content))) };
-      } catch {
-        throw new AppError('CHAIN_INVALID', '上游链定义无法读取，请先修正后再删除节点。', 409);
-      }
-    });
-  }
-  async assertDeletable(refs: NodeRef[]) {
-    const chains = this.chainDefinitions();
-    const selectors = chains
-      .flatMap((c) => [c.entry, c.exit])
-      .filter((s) => this.entries.has(s.resourceId));
-    await this.prepare(selectors.map((s) => s.resourceId));
-    for (const ref of refs) {
-      const row = this.current(ref);
-      for (const selector of selectors) {
-        if (selector.resourceId === ref.resourceId && selector.nodeName === row.view.name)
-          throw new AppError('NODE_IN_USE', '此节点正在被两跳链引用，请先修改或删除链。', 409);
-        for (const selected of this.cached(selector.resourceId).rows.filter(
-          (r) => r.view.available && r.view.name === selector.nodeName,
-        )) {
-          const raw = selected.original ?? selected.processed;
-          const origin = row.processed ?? row.original;
-          if (
-            raw?._subName === this.record(ref.resourceId).record.name &&
-            origin &&
-            hash(cleanRaw(raw)) === hash(cleanRaw(origin))
-          )
-            throw new AppError('NODE_IN_USE', '此节点经组合订阅被链引用，请先修改或删除链。', 409);
-        }
-      }
-    }
-  }
   async deleteNodes(input: unknown) {
     const parsed = deleteNodesSchema.safeParse(input);
     if (!parsed.success) throw new AppError('INVALID_REQUEST', '删除请求缺少有效的节点快照。', 400);
@@ -362,7 +335,6 @@ export class UpstreamResources {
     return this.client.exclusive(async () => {
       await this.syncUnlocked();
       await this.prepare(refs.map((r) => r.resourceId));
-      await this.assertDeletable(refs);
       const changes = new Map<string, { removed: Set<number>; names: string[] }>();
       for (const ref of refs) {
         const row = this.current(ref);
@@ -450,65 +422,9 @@ export class UpstreamResources {
       return { deleted: refs.length };
     });
   }
-  guardMutation(path: string, method: string, body: unknown) {
-    const removed: string[] = [];
-    const one = /^\/api\/(sub|collection)\/([^/]+)$/.exec(path);
-    if (one && method === 'DELETE')
-      for (const [id, entry] of this.entries)
-        if (entry.type === one[1] && entry.record.name === decodeURIComponent(one[2]!))
-          removed.push(id);
-    if (
-      method === 'PUT' &&
-      ['/api/subs', '/api/collections'].includes(path) &&
-      Array.isArray(body)
-    ) {
-      const names = new Set(
-        body.filter((v) => v && typeof v === 'object').map((v: Record<string, unknown>) => v.name),
-      );
-      const ids = new Set(
-        body.flatMap((value) => {
-          if (!value || typeof value !== 'object' || !(identityKey in value)) return [];
-          const parsed = upstreamIdentitySchema.safeParse(value[identityKey]);
-          return parsed.success ? [parsed.data.id] : [];
-        }),
-      );
-      for (const resource of this.listResources())
-        if (
-          resource.type === (path === '/api/subs' ? 'sub' : 'collection') &&
-          !names.has(resource.upstreamName) &&
-          !ids.has(resource.id)
-        )
-          removed.push(resource.id);
-    }
-    if (!removed.length) return;
-    for (const chain of this.chainDefinitions())
-      for (const selector of [chain.entry, chain.exit]) {
-        if (removed.includes(selector.resourceId))
-          throw new AppError('NODE_IN_USE', '此订阅含有链成员，请先修改或删除链。', 409);
-        const entry = this.entries.get(selector.resourceId);
-        if (
-          entry?.type === 'collection' &&
-          removed.some((id) => {
-            const child = this.record(id);
-            return (
-              child.type === 'sub' &&
-              ((Array.isArray(entry.record.subscriptions) &&
-                entry.record.subscriptions.includes(child.record.name)) ||
-                (Array.isArray(entry.record.subscriptionTags) &&
-                  Array.isArray(child.record.tag) &&
-                  child.record.tag.some((t) =>
-                    (entry.record.subscriptionTags as unknown[]).includes(t),
-                  )))
-            );
-          })
-        )
-          throw new AppError('NODE_IN_USE', '此订阅经组合订阅被链引用，请先修改或删除链。', 409);
-      }
-  }
-  async write(forward: () => Promise<Response>, path: string, method: string, body: unknown) {
+  async write(forward: () => Promise<Response>) {
     return this.client.exclusive(async () => {
       await this.syncUnlocked();
-      this.guardMutation(path, method, body);
       try {
         return await forward();
       } finally {

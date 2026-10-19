@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { draftSchema, type NodeDraft } from './contracts.js';
+import type { NodeDraft } from './contracts.js';
 
 export const hy2CertificateRequestSchema = z.strictObject({
   server: z
@@ -13,7 +13,6 @@ export const hy2CertificateRequestSchema = z.strictObject({
   obfs: z.enum(['', 'salamander']),
   obfsPassword: z.string().max(16384),
   pinSHA256: z.string().regex(/^[a-f0-9]{64}$/),
-  entry: draftSchema.optional(),
 });
 export type Hy2CertificateRequest = z.infer<typeof hy2CertificateRequestSchema>;
 export const hy2CertificateSchema = z.strictObject({
@@ -32,7 +31,7 @@ export const hy2ResolverConnectionSchema = z.strictObject({
   token: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
-export function hy2CertificateRequest(node: NodeDraft, entry?: NodeDraft): Hy2CertificateRequest {
+export function hy2CertificateRequest(node: NodeDraft): Hy2CertificateRequest {
   if (node.protocol !== 'hysteria2') throw new Error('Expected Hysteria2');
   return hy2CertificateRequestSchema.parse({
     server: node.server,
@@ -42,6 +41,5 @@ export function hy2CertificateRequest(node: NodeDraft, entry?: NodeDraft): Hy2Ce
     obfs: node.protocolOptions.obfs,
     obfsPassword: node.protocolOptions.obfsPassword,
     pinSHA256: node.protocolOptions.pinSHA256,
-    ...(entry ? { entry } : {}),
   });
 }

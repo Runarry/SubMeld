@@ -12,6 +12,7 @@ import {
   type TelegramTask,
 } from './shared/telegram.js';
 import { validateSpeedSettings } from './miaospeed.js';
+import { storedTelegramSettings } from './legacy-test-data.js';
 
 export const QUEUE_TTL_MS = 30 * 60 * 1000;
 const rowSchema = z.object({ value: z.string() });
@@ -43,7 +44,9 @@ export class TelegramStore {
     const row = rowSchema
       .optional()
       .parse(this.db.prepare("SELECT value FROM settings WHERE key='telegram.settings'").get());
-    return telegramSettingsSchema.parse(row ? JSON.parse(row.value) : { profile: this.defaults() });
+    return telegramSettingsSchema.parse(
+      storedTelegramSettings(row ? JSON.parse(row.value) : { profile: this.defaults() }),
+    );
   }
   hasSettings() {
     return (

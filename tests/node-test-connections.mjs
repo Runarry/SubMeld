@@ -4,20 +4,24 @@ import { createServer as createTcpServer } from 'node:net';
 import { once } from 'node:events';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { renderInput } from '../dist/server/converter/render.js';
-import { freeProbePort, runNodeProbe } from '../dist/server/node-probe.js';
+import { runNodeProbe } from '../dist/server/node-probe.js';
 import { node, items } from './fixtures.mjs';
-import { dualPort, start } from './chain-connections.mjs';
+import { dualPort, start } from './kernel-fixture.mjs';
 import { testCertificate, testKey } from './source-tls-fixture.mjs';
 
-export async function checkNodeTestConnections(binaries, results, versions, render = renderInput) {
-  for (const target of ['mihomo', 'singbox', 'xray']) {
+export async function checkNodeTestConnections(
+  binaries,
+  results,
+  versions,
+  render,
+  targets = ['mihomo', 'singbox', 'xray'],
+) {
+  for (const target of targets) {
     const directory = join(results, 'node-test-' + target),
       sockets = new Set();
     let hits = 0,
       hangEntered,
-      entryCore,
-      exitCore;
+      proxyCore;
     const destination = createServer({ cert: testCertificate, key: testKey }, (req, res) => {
       hits++;
       if (req.url === '/hang') {
@@ -40,15 +44,11 @@ export async function checkNodeTestConnections(binaries, results, versions, rend
       ca: testCertificate,
       timeoutMs: 4000,
     };
-    const entry = node('ss'),
-      exit = node('ss');
-    entry.name = 'entry';
-    exit.name = 'exit';
-    entry.server = exit.server = '127.0.0.1';
-    entry.port = await dualPort();
-    exit.port = await dualPort();
-    entry.auth.password = 'node-test-entry';
-    exit.auth.password = 'node-test-exit';
+    const proxy = node('ss');
+    proxy.name = 'controlled node';
+    proxy.server = '127.0.0.1';
+    proxy.port = await dualPort();
+    proxy.auth.password = 'node-test-proxy';
     const serverConfig = (draft) => ({
       log: { level: 'info' },
       inbounds: [
@@ -63,21 +63,11 @@ export async function checkNodeTestConnections(binaries, results, versions, rend
       outbounds: [{ type: 'direct', tag: 'direct' }],
       route: { final: 'direct' },
     });
-    const chain = {
-      kind: 'chain',
-      nodeIndex: 0,
-      name: 'complete chain',
-      entry,
-      exit,
-      excluded: false,
-      diagnostics: [],
-      available: true,
-    };
     async function request(
       item,
       { signal = new AbortController().signal, path = '/probe', timeoutMs = 4000 } = {},
     ) {
-      const port = await freeProbePort();
+      const port = await dualPort();
       const full = (await render({ target, items: [item], listenPort: port })).full;
       let kernelOutput = '';
       try {
@@ -98,7 +88,9 @@ export async function checkNodeTestConnections(binaries, results, versions, rend
         );
       } catch (error) {
         // This fixture contains public test credentials only; production probes never log output.
+        error.fixtureRequestPath = path;
         error.fixtureKernelOutput = kernelOutput;
+        error.fixtureProxyOutput = proxyCore?.log ?? '';
         error.fixtureConfiguration = full;
         throw error;
       } finally {
@@ -114,41 +106,20 @@ export async function checkNodeTestConnections(binaries, results, versions, rend
       }
     }
     try {
-      entryCore = await start(
+      proxyCore = await start(
         binaries.singbox,
         'singbox',
-        serverConfig(entry),
-        join(directory, 'entry'),
+        serverConfig(proxy),
+        join(directory, 'proxy'),
       );
-      exitCore = await start(
-        binaries.singbox,
-        'singbox',
-        serverConfig(exit),
-        join(directory, 'exit'),
-      );
-      await entryCore.ready(entry.port);
-      await exitCore.ready(exit.port);
-      const ordinary = items(entry)[0];
+      await proxyCore.ready(proxy.port);
+      const ordinary = items(proxy)[0];
       assert.equal((await request(ordinary)).httpStatus, 204);
-      assert.equal((await request(chain)).httpStatus, 204);
       const successfulHits = hits;
       const wrong = structuredClone(ordinary);
       wrong.draft.auth.password = 'wrong-password';
       await assert.rejects(request(wrong, { timeoutMs: 700 }));
       assert.equal(hits, successfulHits, 'wrong credentials cannot fall back to direct');
-      await entryCore.stop();
-      await assert.rejects(request(chain, { timeoutMs: 700 }));
-      assert.equal(hits, successfulHits, 'broken entry cannot bypass the first hop');
-      entryCore = await start(
-        binaries.singbox,
-        'singbox',
-        serverConfig(entry),
-        join(directory, 'entry'),
-      );
-      await entryCore.ready(entry.port);
-      await exitCore.stop();
-      await assert.rejects(request(chain, { timeoutMs: 700 }));
-      assert.equal(hits, successfulHits, 'broken exit cannot fall back to the entry or direct');
       await assert.rejects(request(ordinary, { path: '/hang', timeoutMs: 120 }), {
         code: 'TEST_TIMEOUT',
       });
@@ -157,17 +128,20 @@ export async function checkNodeTestConnections(binaries, results, versions, rend
         hangEntered = resolve;
       });
       const running = request(ordinary, { path: '/hang', signal: abort.signal });
-      await received;
+      await Promise.race([received, running]);
       abort.abort();
       await assert.rejects(running, { code: 'TEST_CANCELLED' });
+      const beforeStop = hits;
+      await proxyCore.stop();
+      await assert.rejects(request(ordinary, { timeoutMs: 700 }));
+      assert.equal(hits, beforeStop, 'stopped proxy cannot fall back to direct');
       console.log(
         'PASS ' +
           target +
-          ' actual HTTPS node tests: single, chain, wrong credentials, both broken hops, timeout and cancellation',
+          ' actual HTTPS node tests: success, wrong credentials, stopped proxy, timeout, cancellation and cleanup',
       );
     } finally {
-      await entryCore?.stop();
-      await exitCore?.stop();
+      await proxyCore?.stop();
       for (const socket of sockets) socket.destroy();
       await new Promise((resolve) => destination.close(resolve));
     }

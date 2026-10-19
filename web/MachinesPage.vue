@@ -15,6 +15,7 @@ import {
 import { ApiError } from './api';
 import ModalDialog from './ui/ModalDialog.vue';
 import MachineNodeEditor from './MachineNodeEditor.vue';
+import MachineNodeCreator from './MachineNodeCreator.vue';
 import { nodeProtocol, type MachineNode } from './machineEditor';
 import {
   fieldOptions,
@@ -51,6 +52,11 @@ const nodeQuery = ref(''),
   focusedNodeId = ref('');
 const editingFallback = ref<MachineNode | null>(null);
 const editorTrigger = shallowRef<{ nodeId: string; element: HTMLElement } | null>(null);
+const addingNode = ref(false),
+  creatorHidden = ref(false),
+  preparingNodeCore = ref(false),
+  preparationTask = ref<MachineTask | null>(null);
+const creatorTrigger = shallowRef<HTMLElement | null>(null);
 const routes = ref<RelayRoute[]>([]),
   relayError = ref('');
 const busy = ref(false),
@@ -76,6 +82,15 @@ let alive = true;
 let timer: ReturnType<typeof setInterval> | undefined;
 let detailRequest = 0;
 const snapshot = computed(() => detail.value?.snapshot);
+const reportedAddresses = computed(() => [
+  ...new Set(
+    (snapshot.value?.nodes || []).flatMap((node) =>
+      typeof node.address === 'string' && node.address.trim() && node.address !== '[已隐藏]'
+        ? [node.address.trim()]
+        : [],
+    ),
+  ),
+]);
 const canCommand = computed(
   () => !!detail.value?.machine.enabled && !!detail.value.machine.revision && !!snapshot.value,
 );
@@ -323,6 +338,11 @@ async function syncRoute(load = true) {
     selectedId.value = id;
     detail.value = null;
     actionForm.value = null;
+    addingNode.value = false;
+    creatorHidden.value = false;
+    preparingNodeCore.value = false;
+    preparationTask.value = null;
+    creatorTrigger.value = null;
     submittedTask.value = null;
     editingFallback.value = null;
     editorTrigger.value = null;
@@ -468,6 +488,10 @@ function normalizeChoices(changed = '') {
   }
 }
 function openAction(action: MachineAction, initial: Record<string, string | boolean> = {}) {
+  if (action === 'node.add') {
+    openNodeCreator();
+    return;
+  }
   if (action === 'node.edit' && typeof initial.id === 'string') {
     const node = snapshot.value?.nodes.find((node) => node.id === initial.id);
     if (node) openEditor(node);
@@ -488,6 +512,30 @@ function openAction(action: MachineAction, initial: Record<string, string | bool
     values,
   };
   normalizeChoices();
+}
+function openNodeCreator(trigger?: EventTarget | null) {
+  if (!canCommand.value || !availableActions.value.some((item) => item.action === 'node.add'))
+    return;
+  creatorTrigger.value = trigger instanceof HTMLElement ? trigger : null;
+  if (!addingNode.value) preparationTask.value = null;
+  creatorHidden.value = false;
+  addingNode.value = true;
+}
+function prepareNodeCore(core: 'sing-box' | 'xray', action: 'core.install' | 'core.update') {
+  openAction(action, { core, 'release-channel': 'stable' });
+  preparingNodeCore.value = !!actionForm.value;
+}
+function closeAction() {
+  actionForm.value = null;
+  preparingNodeCore.value = false;
+}
+function showCreatorTasks() {
+  creatorHidden.value = true;
+  navigateTab('tasks');
+}
+function resumeNodeCreator(trigger: EventTarget | null) {
+  creatorTrigger.value = trigger instanceof HTMLElement ? trigger : null;
+  creatorHidden.value = false;
 }
 async function queue(
   action: MachineAction,
@@ -523,6 +571,18 @@ async function submitNodeEdit(
 ) {
   return queue('node.edit', params, revision);
 }
+async function submitNodeAdd(
+  params: Record<string, string | string[] | number | boolean>,
+  revision: string,
+) {
+  try {
+    return await queue('node.add', params, revision);
+  } catch (error) {
+    // A conflict may arrive before the next polling snapshot. Refresh without losing the draft.
+    if (error instanceof ApiError && error.status === 409) await refresh().catch(() => {});
+    throw error;
+  }
+}
 async function submitAction() {
   if (!actionForm.value || !detail.value || !snapshot.value) return;
   const { definition, values, revision } = actionForm.value;
@@ -537,8 +597,9 @@ async function submitAction() {
     if (selected.some((value) => !options(field).some((option) => option.value === value)))
       throw new Error(field.label + '已不可用，请重新选择。');
   }
-  await queue(definition.action, params, revision);
-  actionForm.value = null;
+  const task = await queue(definition.action, params, revision);
+  if (preparingNodeCore.value) preparationTask.value = task;
+  closeAction();
 }
 function coreActions(core: string) {
   return availableActions.value.filter(
@@ -783,6 +844,12 @@ onBeforeUnmount(() => {
           </div>
         </header>
         <p v-if="message" class="notice" role="status">{{ message }}</p>
+        <div v-if="addingNode && creatorHidden" class="attention-banner">
+          <span>添加节点的草稿与提交状态已保留。</span>
+          <button type="button" @click="resumeNodeCreator($event.currentTarget)">
+            返回添加节点
+          </button>
+        </div>
         <div v-if="snapshot?.pendingCores.length" class="attention-banner">
           <strong>! {{ snapshot.pendingCores.join('、') }} 有配置待应用</strong>
           <div class="actions">
@@ -878,7 +945,7 @@ onBeforeUnmount(() => {
                     class="primary"
                     aria-label="添加机器节点"
                     :disabled="busy || !canCommand"
-                    @click="openAction('node.add')"
+                    @click="openNodeCreator($event.currentTarget)"
                   >
                     ＋ 添加机器节点
                   </button>
@@ -1369,6 +1436,23 @@ onBeforeUnmount(() => {
         ><button form="rename-machine" class="primary" :disabled="busy">保存名称</button></template
       ></ModalDialog
     >
+    <MachineNodeCreator
+      v-if="addingNode && snapshot && detail?.machine.revision"
+      :key="selectedId"
+      :snapshot="snapshot"
+      :addresses="reportedAddresses"
+      :machine-name="detail.machine.name"
+      :revision="detail.machine.revision"
+      :tasks="detail.tasks"
+      :enabled="canCommand && !busy"
+      :active="!preparingNodeCore && !creatorHidden"
+      :preparation-task="preparationTask"
+      :submit="submitNodeAdd"
+      :return-focus-to="creatorTrigger"
+      @close="addingNode = false"
+      @show-tasks="showCreatorTasks"
+      @prepare-core="prepareNodeCore"
+    />
     <MachineNodeEditor
       v-if="editorNode && detail?.machine.revision"
       :key="selectedId + '/' + editorNode.id"
@@ -1388,8 +1472,11 @@ onBeforeUnmount(() => {
       :label="actionForm.definition.label"
       wide
       :dismissible="!busy"
-      @close="actionForm = null"
+      @close="closeAction"
       ><h2>{{ actionForm.definition.label }}</h2>
+      <p v-if="preparingNodeCore" class="notice">
+        添加节点的草稿已保留。完成内核操作后返回核对，不会自动创建节点。
+      </p>
       <p v-if="actionForm.definition.warning">{{ actionForm.definition.warning }}</p>
       <p>未填写的字段不会发送。编辑时留空保留原值；使用 off / default 明确关闭或恢复默认。</p>
       <p v-if="formChanged" class="notice" role="alert">
@@ -1457,13 +1544,16 @@ onBeforeUnmount(() => {
             v-model="actionForm.installDeps"
             type="checkbox"
             :disabled="busy"
-          />自动安装所需依赖</label
+          />自动安装必要系统工具</label
         >
-        <p class="muted">只安装当前操作所必需的系统工具。</p>
+        <p class="muted">
+          此选项只安装必要系统工具，不包含代理内核；内核由安装或升级操作单独管理。
+        </p>
         <p v-if="message" role="alert">{{ message }}</p>
       </form>
       <template #footer
-        ><button :disabled="busy" @click="actionForm = null">取消</button
+        ><button :disabled="busy" @click="closeAction">
+          {{ preparingNodeCore ? '返回添加节点' : '取消' }}</button
         ><button
           form="machine-action"
           class="primary"

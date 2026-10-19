@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { join } from 'node:path';
-import { readdir } from 'node:fs/promises';
 import { parse } from 'yaml';
 import { hy2Fixture, socksUdpRequest, fixturePin } from './hy2-fixture.mjs';
-import { socksRequest, start, dualPort } from './chain-connections.mjs';
-import { chainItem } from './chain-fixtures.mjs';
+import { socksRequest, start, dualPort } from './kernel-fixture.mjs';
 import { hy2CertificateRequest } from '../dist/server/shared/hy2-certificates.js';
 import { outputFormats } from '../dist/server/shared/subscriptions.js';
 import { renderInput } from '../dist/server/converter/render.js';
@@ -122,12 +120,6 @@ test('HY2 certificate mismatch fails closed and Xray retains explicit stable-ver
     }
   }
   assert.equal(f.counts.tcp, 0);
-  const chain = chainItem('ss', 'hysteria2');
-  chain.exit = structuredClone(server.draft);
-  chain.exit.protocolOptions.ports = String(server.draft.port);
-  await assert.rejects(renderInput({ target: 'xray', items: [chain] }, f.client), (error) =>
-    error.diagnostics.some((d) => d.field === 'exit.protocolOptions.ports'),
-  );
   const fast = structuredClone(server.draft);
   fast.protocolOptions.ports = String(fast.port);
   fast.protocolOptions.hopInterval = 1;
@@ -138,102 +130,6 @@ test('HY2 certificate mismatch fails closed and Xray retains explicit stable-ver
     ),
     (error) => error.diagnostics.some((d) => d.field === 'protocolOptions.hopInterval'),
   );
-});
-
-test('HY2 certificate acquisition through an authenticated entry is cancelled cleanly and preserves real two-hop traffic', async (t) => {
-  const f = await hy2Fixture(t);
-  const entry = await f.proxy('ss');
-  const exit = await f.proxy('hysteria2', { obfs: true });
-  const request = hy2CertificateRequest(exit.draft, entry.draft);
-  const proof = await f.certificates.resolve(request);
-  assert.equal(proof.pinSHA256, fixturePin);
-  assert.ok(entry.log.includes('outbound'), 'Probe reached the HY2 server through the entry');
-  const temporary = join(f.directory, 'node-test-tmp');
-  assert.deepEqual(await readdir(temporary), []);
-  for (const pair of [
-    [entry.draft, exit.draft],
-    [exit.draft, entry.draft],
-  ]) {
-    const chain = { ...chainItem(), entry: pair[0], exit: pair[1] };
-    const port = await dualPort();
-    const saved = await f.plan(chain, ['mihomo', 'singbox', 'xray'], port);
-    for (const target of ['mihomo', 'singbox', 'xray']) {
-      const rendered = (await f.subscriptions.artifact(saved.id, target)).content;
-      const process = await start(
-        f.binaries[target],
-        target,
-        target === 'mihomo' ? parse(rendered) : JSON.parse(rendered),
-        join(f.directory, 'chain-' + pair[0].protocol + '-' + target),
-      );
-      try {
-        await process.ready(port, true);
-        await socksRequest(port, f.httpPort);
-        await socksUdpRequest(port, f.udpPort);
-      } catch (error) {
-        await process.stop();
-        throw new Error(
-          pair[0].protocol +
-            ' -> ' +
-            pair[1].protocol +
-            ' / ' +
-            target +
-            ': ' +
-            error.message +
-            '\nclient: ' +
-            process.log +
-            '\nentry: ' +
-            entry.log +
-            '\nexit: ' +
-            exit.log,
-          { cause: error },
-        );
-      } finally {
-        await process.stop();
-      }
-    }
-  }
-  await f.hopping(exit.draft);
-  const hoppingChain = { ...chainItem(), entry: entry.draft, exit: exit.draft };
-  const hoppingPort = await dualPort();
-  const hoppingPlan = await f.plan(hoppingChain, ['mihomo', 'singbox'], hoppingPort);
-  for (const target of ['mihomo', 'singbox']) {
-    const rendered = (await f.subscriptions.artifact(hoppingPlan.id, target)).content;
-    const process = await start(
-      f.binaries[target],
-      target,
-      target === 'mihomo' ? parse(rendered) : JSON.parse(rendered),
-      join(f.directory, 'chain-hopping-' + target),
-    );
-    try {
-      await process.ready(hoppingPort, true);
-      await socksRequest(hoppingPort, f.httpPort);
-      await socksUdpRequest(hoppingPort, f.udpPort);
-    } catch (error) {
-      await process.stop();
-      throw new Error(
-        'Hopping chain / ' +
-          target +
-          ': ' +
-          error.message +
-          '\nclient: ' +
-          process.log +
-          '\nentry: ' +
-          entry.log +
-          '\nexit: ' +
-          exit.log,
-        { cause: error },
-      );
-    } finally {
-      await process.stop();
-    }
-  }
-  const abort = new AbortController();
-  const missing = { ...request, pinSHA256: 'cd'.repeat(32), port: await dualPort(), ports: '' };
-  const pending = f.certificates.resolve(missing, abort.signal);
-  setTimeout(() => abort.abort(), 200);
-  await assert.rejects(pending, { name: 'AbortError' });
-  await f.certificates.close();
-  assert.deepEqual(await readdir(temporary), []);
 });
 
 test('sing-box accepts a certificate renewed with the same key while certificate pins remain exact', async (t) => {

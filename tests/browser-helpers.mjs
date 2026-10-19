@@ -31,7 +31,7 @@ export async function api(page, path, body, method = body === undefined ? 'GET' 
   expect(response.ok(), await response.text()).toBe(true);
   return response.json();
 }
-export async function cleanup(page, { resource, chain, plan } = {}) {
+export async function cleanup(page, { resource, plan } = {}) {
   const current = await api(page, '/api/node-tests/current');
   if (current.batch?.state === 'running') {
     await api(page, '/api/node-tests/' + current.batch.id + '/cancel', {});
@@ -39,17 +39,13 @@ export async function cleanup(page, { resource, chain, plan } = {}) {
       .poll(async () => (await api(page, '/api/node-tests/current')).batch.state)
       .not.toBe('running');
   }
-  for (const [type, id] of [
-    ['subscriptions', plan],
-    ['chains', chain],
-  ])
-    if (id) {
-      const response = await page.request.get('/api/' + type + '/' + id);
-      if (response.ok()) {
-        const value = await response.json();
-        await api(page, '/api/' + type + '/' + id, { revision: value.revision }, 'DELETE');
-      }
+  if (plan) {
+    const response = await page.request.get('/api/subscriptions/' + plan);
+    if (response.ok()) {
+      const value = await response.json();
+      await api(page, '/api/subscriptions/' + plan, { revision: value.revision }, 'DELETE');
     }
+  }
   if (resource)
     await api(page, '/upstream/sub-store/api/sub/' + resource.upstreamName, undefined, 'DELETE');
 }

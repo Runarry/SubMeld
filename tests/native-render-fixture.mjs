@@ -14,8 +14,7 @@ export async function nativeRenderer() {
   await store.resources.sync();
   return {
     async render({ items, target, listenPort = 1080 }) {
-      const resources = [],
-        chains = [];
+      const resources = [];
       let plan;
       const add = async (drafts) => {
         const resource = await store.nodes.create({
@@ -29,22 +28,8 @@ export async function nativeRenderer() {
       try {
         const inputs = [];
         for (const item of items.filter((i) => !i.excluded)) {
-          if (item.kind === 'chain') {
-            const entry = { ...structuredClone(item.entry), name: 'entry' },
-              exit = { ...structuredClone(item.exit), name: 'exit' };
-            const resource = await add([entry, exit]);
-            const chain = await store.chains.create({
-              name: item.name,
-              enabled: true,
-              entry: { resourceId: resource.id, nodeName: 'entry' },
-              exit: { resourceId: resource.id, nodeName: 'exit' },
-            });
-            chains.push(chain);
-            inputs.push({ kind: 'chain', id: chain.id });
-          } else {
-            const resource = await add([item.draft]);
-            inputs.push({ kind: 'resource', id: resource.id });
-          }
+          const resource = await add([item.draft]);
+          inputs.push({ kind: 'resource', id: resource.id });
         }
         plan = await store.subscriptions.create({
           ...newSubscription(),
@@ -70,13 +55,12 @@ export async function nativeRenderer() {
             : config.outbounds.filter((n) => n.type !== 'selector');
         assert.equal(
           emitted.length,
-          inputs.length + chains.length,
-          'Native output must retain every ordinary node and both chain members',
+          inputs.length,
+          'Native output must retain every ordinary node',
         );
-        return { full, counts: { output: emitted.length - chains.length } };
+        return { full, counts: { output: emitted.length } };
       } finally {
         if (plan) await store.subscriptions.delete(plan.id, plan.revision);
-        for (const chain of chains) await store.chains.delete(chain.id, chain.revision);
         for (const resource of resources)
           await client.api('/api/sub/' + resource.upstreamName, undefined, 'DELETE');
         await store.resources.sync();

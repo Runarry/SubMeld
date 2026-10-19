@@ -206,7 +206,7 @@ async function imagePage(
       font(ctx, 18);
       text(
         ctx,
-        `协议 ${row.protocol || '未知'} · 状态 ${rowLabels[row.state]}${row.stale ? ' · 快照已过期' : ''} · 执行内核 ${speedCoreLabels[executionCore(report.settings, row.subject)]}`,
+        `协议 ${row.protocol || '未知'} · 状态 ${rowLabels[row.state]}${row.stale ? ' · 快照已过期' : ''} · 执行内核 ${speedCoreLabels[executionCore(report.settings)]}`,
         36,
         top + 72,
         WIDTH - 72,

@@ -8,7 +8,6 @@ export const upstreamIdentitySchema = z.object({
   id: z.string().uuid(),
   role: z
     .enum([
-      'chain',
       'plan',
       'output',
       'template',

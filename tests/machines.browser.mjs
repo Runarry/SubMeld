@@ -40,7 +40,12 @@ function snapshot(name, suffix = 'initial') {
       ],
       profiles: [
         { id: 'ss', label: 'Shadowsocks', cores: ['sing-box', 'xray'] },
-        { id: 'sing-only', label: '仅 sing-box', cores: ['sing-box'] },
+        {
+          id: 'vless-reality-vision',
+          label: 'VLESS + REALITY + Vision',
+          cores: ['sing-box', 'xray'],
+        },
+        { id: 'vless-ws-tls', label: 'VLESS + WebSocket + TLS', cores: ['sing-box'] },
       ],
     },
     cores: [
@@ -50,7 +55,7 @@ function snapshot(name, suffix = 'initial') {
         running: true,
         enabled: true,
         pending_restart: false,
-        version: '1.browser',
+        version: '1.14.0',
       },
       {
         core: 'xray',
@@ -58,7 +63,7 @@ function snapshot(name, suffix = 'initial') {
         running: false,
         enabled: false,
         pending_restart: false,
-        version: '26.browser',
+        version: '26.6.1',
       },
     ],
     nodes: [
@@ -193,29 +198,32 @@ test('machines show one-time installation credentials and operate through typed 
     await expect(detail).not.toContainText('DO-NOT-SHOW-BROWSER-SECRET');
     await detail.getByRole('button', { name: '添加机器节点', exact: true }).click();
     const form = page.getByRole('dialog', { name: '添加机器节点', exact: true });
-    await expect(form.getByLabel('自动安装所需依赖', { exact: true })).toBeChecked();
-    await form.getByLabel('协议配置 *', { exact: true }).selectOption('sing-only');
+    await expect(form.getByLabel('自动安装必要系统工具', { exact: true })).toBeChecked();
+    await form.locator('summary').filter({ hasText: '更多协议' }).click();
+    await form.getByLabel('更多协议', { exact: true }).selectOption('vless-ws-tls');
     await expect(
-      form.getByLabel('内核 *', { exact: true }).locator('option[value=xray]'),
+      form.getByLabel('内核', { exact: true }).locator('option[value=xray]'),
     ).toHaveCount(0);
-    await form.getByLabel('名称', { exact: true }).fill('由网页创建');
+    await form.getByLabel('节点名称', { exact: true }).fill('由网页创建');
     await form.getByLabel('监听端口', { exact: true }).fill('8443');
     await form.getByLabel('客户端连接地址', { exact: true }).fill('203.0.113.50');
-    await form.getByRole('button', { name: '高级选项', exact: true }).click();
     await form.getByLabel('证书模式', { exact: true }).selectOption('managed');
-    await form.getByLabel('托管证书 ID', { exact: true }).fill('crt-browser-public');
-    await form.getByRole('button', { name: '提交任务', exact: true }).click();
-    await expect(form).toHaveCount(0);
+    await form.getByLabel('托管证书 ID', { exact: true }).fill('crt-0123456789abcdef');
+    await form.getByRole('button', { name: '创建节点', exact: true }).click();
+    await expect(form.getByRole('status')).toContainText('排队');
     const command = await pollCommand(page, machine);
     expect(command.action).toBe('node.add');
     expect(command.params).toEqual({
-      profile: 'sing-only',
+      profile: 'vless-ws-tls',
       core: 'sing-box',
       name: '由网页创建',
       port: 8443,
       address: '203.0.113.50',
+      listen: '::',
+      sni: 'www.amd.com',
+      'ip-strategy': 'auto',
       'cert-mode': 'managed',
-      'cert-id': 'crt-browser-public',
+      'cert-id': 'crt-0123456789abcdef',
       'install-deps': true,
     });
     const next = {
@@ -235,6 +243,8 @@ test('machines show one-time installation credentials and operate through typed 
       '浏览器夹具：配置已保存，等待重启',
       next,
     );
+    await expect(form.getByRole('status')).toContainText('待重启', { timeout: 15000 });
+    await form.getByRole('button', { name: '返回节点', exact: true }).click();
     await refreshMachineDetail(page);
     await expect(detail).toContainText('sing-box 有配置待应用');
     await expect(detail.locator('.inline-task')).toContainText('添加机器节点 · 待重启');
@@ -274,7 +284,7 @@ test('machine refresh preserves edit inputs and requires resolving a changed sna
       .first()
       .click();
     const form = page.getByRole('dialog', { name: '编辑机器节点', exact: true });
-    const installDeps = form.getByLabel('自动安装所需依赖', { exact: true });
+    const installDeps = form.getByLabel('自动安装必要系统工具', { exact: true });
     await expect(installDeps).toBeChecked();
     await installDeps.uncheck();
     await form.getByLabel('节点名称', { exact: true }).fill('保留正在编辑的名称');
@@ -288,11 +298,13 @@ test('machine refresh preserves edit inputs and requires resolving a changed sna
     await expect(installDeps).not.toBeChecked();
     await expect(form.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
     await form.getByRole('button', { name: '采用最新版本', exact: true }).click();
-    const submission = page.waitForRequest(
-      (request) => request.method() === 'POST' && request.url().endsWith('/commands'),
+    const submission = page.waitForResponse(
+      (response) => response.request().method() === 'POST' && response.url().endsWith('/commands'),
     );
     await form.getByRole('button', { name: '保存修改', exact: true }).click();
-    expect((await submission).postDataJSON().params).not.toHaveProperty('install-deps');
+    const queued = await submission;
+    expect(queued.status()).toBe(201);
+    expect(queued.request().postDataJSON().params).not.toHaveProperty('install-deps');
     const tasks = (await api(page, '/api/machines/' + machine.machine.id)).tasks;
     expect(tasks[0].expectedRevision).toBe(machine.snapshot.revision);
     await form.getByRole('button', { name: '返回节点', exact: true }).click();

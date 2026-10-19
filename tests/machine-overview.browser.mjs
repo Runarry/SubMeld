@@ -371,11 +371,13 @@ test('node drawer restores native safe values, filters protocol fields and submi
       expect(box.width).toBe(await page.evaluate(() => window.innerWidth));
     }
     await page.screenshot({ path: info.outputPath('machine-node-editor.png'), fullPage: true });
-    const submission = page.waitForRequest(
-      (request) => request.method() === 'POST' && request.url().endsWith('/commands'),
+    const submission = page.waitForResponse(
+      (response) => response.request().method() === 'POST' && response.url().endsWith('/commands'),
     );
     await save.click();
-    expect((await submission).postDataJSON().params).toEqual({
+    const submitted = await submission;
+    expect(submitted.status()).toBe(201);
+    expect(submitted.request().postDataJSON().params).toEqual({
       id: hy2.id,
       port: 8443,
       'install-deps': true,
@@ -408,7 +410,7 @@ test('node drawer keeps dirty input through revision conflicts and leaves unknow
     await openMachine(page, machine, '&node=' + node.id + '&edit=1');
     const editor = page.getByRole('dialog', { name: '编辑机器节点', exact: true });
     await editor.getByLabel('监听端口', { exact: true }).fill('9443');
-    await editor.getByLabel('自动安装所需依赖', { exact: true }).uncheck();
+    await editor.getByLabel('自动安装必要系统工具', { exact: true }).uncheck();
     machine.snapshot = {
       ...machine.snapshot,
       revision: revision(machine.machine.id + 'external'),
@@ -419,7 +421,7 @@ test('node drawer keeps dirty input through revision conflicts and leaves unknow
     await report(page, machine);
     await expect(editor.getByRole('alert')).toContainText('机器版本已变化', { timeout: 10000 });
     await expect(editor.getByLabel('监听端口', { exact: true })).toHaveValue('9443');
-    await expect(editor.getByLabel('自动安装所需依赖', { exact: true })).not.toBeChecked();
+    await expect(editor.getByLabel('自动安装必要系统工具', { exact: true })).not.toBeChecked();
     await expect(editor.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
     await editor.getByRole('button', { name: '采用最新版本', exact: true }).click();
     await expect(editor.getByLabel('节点名称', { exact: true })).toHaveValue('外部更新的名称');

@@ -702,8 +702,7 @@ export class MachineStore {
           throw new AppError('MACHINE_REQUEST_CONFLICT', '此请求编号已用于其他机器操作。', 409);
         return { task: this.taskView(task) };
       }
-      const envelope = this.envelope(row),
-        snapshot = envelope?.snapshot;
+      const snapshot = this.envelope(row)?.snapshot;
       if (!row.enabled)
         throw new AppError('MACHINE_DISABLED', '此机器已停用，请启用后再操作。', 403);
       if (row.revision !== value.expectedRevision || snapshot?.revision !== value.expectedRevision)
@@ -716,36 +715,6 @@ export class MachineStore {
           '此机器尚不支持该操作，请更新 Agent。',
           422,
         );
-      if (
-        ['node.delete', 'core.uninstall', 'node.switch', 'forward.delete'].includes(value.action) ||
-        (value.action === 'exit.delete' && value.params.cascade === true)
-      ) {
-        const targetId = value.params.id ?? value.params['node-id'];
-        const forwardIds =
-          value.action === 'forward.delete' && typeof targetId === 'string'
-            ? [targetId]
-            : snapshot.relay.forwards.flatMap((forward) =>
-                forward.exit_id === targetId && typeof forward.id === 'string' ? [forward.id] : [],
-              );
-        const selected = [
-          ...snapshot.exports,
-          ...cores.flatMap((core) => envelope?.applied[core].exports ?? []),
-        ].filter((item) => {
-          if (value.action === 'core.uninstall')
-            return value.params.core === 'all' || item.core === value.params.core;
-          if (value.action === 'forward.delete' || value.action === 'exit.delete')
-            return item.kind === 'forward' && forwardIds.some((id) => item.id.startsWith(id + ':'));
-          return item.id === targetId;
-        });
-        if (selected.length && this.entry(row.resource_id)) {
-          const current = await this.resources.preview(row.resource_id);
-          await this.resources.assertDeletable(
-            current.rows
-              .filter((item) => selected.some((node) => node.name === item.view.name))
-              .map((item) => item.view),
-          );
-        }
-      }
       const fileId = requestId,
         command: MachineCommand = { ...value, schemaVersion: 1, requestId };
       const orphan = this.file(fileId, 'machine-command', row.id);

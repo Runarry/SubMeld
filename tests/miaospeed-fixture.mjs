@@ -4,8 +4,8 @@ import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { dualPort, start } from './chain-connections.mjs';
-import { chainItem } from './chain-fixtures.mjs';
+import { dualPort, start } from './kernel-fixture.mjs';
+import { node } from './fixtures.mjs';
 import { speedSettingsSchema } from '../dist/server/shared/miaospeed.js';
 
 // Disposable real proxy/HTTP/STUN services. No personal subscriptions or public credentials.
@@ -88,38 +88,33 @@ export async function controlledNetwork(binary, directory) {
       (changed ? udp[2] : socket).send(Buffer.concat([header, attrs]), remote.port, remote.address);
     });
   }
-  const chain = chainItem(),
-    proxies = [];
-  for (const [draft, part] of [
-    [chain.entry, 'entry'],
-    [chain.exit, 'exit'],
-  ]) {
-    draft.server = '127.0.0.1';
-    draft.port = await dualPort();
-    draft.auth.password = part + '-public-test-only';
-    draft.protocolOptions.method = 'aes-128-gcm';
-    const proxy = await start(
-      binary,
-      'singbox',
-      {
-        log: { level: 'info' },
-        inbounds: [
-          {
-            type: 'shadowsocks',
-            listen: '0.0.0.0',
-            listen_port: draft.port,
-            method: 'aes-128-gcm',
-            password: draft.auth.password,
-          },
-        ],
-        outbounds: [{ type: 'direct', tag: 'direct' }],
-        route: { final: 'direct' },
-      },
-      join(directory, part),
-    );
-    proxies.push(proxy);
-    await proxy.ready(draft.port);
-  }
+  const draft = node('ss');
+  draft.name = 'controlled node';
+  draft.server = '127.0.0.1';
+  draft.port = await dualPort();
+  draft.auth.password = 'proxy-public-test-only';
+  draft.protocolOptions.method = 'aes-128-gcm';
+  const proxy = await start(
+    binary,
+    'singbox',
+    {
+      log: { level: 'info' },
+      inbounds: [
+        {
+          type: 'shadowsocks',
+          listen: '0.0.0.0',
+          listen_port: draft.port,
+          method: 'aes-128-gcm',
+          password: draft.auth.password,
+        },
+      ],
+      outbounds: [{ type: 'direct', tag: 'direct' }],
+      route: { final: 'direct' },
+    },
+    join(directory, 'proxy'),
+  );
+  await proxy.ready(draft.port);
+  const proxies = [proxy];
   const settings = speedSettingsSchema.parse({
     pingUrl: `http://127.0.0.1:${port}/ping`,
     downloadUrl: `http://127.0.0.1:${port}/down`,
@@ -135,9 +130,9 @@ export async function controlledNetwork(binary, directory) {
     name: 'controlled <>中\u2028',
     type: 'ss',
     server: 'host.docker.internal',
-    port: chain.entry.port,
+    port: draft.port,
     cipher: 'aes-128-gcm',
-    password: chain.entry.auth.password,
+    password: draft.auth.password,
     udp: true,
   };
   const script = {
@@ -156,16 +151,15 @@ export async function controlledNetwork(binary, directory) {
     counts,
     settings,
     raw,
-    chain,
+    draft,
     script,
     geoScript,
     proxies,
     port,
     stunPort,
-    assertTwoHops() {
-      assert.ok(proxies[0].log.includes('127.0.0.1:' + chain.exit.port), 'Entry reached exit');
-      assert.ok(proxies[1].log.includes('127.0.0.1:' + port), 'Exit reached HTTP target');
-      assert.ok(proxies[1].log.includes('127.0.0.1:' + stunPort), 'Exit reached STUN target');
+    assertProxyTraffic() {
+      assert.ok(proxy.log.includes('127.0.0.1:' + port), 'Proxy reached HTTP target');
+      assert.ok(proxy.log.includes('127.0.0.1:' + stunPort), 'Proxy reached STUN target');
     },
     async close() {
       for (const proxy of proxies) await proxy.stop();
