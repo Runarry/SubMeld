@@ -6,6 +6,7 @@ export default defineConfig({
     'node-tests.browser.mjs',
     'hy2.browser.mjs',
     'node-reporting.browser.mjs',
+    'machines.browser.mjs',
     'upstream.browser.mjs',
     'miaospeed.browser.mjs',
     'telegram.browser.mjs',

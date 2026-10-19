@@ -17,11 +17,18 @@ export const upstreamIdentitySchema = z.object({
       'report-source',
       'certificate-cache',
       'certificate-resolver',
+      'machine-snapshot',
+      'machine-command',
+      'machine-source',
+      'relay-route',
+      'relay-source',
     ])
     .optional(),
   version: z.number().int().optional(),
   parent: z.string().optional(),
   format: z.string().optional(),
+  deploymentRevision: z.string().optional(),
+  topologyRevision: z.string().optional(),
 });
 export const identityKey = '_submeld';
 

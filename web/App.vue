@@ -9,13 +9,25 @@ import { testActionsKey } from './nodeTests';
 import { type TestSubject } from '../server/shared/node-tests';
 import ChainLibrary from './ChainLibrary.vue';
 import SubscriptionLibrary from './SubscriptionLibrary.vue';
+import MachinesPage from './MachinesPage.vue';
+import RelaysPage from './RelaysPage.vue';
 
 import { ApiError, request } from './api';
 
-type View = 'home' | 'library' | 'chains' | 'subscriptions' | 'tests' | 'supportFiles';
+type View =
+  | 'home'
+  | 'library'
+  | 'chains'
+  | 'subscriptions'
+  | 'tests'
+  | 'supportFiles'
+  | 'machines'
+  | 'relays';
 const nav = [
   { view: 'home' as const, hash: 'home', label: '服务入口' },
   { view: 'library' as const, hash: 'nodes', label: '节点' },
+  { view: 'machines' as const, hash: 'machines', label: '机器' },
+  { view: 'relays' as const, hash: 'relays', label: '中转线路' },
   { view: 'chains' as const, hash: 'chains', label: '两跳链' },
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
   { view: 'tests' as const, hash: 'tests', label: '测试中心' },
@@ -51,6 +63,8 @@ function parseHash(): View {
   if (key === 'support-files' || key === 'tools') return 'supportFiles';
   if (key === 'tests') return 'tests';
   if (key === 'chains') return 'chains';
+  if (key === 'machines') return 'machines';
+  if (key === 'relays') return 'relays';
   if (key === 'sources' || key === 'workbench') return 'library';
   if (key === 'nodes' || key === 'library') return 'library';
 
@@ -203,6 +217,8 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       <NodeLibrary v-if="view === 'library'" :api="api" />
       <ChainLibrary v-if="view === 'chains'" :api="api" />
       <SubscriptionLibrary v-if="view === 'subscriptions'" :api="api" />
+      <MachinesPage v-if="view === 'machines'" :api="api" />
+      <RelaysPage v-if="view === 'relays'" :api="api" />
     </main>
   </div>
 </template>

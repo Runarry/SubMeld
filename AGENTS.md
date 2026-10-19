@@ -8,7 +8,7 @@
 
 - 单根包 Vue + TypeScript、Node.js + Hono、SQLite；Node.js 24.6.0、pnpm 10.33.2。保持 strict，外部数据以 unknown 校验。
 - 三个独立容器：Sub-Store、miaospeed、SubMeld。miaospeed 固定 AirportR 4.7.6，API v3 并启用上行；镜像摘要与 upstreams.lock.json 一致。不维护上游分支，不构建内嵌源码或转换 Worker。
-- Sub-Store 是节点、原始来源、处理操作、链、模板、配套脚本、输出方案及分享令牌的权威存储。SQLite 只保存账号、运行设置和测试结果；预览在内存中。
+- Sub-Store 是节点、原始来源、处理操作、链、模板、配套脚本、输出方案及分享令牌的权威存储，也保存机器部署与中转私有文件。SQLite 保存账号、运行设置、测试结果及机器/任务元数据，不保存节点和部署参数；预览在内存中。
 - 节点使用统一页面，不按本地／上游分类。复杂编辑交给原生页面；不重新引入结构化节点编辑工作台。
 - 根路径为 Sub-Store 原生前端，/submeld/ 为登录与增强界面；上游管理请求经过同源登录代理，服务端口不公开。保留 Service Worker 的路径隔离。
 - 资源 UUID 与名称分离。链成员按资源 UUID＋精确名称解析，缺失或重名即失效，不猜测关联。旧 kind 标记不再参与分类。
@@ -25,6 +25,8 @@
 - 保留当前 Sub-Store、登录、旧测试数据及旧 Koipy 配置文件；不恢复 Koipy 服务或管理页，旧 #/koipy 转入测试中心。2026-10-01 授权可选 Telegram 测速入口：白名单私聊、长轮询、独立预设、内存排队、PNG/CSV 回传，复用现有测速与批次锁。Bot Token 及运行元数据存 SQLite，节点输入只在内存，重启不恢复未完成测速；Telegram 代理不影响实际测速流量。旧 submeld.sqlite 目录拒绝打开，不删除旧数据目录。
 
 ## 改动与检查
+
+- 2026-10-19 授权集中机器与中转管理：Linux Agent 主动连接，调用配套 vpsctl machine API；保留 native 节点、凭据、服务所有权、锁、pending 与回滚。服务器配置和命令原文只存 Sub-Store 私有文件，SQLite 仅存机器及任务元数据。端口/协议中转复用 vpsctl；TLS 隧道使用锁定官方 GOST 独立进程。机器本地操作与远程变更以锁内 revision 和请求回执协调，不能将已发送/已保存当作生效或连通。
 
 - 只实现授权行为及必要支持，沿用现有结构和依赖；不扩成平台，不修改全局 Git 配置，不擅自推送或部署。
 - 修改转换、组合或模板语义时更新 server/subscriptions.ts 的 ENGINE_VERSION；配套脚本由正常构建打包，必须验证其实际在固定 Sub-Store 中运行。

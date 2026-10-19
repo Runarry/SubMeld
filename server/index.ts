@@ -13,6 +13,7 @@ import { NodeTester } from './node-tests.js';
 import { MiaospeedTester } from './miaospeed.js';
 import { TelegramService } from './telegram.js';
 import { Hy2Certificates } from './hy2-certificates.js';
+import { RelayStore } from './relays.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -62,6 +63,7 @@ async function main() {
     config,
   );
   const telegram = new TelegramService(settings.telegramStore, miaospeed);
+  const relays = new RelayStore(settings.machines, settings.resources);
   let app: ReturnType<typeof createApp>;
   try {
     await kernels.initialize();
@@ -69,6 +71,8 @@ async function main() {
       certificates,
       miaospeed,
       telegram,
+      machines: settings.machines,
+      relays,
       webRoot,
       resources: settings.resources,
       files: settings.files,
@@ -98,12 +102,14 @@ async function main() {
   const server = serve({ fetch: app.fetch, hostname, port: config.port }, () => {
     console.info('SubMeld started on port ' + config.port + '.');
     telegram.start();
+    relays.start();
   });
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
     closing = true;
     server.close();
+    await relays.close();
     if ('closeAllConnections' in server) server.closeAllConnections();
     await telegram.close();
     await miaospeed.close();

@@ -193,8 +193,13 @@ export class UpstreamResources {
           available: processed !== null,
           testable: !testReason,
           testReason,
-          deletion:
-            local && rawIndex !== null ? 'content' : processed && unique ? 'filter' : 'unavailable',
+          deletion: ['machine-source', 'relay-source'].includes(marker(entry.record)?.role ?? '')
+            ? 'unavailable'
+            : local && rawIndex !== null
+              ? 'content'
+              : processed && unique
+                ? 'filter'
+                : 'unavailable',
         },
       });
     };
@@ -361,6 +366,12 @@ export class UpstreamResources {
       const changes = new Map<string, { removed: Set<number>; names: string[] }>();
       for (const ref of refs) {
         const row = this.current(ref);
+        if (
+          ['machine-source', 'relay-source'].includes(
+            marker(this.record(ref.resourceId).record)?.role ?? '',
+          )
+        )
+          throw new AppError('MANAGED_NODE', '此节点由机器或中转线路管理，请在对应页面删除。', 409);
         if (row.view.deletion === 'unavailable')
           throw new AppError(
             'NODE_DELETE_UNSAFE',

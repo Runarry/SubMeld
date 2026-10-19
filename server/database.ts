@@ -16,6 +16,7 @@ import { MiaospeedInput } from './miaospeed-input.js';
 import { TelegramStore } from './telegram-store.js';
 import { metricIds } from './shared/miaospeed.js';
 import { NodeReporting } from './node-reporting.js';
+import { MachineStore } from './machines.js';
 import { randomBytes } from 'node:crypto';
 export function openSettings(dataDir: string, development: boolean, client = new SubStoreClient()) {
   if (process.platform === 'win32' && !development)
@@ -34,12 +35,14 @@ export function openSettings(dataDir: string, development: boolean, client = new
     throw new Error('数据目录正在使用，请先停止应用。');
   }
   let input: MiaospeedInput | undefined;
+  let machines: MachineStore | undefined;
   let db: Database.Database | undefined,
     closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
     input?.close();
+    machines?.close();
     try {
       db?.close();
     } finally {
@@ -95,11 +98,13 @@ export function openSettings(dataDir: string, development: boolean, client = new
         .scripts.filter((script) => script.enabled)
         .map((script) => script.id),
     }));
+    machines = new MachineStore(database, resources);
     return {
       resources,
       files,
       nodes,
       nodeReporting: new NodeReporting(database, resources),
+      machines,
       chains,
       subscriptions,
       testActivity: new TestActivity(),

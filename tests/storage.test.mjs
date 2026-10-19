@@ -46,7 +46,15 @@ test('new settings initialize once, preserve password hashes and enforce single 
         .all()
         .map((r) => r.name)
         .sort(),
-      ['settings', 'node_test_results', 'speed_reports', 'speed_results', 'telegram_tasks'].sort(),
+      [
+        'machine_tasks',
+        'machines',
+        'settings',
+        'node_test_results',
+        'speed_reports',
+        'speed_results',
+        'telegram_tasks',
+      ].sort(),
     );
     db.close();
     assert.equal(
@@ -199,7 +207,15 @@ test('empty v2 business definitions upgrade while preserving account settings an
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .all()
         .map((r) => r.name),
-      ['node_test_results', 'settings', 'speed_reports', 'speed_results', 'telegram_tasks'],
+      [
+        'machine_tasks',
+        'machines',
+        'node_test_results',
+        'settings',
+        'speed_reports',
+        'speed_results',
+        'telegram_tasks',
+      ],
     );
     upgraded.close();
   } finally {

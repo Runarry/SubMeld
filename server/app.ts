@@ -30,11 +30,17 @@ import { scriptConfigSchema } from './shared/miaospeed.js';
 import type { TelegramService } from './telegram.js';
 import type { NodeReporting } from './node-reporting.js';
 import type { Hy2Certificates } from './hy2-certificates.js';
+import type { MachineStore } from './machines.js';
+import { registerMachineRoutes } from './machine-routes.js';
+import { registerRelayRoutes, type RelayStore } from './relays.js';
+import { registerAgentAssets, assertPrivateFileNotShared } from './machine-assets.js';
 
 export type AppOptions = {
   files?: UpstreamFiles;
   certificates?: Hy2Certificates;
   nodeReporting?: NodeReporting;
+  machines?: MachineStore;
+  relays?: RelayStore;
   miaospeed?: MiaospeedTester;
   telegram?: TelegramService;
   resources: UpstreamResources;
@@ -50,6 +56,8 @@ export function createApp({
   files,
   certificates,
   nodeReporting,
+  machines,
+  relays,
   miaospeed,
   telegram,
   resources,
@@ -76,6 +84,8 @@ export function createApp({
     '/api/integrations',
     '/api/miaospeed',
     '/api/telegram',
+    '/api/machines',
+    '/api/relays',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -103,6 +113,8 @@ export function createApp({
         '/api/integrations/',
         '/api/miaospeed/',
         '/api/telegram/',
+        '/api/machines/',
+        '/api/relays/',
       ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
@@ -141,6 +153,9 @@ export function createApp({
       await resources.sync();
     await next();
   });
+  if (machines) registerMachineRoutes(app, machines, config);
+  if (relays) registerRelayRoutes(app, relays);
+  registerAgentAssets(app);
   app.post('/api/internal/hy2-certificates/resolve', async (c) => {
     if (!certificates)
       throw new AppError('HY2_RESOLVER_UNAVAILABLE', 'HY2 证书解析服务未就绪。', 503);
@@ -306,6 +321,7 @@ export function createApp({
   app.on(['GET', 'HEAD'], ['/share/*', '/upstream/sub-store/share/*'], async (c) => {
     const url = new URL(c.req.url);
     const path = url.pathname.replace(/^\/upstream\/sub-store(?=\/share\/)/, '');
+    await assertPrivateFileNotShared(resources, path);
     const response = await frontend.request(path + url.search, {
       method: c.req.method,
       headers: { 'user-agent': c.req.header('User-Agent') ?? 'SubMeld' },
@@ -326,6 +342,7 @@ export function createApp({
     const url = new URL(c.req.url);
     const path = url.pathname.slice('/upstream/sub-store'.length);
     const body = write ? await readJson(c.req.raw, 26 * 1024 * 1024, true) : undefined;
+    await assertPrivateFileNotShared(resources, path, body);
     const forward = () =>
       resources.client.request(path + url.search, {
         method: c.req.method,

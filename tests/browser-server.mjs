@@ -14,6 +14,7 @@ import { loadConfig } from '../dist/server/config.js';
 import { openSettings } from '../dist/server/database.js';
 import { hashPassword, Auth } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
+import { RelayStore } from '../dist/server/relays.js';
 
 mkdirSync('.cache', { recursive: true });
 const directory = mkdtempSync(resolve('.cache/browser-'));
@@ -86,7 +87,11 @@ const telegram = new TelegramService(settings.telegramStore, miaospeed, {
   }),
 });
 telegram.start();
+const relays = new RelayStore(settings.machines, settings.resources);
+relays.start();
 const app = createApp({
+  machines: settings.machines,
+  relays,
   miaospeed,
   telegram,
   resources: settings.resources,
@@ -136,6 +141,8 @@ const httpConfig = loadConfig(false, {
   DATA_DIR: directory,
 });
 const httpApp = createApp({
+  machines: settings.machines,
+  relays,
   nodeReporting: settings.nodeReporting,
   miaospeed,
   telegram,
@@ -166,6 +173,7 @@ async function close() {
     listener.closeAllConnections();
   }
   await telegram.close();
+  await relays.close();
   await tester.close();
   await miaospeed.close();
   await kernels.close();

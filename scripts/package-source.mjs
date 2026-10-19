@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 mkdirSync('dist', { recursive: true });
 // Explicit roots exclude credentials, dependencies, caches and runtime data.
@@ -31,6 +31,12 @@ const sources = [
   'scripts',
   'tests',
   'tools/hy2-cert-probe',
+  ...readdirSync('agent')
+    .filter(
+      (name) =>
+        /\.(?:go|mod|sum|md)$/.test(name) || ['install.sh', 'gost.lock.json'].includes(name),
+    )
+    .map((name) => 'agent/' + name),
   'upstreams.lock.json',
   'miaospeed-scripts.lock.json',
   'docs',

@@ -377,7 +377,15 @@ test('restarting preserves the reporting identity and token without a second nod
         .all()
         .map((r) => r.name)
         .sort(),
-      ['node_test_results', 'settings', 'speed_reports', 'speed_results', 'telegram_tasks'],
+      [
+        'machine_tasks',
+        'machines',
+        'node_test_results',
+        'settings',
+        'speed_reports',
+        'speed_results',
+        'telegram_tasks',
+      ],
     );
   } finally {
     db.close();
