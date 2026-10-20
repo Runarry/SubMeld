@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, provide } from 'vue';
-import HomePage from './HomePage.vue';
 import TestCenter from './TestCenter.vue';
 import SupportFiles from './SupportFiles.vue';
 import LoginView from './LoginView.vue';
@@ -13,7 +12,7 @@ import RelaysPage from './RelaysPage.vue';
 
 import { ApiError, request } from './api';
 
-type View = 'home' | 'library' | 'subscriptions' | 'tests' | 'supportFiles' | 'machines' | 'relays';
+type View = 'library' | 'subscriptions' | 'tests' | 'supportFiles' | 'machines' | 'relays';
 const nav = [
   { view: 'machines' as const, hash: 'machines', label: '机器' },
   { view: 'library' as const, hash: 'nodes', label: '节点' },
@@ -21,7 +20,6 @@ const nav = [
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
   { view: 'tests' as const, hash: 'tests', label: '测试中心' },
   { view: 'supportFiles' as const, hash: 'support-files', label: '配套文件' },
-  { view: 'home' as const, hash: 'home', label: '服务入口' },
 ];
 const mobileMore = ref(false);
 const primaryViews: View[] = ['machines', 'library', 'relays', 'tests'];
@@ -29,7 +27,7 @@ const lastRoutes = new Map<View, string>();
 const authenticated = ref(false);
 const checking = ref(true);
 const password = ref('');
-const view = ref<View | null>('home');
+const view = ref<View | null>('library');
 const busy = ref('');
 const message = ref('');
 const testMessage = ref('');
@@ -50,7 +48,7 @@ provide(testActionsKey, {
   },
 });
 
-function parseHash(): View {
+function parseHash(): View | null {
   const key = location.hash.replace(/^#\/?/, '').split('?')[0];
   if (key === 'koipy') return 'tests';
   if (key === 'support-files' || key === 'tools') return 'supportFiles';
@@ -61,23 +59,25 @@ function parseHash(): View {
   if (key === 'sources' || key === 'workbench') return 'library';
   if (key === 'nodes' || key === 'library') return 'library';
 
-  return key === 'subscriptions' ? 'subscriptions' : 'home';
+  return key === 'subscriptions' ? 'subscriptions' : null;
 }
 function setView(next: View) {
-  if (location.hash) lastRoutes.set(parseHash(), location.hash);
+  const current = parseHash();
+  if (current) lastRoutes.set(current, location.hash);
   const item = nav.find((entry) => entry.view === next);
-  const hash = lastRoutes.get(next) ?? '#/' + (item?.hash ?? 'home');
+  const hash = lastRoutes.get(next) ?? '#/' + (item?.hash ?? 'nodes');
   mobileMore.value = false;
   if (location.hash !== hash) location.hash = hash;
   view.value = next;
 }
 function onHashChange() {
   if (authenticated.value) {
-    const next = parseHash();
+    const route = parseHash();
+    const next = route ?? 'library';
     const canonical = nav.find((item) => item.view === next)!.hash;
     const key = location.hash.replace(/^#\/?/, '').split('?')[0];
     if (key !== canonical) {
-      const query = key === 'chains' ? undefined : location.hash.split('?')[1];
+      const query = route && key !== 'chains' ? location.hash.split('?')[1] : undefined;
       history.replaceState(null, '', '#/' + canonical + (query ? '?' + query : ''));
     }
     lastRoutes.set(next, location.hash);
@@ -91,7 +91,7 @@ function lockWorkspace() {
   testMessage.value = '';
   password.value = '';
   message.value = '';
-  view.value = 'home';
+  view.value = 'library';
 }
 async function api(path: string, body?: unknown, method?: string): Promise<unknown> {
   try {
@@ -204,7 +204,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       </button>
       <button
         class="nav-more-trigger"
-        :class="{ active: !primaryViews.includes(view ?? 'home') }"
+        :class="{ active: !primaryViews.includes(view ?? 'library') }"
         :aria-expanded="mobileMore"
         @click="mobileMore = !mobileMore"
       >
@@ -239,7 +239,6 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
           查看测试进度
         </button>
       </p>
-      <HomePage v-if="view === 'home'" :api="api" @navigate="setView" />
       <SupportFiles v-if="view === 'supportFiles'" :api="api" />
       <TestCenter
         v-if="view === 'tests'"

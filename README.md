@@ -14,6 +14,8 @@ SubMeld 使用独立 Sub-Store 保存全部代理配置，提供统一节点管�
 
 根路径是 Sub-Store 原生前端，`/submeld/` 是 SubMeld。管理 API 经登录与同源校验，普通和增强输出均使用上游原生分享令牌。原生 Service Worker 保留自己的离线缓存，SubMeld 页面和 API 直接访问服务端。
 
+SubMeld 默认进入“节点”页，可通过“在 Sub-Store 中编辑”打开原生前端。旧 `#/home` 书签和未知页面地址统一进入节点页，不沿用旧查询参数；有效页面链接仍保留指定位置。
+
 官方镜像摘要固定于 [upstreams.lock.json](upstreams.lock.json)，与 Compose 一致；Sub-Store 后端为 2.42.2。沿用 Vue、TypeScript、Hono、SQLite 单根包，Node.js 24.6.0、pnpm 10.33.2。
 
 ## 使用流程

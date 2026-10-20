@@ -40,7 +40,7 @@ test('HY2 mport and certificate pins remain selectable with per-core compatibili
       '#HY2-test',
   });
   try {
-    await page.getByRole('button', { name: '节点', exact: true }).click();
+    await page.getByRole('button', { name: '刷新上游', exact: true }).click();
     await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
     await expect(page.locator('.node-row')).toHaveCount(1);
     await expect(page.locator('.node-row')).not.toContainText('连接字段无法');
@@ -72,7 +72,7 @@ test('unified batch testing includes excluded originals and retains results and 
       { process: [{ type: 'Regex Filter', args: { regex: [], keep: true } }] },
       'PATCH',
     );
-    await page.getByRole('button', { name: '节点', exact: true }).click();
+    await page.getByRole('button', { name: '刷新上游', exact: true }).click();
     await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
     await expect(page.locator('.node-row')).toHaveCount(2);
     await expect(page.getByRole('combobox', { name: '所属订阅', exact: true })).toBeEnabled();
@@ -116,7 +116,7 @@ test('batch cancellation remains available after navigation', async ({ page }, i
   await login(page);
   const resource = await source(page, 'cancel-' + info.project.name);
   try {
-    await page.getByRole('button', { name: '节点', exact: true }).click();
+    await page.getByRole('button', { name: '刷新上游', exact: true }).click();
     await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
     await page
       .locator('.node-row')

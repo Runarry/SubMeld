@@ -97,6 +97,7 @@ test('health GET/HEAD is public; unknown API and subscription paths remain JSON 
   for (const path of [
     '/api',
     '/api/v1/missing',
+    '/api/integrations',
     '/s',
     '/s/test-token/uri',
     '/submeld/assets/missing.js',

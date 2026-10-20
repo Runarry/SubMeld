@@ -43,7 +43,7 @@ test('production HTTP supports login, native pages and honest clipboard fallback
   });
   expect(wrongOrigin.status()).toBe(403);
   await page.reload();
-  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   const name = 'http-share-' + info.project.name;
   const resource = await api(page, '/api/nodes', {
     name,
@@ -104,7 +104,7 @@ test('production HTTP supports login, native pages and honest clipboard fallback
     ).toBeVisible();
     await expect(page.getByText(name, { exact: true })).toBeVisible();
     await page.goto('/submeld/');
-    await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   } finally {
     if (plan) {
       const current = await api(page, '/api/subscriptions/' + plan.id);

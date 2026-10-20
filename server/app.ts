@@ -77,7 +77,6 @@ export function createApp({
     '/api/subscriptions',
     '/api/node-tests',
     '/api/kernels',
-    '/api/integrations',
     '/api/miaospeed',
     '/api/telegram',
     '/api/machines',
@@ -160,13 +159,6 @@ export function createApp({
     return c.json(
       await certificates.resolve(await readJson(c.req.raw, 128 * 1024), c.req.raw.signal),
     );
-  });
-  app.get('/api/integrations', (c) => {
-    if (!auth.valid(getCookie(c, cookieName)))
-      throw new AppError('UNAUTHENTICATED', '请先登录。', 401);
-    return c.json({
-      subStore: '/?api=' + encodeURIComponent(config.publicOrigin + '/upstream/sub-store'),
-    });
   });
   const reporting = () => {
     if (!nodeReporting) throw new AppError('REPORT_UNAVAILABLE', '节点上报服务尚未就绪。', 503);

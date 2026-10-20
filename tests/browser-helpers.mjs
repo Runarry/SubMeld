@@ -4,7 +4,9 @@ export async function login(page) {
   await page.goto('/submeld/');
   await page.getByLabel('管理员密码', { exact: true }).fill('SubMeld-UI-Test-Only-2026');
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/#\/nodes$/);
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '刷新上游', exact: true })).toBeEnabled();
 }
 export async function navigate(page, name) {
   const nav = page.getByRole('navigation', { name: '管理页面' });

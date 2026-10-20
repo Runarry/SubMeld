@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { login, api, noOverflow } from './browser-helpers.mjs';
 
 async function openTelegram(page) {
-  await page.getByRole('button', { name: '打开测试中心', exact: true }).click();
+  await page.getByRole('button', { name: '测试中心', exact: true }).click();
   await page.getByRole('button', { name: 'Telegram', exact: true }).click();
   await expect(page.getByRole('form', { name: 'Telegram 设置', exact: true })).toBeVisible();
 }

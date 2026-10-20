@@ -8,7 +8,7 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
   page,
 }, info) => {
   await login(page);
-  await page.getByRole('button', { name: '打开测试中心', exact: true }).click();
+  await page.getByRole('button', { name: '测试中心', exact: true }).click();
   await expect(page.getByRole('button', { name: '开始综合测试', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '检测脚本', exact: true }).click();
   await page.getByRole('button', { name: '添加脚本', exact: true }).click();

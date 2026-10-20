@@ -1,13 +1,7 @@
 /* global document, window, caches */
 import { test, expect } from '@playwright/test';
 import { UUID } from './fixtures.mjs';
-import { navigate } from './browser-helpers.mjs';
-async function login(page) {
-  await page.goto('/submeld/');
-  await page.getByLabel('管理员密码', { exact: true }).fill('SubMeld-UI-Test-Only-2026');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
-}
+import { login, navigate, noOverflow } from './browser-helpers.mjs';
 async function native(page, path, body, method = 'POST') {
   const response = await page.request.fetch('/upstream/sub-store' + path, {
     method,
@@ -18,24 +12,93 @@ async function native(page, path, body, method = 'POST') {
   return response.json();
 }
 
+test('default and retired home routes open nodes without stale queries or extra history', async ({
+  page,
+}, info) => {
+  const integrationRequests = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/integrations')
+      integrationRequests.push(request.url());
+  });
+  await login(page);
+  const nav = page.getByRole('navigation', { name: '管理页面' });
+  await expect(nav.getByRole('button', { name: '服务入口', exact: true })).toHaveCount(0);
+  if (info.project.name === 'narrow') {
+    await nav.getByRole('button', { name: '更多', exact: true }).click();
+    await expect(page.getByLabel('更多页面').getByRole('button')).toHaveText([
+      '输出方案',
+      '配套文件',
+    ]);
+    await nav.getByRole('button', { name: '更多', exact: true }).click();
+  }
+  for (const hash of [
+    '',
+    '#/?search=retired',
+    '#/home?search=retired',
+    '#/missing?search=retired',
+  ]) {
+    await page.goto('/submeld/' + hash);
+    await expect(page).toHaveURL(/#\/nodes$/);
+    await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
+  }
+  await navigate(page, '测试中心');
+  await page.goto('/submeld/#/home?resource=retired&page=99');
+  await expect(page).toHaveURL(/#\/nodes$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/tests$/);
+  await expect(page.getByRole('heading', { name: '测试中心', exact: true })).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(/#\/nodes$/);
+  await page.reload();
+  await expect(page).toHaveURL(/#\/nodes$/);
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
+  await noOverflow(page);
+  expect(integrationRequests).toEqual([]);
+});
+
+test('login and navigation preserve valid node bookmarks and legacy aliases', async ({ page }) => {
+  await page.goto('/submeld/#/library?search=bookmark');
+  await page.getByLabel('管理员密码', { exact: true }).fill('SubMeld-UI-Test-Only-2026');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page).toHaveURL(/#\/nodes\?search=bookmark$/);
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '刷新上游', exact: true })).toBeEnabled();
+  await navigate(page, '配套文件');
+  await navigate(page, '节点');
+  await expect(page).toHaveURL(/#\/nodes\?search=bookmark$/);
+  await page.reload();
+  await expect(page).toHaveURL(/#\/nodes\?search=bookmark$/);
+  for (const alias of ['sources', 'workbench']) {
+    await page.goto('/submeld/#/' + alias + '?search=bookmark');
+    await expect(page).toHaveURL(/#\/nodes\?search=bookmark$/);
+  }
+  await navigate(page, '配套文件');
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '管理员登录', exact: true })).toBeVisible();
+  await page.getByLabel('管理员密码', { exact: true }).fill('SubMeld-UI-Test-Only-2026');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page).toHaveURL(/#\/support-files$/);
+  await expect(page.getByRole('heading', { name: '配套脚本与模板', exact: true })).toBeVisible();
+});
+
 test('Sub-Store offline cache preserves enhanced navigation, reloads and fresh assets', async ({
   page,
 }) => {
   await login(page);
-  await page.getByRole('link', { name: '打开 Sub-Store', exact: true }).click();
+  await page.getByRole('link', { name: '在 Sub-Store 中编辑', exact: true }).click();
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
   await page.goBack();
-  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '打开 Sub-Store', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '在 Sub-Store 中编辑', exact: true }).click();
   await page.goto('/submeld/#/nodes');
   await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   await page.goto('/submeld/');
-  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   const asset = await page.locator('script[src*="/submeld/assets/"]').getAttribute('src');
   // Poison only this test's disposable browser cache, proving enhanced scripts
   // are fetched from the server even when the native runtime cache has an entry.
@@ -50,7 +113,7 @@ test('Sub-Store offline cache preserves enhanced navigation, reloads and fresh a
     );
   }, asset);
   await page.reload();
-  await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   const response = await page.goto('/s/missing/uri');
   expect(response.status()).toBe(404);
   expect(await page.locator('body').innerText()).toContain('NOT_FOUND');
@@ -73,14 +136,14 @@ test('an already installed native worker upgrades without clearing saved browser
   // /sw.js. It must become active while this old-controlled page remains open.
   await expect(async () => {
     await page.reload();
-    await expect(page.getByRole('heading', { name: '订阅与测试', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '节点', exact: true })).toBeVisible();
   }).toPass({ timeout: 15000 });
   expect(await page.evaluate(() => localStorage.getItem('submeld-regression-setting'))).toBe(
     'preserved',
   );
 });
 
-test('home opens upstream nodes and test center; support files and test settings have separate pages', async ({
+test('nodes, test center, support files and test settings remain directly accessible', async ({
   page,
 }, info) => {
   await login(page);
@@ -92,14 +155,13 @@ test('home opens upstream nodes and test center; support files and test settings
     content: 'vless://' + UUID + '@example.com:443?security=tls#visible-node',
     process: [],
   });
-  await page.getByRole('button', { name: '查看 Sub-Store 节点', exact: true }).click();
+  await page.getByRole('button', { name: '刷新上游', exact: true }).click();
   await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption({ label: name });
   await expect(page.locator('.node-row')).toHaveCount(1);
   await expect(
     page.getByRole('checkbox', { name: '选择 visible-node', exact: true }),
   ).toBeVisible();
-  await navigate(page, '服务入口');
-  await page.getByRole('button', { name: '打开测试中心', exact: true }).click();
+  await navigate(page, '测试中心');
   await expect(page.getByRole('heading', { name: '测试中心', exact: true })).toBeVisible();
   await page.goto('/submeld/#/koipy');
   await expect(page).toHaveURL(/#\/tests$/);
@@ -110,7 +172,6 @@ test('home opens upstream nodes and test center; support files and test settings
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
-  await navigate(page, '服务入口');
   await navigate(page, '配套文件');
   await expect(page.getByRole('heading', { name: '配套脚本与模板', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: '配套文件管理', exact: true })).toBeVisible();
@@ -155,7 +216,7 @@ test('native Sub-Store edits and renames resources without losing enhanced ident
   const response = page.waitForResponse(
     (r) => r.url().includes('/upstream/sub-store/api/subs') && r.request().method() === 'GET',
   );
-  await page.getByRole('link', { name: '打开 Sub-Store', exact: true }).click();
+  await page.getByRole('link', { name: '在 Sub-Store 中编辑', exact: true }).click();
   await response;
   await expect(page.getByText(/^(Subscription|订阅管理)$/, { exact: true }).first()).toBeVisible();
   await expect(page.getByText(name, { exact: true })).toBeVisible();
@@ -200,7 +261,7 @@ test('unified selection clears after native snapshot replacement', async ({ page
     process: [],
   });
   try {
-    await page.getByRole('button', { name: '节点', exact: true }).click();
+    await page.getByRole('button', { name: '刷新上游', exact: true }).click();
     await page
       .getByRole('combobox', { name: '所属订阅', exact: true })
       .selectOption({ label: name });
