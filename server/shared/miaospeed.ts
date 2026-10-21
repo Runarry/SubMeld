@@ -31,9 +31,9 @@ export const speedSettingsSchema = z.strictObject({
   downloadUrl: z.string().min(1).max(2048).default('DYNAMIC:INTL'),
   uploadUrl: z.url().max(2048).default('https://speed.cloudflare.com/__up'),
   stunAddress: z.string().min(1).max(300).default('udp://stunserver2025.stunprotocol.org:3478'),
-  downloadSeconds: z.number().int().min(1).max(30).default(3),
+  downloadSeconds: z.number().int().min(1).default(3),
   // 4.7.6 uses duration / 2 seconds per upload request; one second always times out.
-  uploadSeconds: z.number().int().min(2).max(30).default(3),
+  uploadSeconds: z.number().int().min(2).default(3),
   downloadThreads: z.number().int().min(1).max(32).default(1),
   uploadThreads: z.number().int().min(1).max(32).default(1),
   pingCount: z.number().int().min(1).max(16).default(1),

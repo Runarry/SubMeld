@@ -94,8 +94,8 @@ test('Telegram saves an independent complete preset and handles write-only secre
     for (const [label, value] of Object.entries(strings))
       await preset.getByLabel(label, { exact: true }).fill(value);
     const numbers = {
-      '下行时长（秒）': '6',
-      '上行时长（秒）': '4',
+      '下行时长（秒）': '60',
+      '上行时长（秒）': '90',
       下行线程: '2',
       上行线程: '3',
       'Ping 次数': '5',
@@ -124,8 +124,8 @@ test('Telegram saves an independent complete preset and handles write-only secre
         downloadUrl: strings.下载目标,
         uploadUrl: strings.上传目标,
         stunAddress: strings['STUN 地址'],
-        downloadSeconds: 6,
-        uploadSeconds: 4,
+        downloadSeconds: 60,
+        uploadSeconds: 90,
         downloadThreads: 2,
         uploadThreads: 3,
         pingCount: 5,
@@ -159,7 +159,7 @@ test('Telegram saves an independent complete preset and handles write-only secre
     await expect(page.getByRole('status').filter({ hasText: '默认测试参数已保存' })).toBeVisible();
     expect((await api(page, '/api/telegram/settings')).profile).toEqual(stored.profile);
     await page.getByRole('button', { name: 'Telegram', exact: true }).click();
-    await expect(form.getByLabel('下行时长（秒）', { exact: true })).toHaveValue('6');
+    await expect(form.getByLabel('下行时长（秒）', { exact: true })).toHaveValue('60');
     await page.getByRole('button', { name: '检测脚本', exact: true }).click();
     await page.getByRole('button', { name: '编辑 ' + script.name, exact: true }).click();
     await page.getByRole('checkbox', { name: '启用', exact: true }).uncheck();

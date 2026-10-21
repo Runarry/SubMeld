@@ -51,6 +51,10 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     await page.getByRole('checkbox', { name: scriptName, exact: true }).check();
     await page.getByLabel('报告名称', { exact: true }).fill('浏览器验收-' + info.project.name);
     await page.getByRole('combobox', { name: '节点执行内核', exact: true }).selectOption('xray');
+    await page.getByText('测试参数', { exact: true }).click();
+    await page.getByLabel('下行时长（秒）', { exact: true }).fill('60');
+    await page.getByLabel('上行时长（秒）', { exact: true }).fill('90');
+    await page.getByText('测试参数', { exact: true }).click();
     await page.getByRole('button', { name: '开始综合测试', exact: true }).click();
     await expect
       .poll(async () => (await api(page, '/api/miaospeed/tests/current')).report?.state)
@@ -58,6 +62,8 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     const report = (await api(page, '/api/miaospeed/tests/current')).report;
     expect(report.results).toHaveLength(2);
     expect(report.settings.nodeCore).toBe('xray');
+    expect(report.settings.downloadSeconds).toBe(60);
+    expect(report.settings.uploadSeconds).toBe(90);
     expect(report.results[0].coreVersion).toBeTruthy();
     expect(report.results[0].measurements[0].value).toBe('受控 VM 检测完成');
     expect(report.results[1].state).toBe('unsupported');
@@ -107,7 +113,11 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     await page.getByText('测试参数', { exact: true }).click();
     await page.getByRole('button', { name: '保存为默认参数', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: '默认测试参数已保存' })).toBeVisible();
-    expect((await api(page, '/api/miaospeed/settings')).nodeCore).toBe('xray');
+    expect(await api(page, '/api/miaospeed/settings')).toMatchObject({
+      nodeCore: 'xray',
+      downloadSeconds: 60,
+      uploadSeconds: 90,
+    });
     await page.getByRole('button', { name: '历史报告', exact: true }).click();
     await historyRow.getByRole('button', { name: '删除报告', exact: true }).click();
     await expect(historyRow).toHaveCount(0);

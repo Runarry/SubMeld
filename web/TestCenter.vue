@@ -89,8 +89,8 @@ const selectedSubjects = computed<SpeedSubject[]>(() =>
 );
 const enabledScripts = computed(() => scripts.value.filter((script) => script.enabled));
 const numericFields = [
-  ['downloadSeconds', '下行时长（秒）', 1, 30],
-  ['uploadSeconds', '上行时长（秒）', 2, 30],
+  ['downloadSeconds', '下行时长（秒）', 1, undefined],
+  ['uploadSeconds', '上行时长（秒）', 2, undefined],
   ['downloadThreads', '下行线程', 1, 32],
   ['uploadThreads', '上行线程', 1, 32],
   ['pingCount', 'Ping 次数', 1, 16],

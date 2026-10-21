@@ -455,7 +455,7 @@ test(
     ];
     let progress = 0;
     const result = await backend.run(
-      net.settings,
+      speedSettingsSchema.parse({ ...net.settings, downloadSeconds: 31, uploadSeconds: 32 }),
       [{ Name: net.raw.name, Payload: JSON.stringify(net.raw) }],
       matrices,
       [net.script, net.geoScript],
@@ -479,6 +479,8 @@ test(
       assert.ok(get(id).value > 0);
       assert.equal(get(id).unit, 'B/s');
     }
+    assert.equal(get('SPEED_PER_SECOND').samples.length, 31);
+    assert.equal(get('USPEED_PER_SECOND').samples.length, 32);
     assert.ok(net.counts.download > 100000);
     assert.ok(net.counts.upload > 100000);
     assert.equal(get('TEST_PING_PACKET_LOSS').value, 0);
