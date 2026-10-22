@@ -122,6 +122,325 @@ async function accepted(f, updateId, value, userId = 101) {
   return f.telegramStore.all().find((task) => task.updateId === updateId);
 }
 
+function taskDatabase(t) {
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)');
+  t.after(() => db.close());
+  return db;
+}
+
+function historicalTask(overrides = {}) {
+  return {
+    id: randomUUID(),
+    botId: '90001',
+    userId: '101',
+    chatId: '101',
+    updateId: 7,
+    messageId: 701,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    expiresAt: '2026-10-01T00:30:00.000Z',
+    state: 'completed',
+    reportId: randomUUID(),
+    progressMessageId: 1001,
+    total: 2,
+    completed: 2,
+    error: null,
+    deliveryState: 'sent',
+    deliveredParts: ['summary', 'png:1', 'csv'],
+    deliveryError: null,
+    deliveryAttempts: 1,
+    nextDeliveryAt: null,
+    ...overrides,
+  };
+}
+
+function legacyTasks(db, tasks) {
+  db.exec(
+    'CREATE TABLE telegram_tasks(id TEXT PRIMARY KEY,bot_id TEXT NOT NULL,update_id INTEGER NOT NULL,created_at TEXT NOT NULL,value TEXT NOT NULL,UNIQUE(bot_id,update_id))',
+  );
+  const insert = db.prepare(
+    'INSERT INTO telegram_tasks(rowid,id,bot_id,update_id,created_at,value) VALUES(?,?,?,?,?,?)',
+  );
+  for (const [index, task] of tasks.entries())
+    insert.run(
+      index * 3 + 2,
+      task.id,
+      task.botId,
+      task.updateId,
+      task.createdAt,
+      JSON.stringify(task, null, 2),
+    );
+}
+
+async function pollingService(t, store, peer) {
+  // Exercise real polling and intake without starting a measurement worker in these protocol tests.
+  const service = new TelegramService(store, undefined, {
+    client: (savedToken) => new TelegramClient(savedToken, null, { apiOrigin: peer.origin }),
+    intervalMs: 60000,
+  });
+  t.after(() => service.close());
+  store.update({ enabled: true, token, allowedUserIds: ['101', '202'], profile: profile() });
+  return service;
+}
+
+test('Telegram fixture acknowledges only through offsets and falls back from an invalid high offset', async (t) => {
+  const peer = await telegramFixture();
+  const client = new TelegramClient(token, null, { apiOrigin: peer.origin });
+  t.after(async () => {
+    await client.close();
+    await peer.close();
+  });
+  const updates = [telegramMessage(10, content), telegramMessage(11, content)];
+  peer.push(...updates);
+  const get = (offset) =>
+    client.call('getUpdates', { offset, timeout: 0 }, AbortSignal.timeout(5000));
+  assert.deepEqual(await get(0), updates);
+  assert.deepEqual(await get(10), updates, 'Reading a batch does not remove it');
+  assert.deepEqual(await get(11), [updates[1]]);
+  assert.deepEqual(await get(12), []);
+  peer.resetQueue(telegramMessage(2, content), telegramMessage(3, content));
+  assert.deepEqual(
+    (await get(1000)).map((update) => update.update_id),
+    [2, 3],
+  );
+  assert.deepEqual(
+    (await get(2)).map((update) => update.update_id),
+    [2, 3],
+  );
+  assert.deepEqual(await get(4), []);
+});
+
+test('Telegram task identity allows reused update IDs and advances duplicate messages atomically', (t) => {
+  const db = taskDatabase(t),
+    store = new TelegramStore(db, profile);
+  const input = { botId: '90001', userId: '101', chatId: '101', updateId: 20, messageId: 100 };
+  const first = store.create(input);
+  assert.equal(first.created, true);
+  const original = db.prepare('SELECT * FROM telegram_tasks WHERE id=?').get(first.task.id);
+  const replay = store.create({ ...input, updateId: 30 });
+  assert.equal(replay.created, false);
+  assert.deepEqual(replay.task, first.task);
+  assert.deepEqual(
+    db.prepare('SELECT * FROM telegram_tasks WHERE id=?').get(first.task.id),
+    original,
+  );
+  assert.equal(store.offset(input.botId), 31);
+  assert.equal(store.create({ ...input, messageId: 101 }).created, true);
+  assert.equal(store.create({ ...input, userId: '202', chatId: '202' }).created, true);
+  assert.equal(store.create({ ...input, botId: '90002' }).created, true);
+  assert.equal(store.all().length, 4);
+  const before = db.prepare('SELECT * FROM telegram_tasks ORDER BY rowid').all();
+  const offset = store.offset(input.botId);
+  db.exec(
+    "CREATE TRIGGER fail_offset BEFORE UPDATE ON settings WHEN NEW.key='telegram.offset.90001' BEGIN SELECT RAISE(ABORT,'offset write failed'); END",
+  );
+  assert.throws(
+    () => store.create({ ...input, updateId: 40, messageId: 900 }),
+    /offset write failed/,
+  );
+  assert.throws(() => store.create({ ...input, updateId: 41 }), /offset write failed/);
+  assert.deepEqual(db.prepare('SELECT * FROM telegram_tasks ORDER BY rowid').all(), before);
+  assert.equal(
+    store.offset(input.botId),
+    offset,
+    'A failed offset write cannot leave a new task behind',
+  );
+});
+
+test('Telegram legacy task migration preserves identities, ownership, raw history and column constraints', (t) => {
+  const db = taskDatabase(t);
+  const tasks = [
+    historicalTask(),
+    historicalTask({
+      updateId: 8,
+      userId: '202',
+      chatId: '202',
+      state: 'cancelled',
+      error: '历史取消原因',
+      deliveryState: 'suppressed',
+    }),
+  ];
+  legacyTasks(db, tasks);
+  db.prepare('INSERT INTO settings VALUES (?,?)').run('telegram.offset.90001', '100001');
+  const before = db.prepare('SELECT rowid,* FROM telegram_tasks ORDER BY rowid').all();
+  const columns = db.prepare('PRAGMA table_info(telegram_tasks)').all();
+  const store = new TelegramStore(db, profile);
+  const after = db.prepare('SELECT rowid,* FROM telegram_tasks ORDER BY rowid').all();
+  assert.deepEqual(
+    after.map(({ chat_id, message_id, ...row }) => {
+      const task = tasks.find((task) => task.id === row.id);
+      assert.equal(chat_id, task.chatId);
+      assert.equal(message_id, task.messageId);
+      return row;
+    }),
+    before,
+  );
+  const migratedColumns = db.prepare('PRAGMA table_info(telegram_tasks)').all();
+  assert.deepEqual(migratedColumns.slice(0, columns.length), columns);
+  for (const name of ['chat_id', 'message_id'])
+    assert.equal(migratedColumns.find((column) => column.name === name).notnull, 1);
+  assert.deepEqual(store.all(), tasks);
+  assert.deepEqual(store.list().tasks, [...tasks].reverse());
+  assert.equal(store.offset('90001'), 100001);
+  assert.throws(
+    () => store.saveTask({ ...tasks[0], id: randomUUID(), updateId: 9 }),
+    /UNIQUE constraint failed/,
+  );
+  assert.deepEqual(
+    new TelegramStore(db, profile).all(),
+    tasks,
+    'Reopening an upgraded table is idempotent',
+  );
+  assert.deepEqual(db.prepare('SELECT rowid,* FROM telegram_tasks ORDER BY rowid').all(), after);
+});
+
+test('Telegram legacy task migration rolls back every copied row and schema change on conflicting messages', (t) => {
+  const db = taskDatabase(t);
+  legacyTasks(db, [historicalTask(), historicalTask({ updateId: 8 })]);
+  db.prepare('INSERT INTO settings VALUES (?,?)').run('telegram.offset.90001', '100001');
+  const rows = db.prepare('SELECT rowid,* FROM telegram_tasks ORDER BY rowid').all();
+  const schema = db
+    .prepare("SELECT * FROM sqlite_master WHERE name LIKE '%telegram_tasks%' ORDER BY name")
+    .all();
+  assert.throws(() => new TelegramStore(db, profile), /UNIQUE constraint failed/);
+  assert.deepEqual(db.prepare('SELECT rowid,* FROM telegram_tasks ORDER BY rowid').all(), rows);
+  assert.deepEqual(
+    db
+      .prepare("SELECT * FROM sqlite_master WHERE name LIKE '%telegram_tasks%' ORDER BY name")
+      .all(),
+    schema,
+  );
+  assert.equal(
+    db.prepare("SELECT value FROM settings WHERE key='telegram.offset.90001'").get().value,
+    '100001',
+  );
+});
+
+test('Telegram legacy task migration retains restart interruption and delivery checkpoints', (t) => {
+  const db = taskDatabase(t);
+  const tasks = ['queued', 'preparing', 'running', 'completed'].map((state, index) =>
+    historicalTask({
+      state,
+      updateId: index + 1,
+      messageId: index + 10,
+      deliveryState: index === 0 ? 'suppressed' : 'sending',
+      deliveredParts: ['summary', 'png:1'],
+      nextDeliveryAt: '2026-10-23T00:00:00.000Z',
+    }),
+  );
+  legacyTasks(db, tasks);
+  const store = new TelegramStore(db, profile);
+  for (const [index, original] of tasks.entries()) {
+    const task = store.get(original.id);
+    assert.equal(task.state, index < 3 ? 'interrupted' : 'completed');
+    assert.equal(task.deliveryState, index === 0 ? 'suppressed' : 'pending');
+    assert.equal(task.reportId, original.reportId);
+    assert.equal(task.progressMessageId, original.progressMessageId);
+    assert.deepEqual(task.deliveredParts, original.deliveredParts);
+    if (index < 3) {
+      assert.match(task.error, /服务重启/);
+      assert.equal(task.nextDeliveryAt, null);
+    }
+    const replay = store.create({ ...original, updateId: 100 + index });
+    assert.equal(replay.created, false);
+    assert.deepEqual(replay.task, task);
+  }
+  assert.equal(store.all().length, tasks.length);
+  assert.deepEqual(new TelegramStore(db, profile).all(), store.all());
+});
+
+test('Telegram cursor recovers a lower queue after restart without replaying historical messages or same-batch IDs', async (t) => {
+  const db = taskDatabase(t);
+  let store = new TelegramStore(db, profile);
+  const history = historicalTask();
+  store.saveTask(history);
+  store.advance('90001', 100000);
+  store = new TelegramStore(db, profile);
+  const peer = await telegramFixture();
+  t.after(() => peer.close());
+  const service = await pollingService(t, store, peer);
+  service.start();
+  await waitFor(() => peer.calls.filter((call) => call.method === 'getUpdates').length >= 2);
+  assert.equal(store.offset('90001'), 100001, 'Empty polls do not reset the persisted offset');
+  const message = (updateId, messageId, userId = 101) => {
+    const update = telegramMessage(updateId, content, userId);
+    update.message.message_id = messageId;
+    return update;
+  };
+  peer.resetQueue(message(7, 702), message(8, 703, 202));
+  await waitFor(() => store.offset('90001') === 9);
+  assert.equal(store.all().length, 3);
+  assert.deepEqual(store.get(history.id), history);
+  const reused = store.all().find((task) => task.messageId === 702);
+  assert.equal(reused.updateId, history.updateId, 'A new message may reuse a historical update ID');
+  const pending = service.queue.get(reused.id);
+  const sends = () =>
+    peer.calls.filter((call) =>
+      ['sendMessage', 'editMessageText', 'sendPhoto', 'sendDocument'].includes(call.method),
+    ).length;
+  await waitFor(() =>
+    peer.calls.some((call) => call.method === 'getUpdates' && call.body.offset === 9),
+  );
+  const beforeSends = sends();
+  peer.push(message(9, 702), message(10, history.messageId));
+  await waitFor(() => store.offset('90001') === 11);
+  assert.equal(store.all().length, 3);
+  assert.equal(service.queue.size, 2);
+  assert.equal(
+    service.queue.get(reused.id),
+    pending,
+    'Duplicate intake must not replace queued credentials',
+  );
+  assert.deepEqual(store.get(history.id), history);
+  assert.equal(sends(), beforeSends, 'Replayed messages do not resend acknowledgements or results');
+  peer.respond(
+    { update_id: 'invalid' },
+    message(11, 704),
+    message(10, 705),
+    message(11, 706),
+    message(12, 707),
+  );
+  await waitFor(() => store.offset('90001') === 13);
+  assert.deepEqual(
+    store
+      .all()
+      .slice(3)
+      .map((task) => task.messageId),
+    [704, 707],
+  );
+  await service.close();
+});
+
+test('Telegram cursor fallback persists the first legal ID before receipt and resumes it after interruption', async (t) => {
+  const db = taskDatabase(t),
+    store = new TelegramStore(db, profile);
+  store.advance('90001', 100000);
+  const peer = await telegramFixture();
+  t.after(() => peer.close());
+  peer.resetQueue(telegramMessage(2, content));
+  peer.respond({}, telegramMessage(2, content));
+  const service = await pollingService(t, store, peer);
+  let interrupted = false;
+  service.receive = async () => {
+    assert.equal(store.offset('90001'), 2, 'Reset to the first ID, never first ID + 1');
+    interrupted = true;
+    service.connection.abort();
+  };
+  service.start();
+  await waitFor(() => interrupted);
+  await service.close();
+  assert.equal(store.all().length, 0);
+  const recovered = new TelegramStore(db, profile);
+  assert.equal(recovered.offset('90001'), 2);
+  const restarted = await pollingService(t, recovered, peer);
+  restarted.start();
+  await waitFor(() => recovered.offset('90001') === 3);
+  assert.equal(recovered.all().length, 1);
+  assert.equal(recovered.all()[0].updateId, 2);
+  assert.equal(restarted.queue.size, 1);
+  await restarted.close();
+});
+
 test(
   'Telegram local protocol: authenticated settings, whitelist before parsing/download, private chat, deduplication and ownership',
   { timeout: 30000 },
@@ -185,7 +504,11 @@ test(
       ),
     );
     const task = await accepted(f, 6, content);
-    f.peer.push(telegramMessage(6, content), telegramMessage(7, '/cancel ' + task.id, 202));
+    f.peer.respond(
+      telegramMessage(7, '/cancel ' + task.id, 202),
+      telegramMessage(6, content),
+      telegramMessage(7, content),
+    );
     await waitFor(() => f.telegramStore.offset('90001') === 8);
     assert.equal(f.telegramStore.all().length, 1);
     assert.equal(f.telegramStore.get(task.id).state, 'queued');
@@ -448,7 +771,7 @@ test(
       assert.ok(!persisted.includes(secret));
     // Reproduce a crash after durable successful-part checkpoints, before final delivery state.
     f.telegramStore.saveTask({ ...checkpoint, deliveryState: 'sending' });
-    const interrupted = f.telegramStore.create({
+    const { task: interrupted } = f.telegramStore.create({
       botId: '90001',
       userId: '101',
       chatId: '101',

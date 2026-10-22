@@ -54,10 +54,12 @@ function display(value: string, key: string) {
   );
 }
 function adopt() {
+  if (busy.value || !props.available || (task.value && task.value.status !== 'conflict')) return;
   const dirty = new Map(changes.value.map((change) => [change.field.key, change.after]));
   baseline.value = nodeEditorValues(props.node);
   values.value = { ...baseline.value, ...Object.fromEntries(dirty) };
   baselineRevision.value = props.revision;
+  if (task.value?.status === 'conflict') submitted.value = null;
   message.value = '';
 }
 async function save() {
@@ -194,6 +196,21 @@ async function save() {
         <strong>{{ machineStatusLabels[task.status] }}</strong>
         <p>{{ task.message }}</p>
         <p v-if="task.status === 'unknown'">结果未知，请核对当前配置；不会自动重试。</p>
+        <p v-if="task.status === 'conflict'">
+          机器版本冲突，本次任务未应用；输入已保留。{{
+            available
+              ? '核对当前配置后，可采用最新版本再提交。'
+              : '节点已不在最新快照中，请关闭后重新选择节点。'
+          }}
+        </p>
+        <button
+          v-if="task.status === 'conflict' && available"
+          type="button"
+          :disabled="busy"
+          @click="adopt"
+        >
+          采用最新版本
+        </button>
         <button type="button" @click="emit('showTasks')">查看任务记录</button>
       </div>
     </form>

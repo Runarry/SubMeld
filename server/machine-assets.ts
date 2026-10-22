@@ -69,6 +69,13 @@ export async function assertPrivateFileNotShared(
   if (path.startsWith('/share/file/'))
     names.add(decodeURIComponent(path.slice('/share/file/'.length).split('/')[0] ?? ''));
   if (record(body) && body.type === 'file' && typeof body.name === 'string') names.add(body.name);
+  if (
+    record(body) &&
+    record(body.payload) &&
+    body.payload.type === 'file' &&
+    typeof body.payload.name === 'string'
+  )
+    names.add(body.payload.name);
   if (!names.size) return;
   await resources.sync();
   if (

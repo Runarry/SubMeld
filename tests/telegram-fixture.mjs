@@ -6,10 +6,12 @@ export async function telegramFixture() {
   const calls = [],
     uploads = [],
     updates = [],
+    responses = [],
     files = new Map(),
     failures = new Map();
   let botId = 90001,
     messageId = 1000,
+    tail = 0,
     subscription = '';
   const server = createServer(async (req, res) => {
     if (req.url === '/subscription') {
@@ -40,8 +42,17 @@ export async function telegramFixture() {
     let result;
     if (method === 'getMe') result = { id: botId, is_bot: true, username: 'submeld_test_bot' };
     else if (method === 'getWebhookInfo') result = { url: '' };
-    else if (method === 'getUpdates') result = updates.splice(0);
-    else if (method === 'getFile') {
+    else if (method === 'getUpdates') {
+      if (responses.length) result = responses.shift();
+      else {
+        let offset = body.offset ?? 0;
+        // TQueue rejects offsets beyond tail + 10; Bot API retries from the queue head.
+        if (updates.length && (offset <= 0 || offset > tail + 10)) offset = updates[0].update_id;
+        while (updates.length && updates[0].update_id < offset) updates.shift();
+        // Reading does not acknowledge updates. A later offset does.
+        result = updates.slice(0, body.limit ?? 100);
+      }
+    } else if (method === 'getFile') {
       const file = files.get(body.file_id);
       result = {
         file_path: 'fixture/' + body.file_id,
@@ -73,7 +84,16 @@ export async function telegramFixture() {
     calls,
     uploads,
     files,
-    push: (...items) => updates.push(...items),
+    push: (...items) => {
+      updates.push(...items);
+      for (const item of items) tail = Math.max(tail, item.update_id + 1);
+    },
+    resetQueue: (...items) => {
+      updates.splice(0, updates.length, ...items);
+      tail = items.length ? Math.max(...items.map((item) => item.update_id)) + 1 : 0;
+    },
+    // Explicit malformed/repeated responses exercise client-side guards independently of the queue.
+    respond: (...items) => responses.push(items),
     setBotId: (value) => {
       botId = value;
     },

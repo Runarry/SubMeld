@@ -54,15 +54,24 @@ export class Hy2Certificates {
     } catch {
       throw new AppError('HY2_PROBE_INVALID', 'HY2 证书探测端口范围无效。', 422);
     }
-    let job = this.jobs.get(request.pinSHA256);
+    const key = hash([
+      request.pinSHA256,
+      request.server,
+      request.port,
+      request.ports,
+      request.serverName,
+      request.obfs,
+      request.obfsPassword,
+    ]);
+    let job = this.jobs.get(key);
     if (!job || job.controller.signal.aborted) {
       const controller = new AbortController();
       job = { controller, users: 0, promise: this.work(request, controller.signal) };
       const current = job;
-      this.jobs.set(request.pinSHA256, current);
+      this.jobs.set(key, current);
       void current.promise
         .finally(() => {
-          if (this.jobs.get(request.pinSHA256) === current) this.jobs.delete(request.pinSHA256);
+          if (this.jobs.get(key) === current) this.jobs.delete(key);
         })
         .catch(() => {});
     }

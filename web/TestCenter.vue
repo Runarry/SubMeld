@@ -37,8 +37,7 @@ const settings = ref(speedSettingsSchema.parse({})),
   metrics = ref<string[]>([...metricIds]),
   selectedScripts = ref<string[]>([]);
 const status = ref<z.infer<typeof speedStatusSchema> | null>(null),
-  report = ref<SpeedReport | null>(null),
-  followCurrent = ref(true);
+  report = ref<SpeedReport | null>(null);
 const busy = ref(false),
   message = ref(''),
   name = ref('综合测试');
@@ -57,9 +56,22 @@ const picker = ref(false),
   nodes = ref<NodeView[]>([]);
 const historyPage = ref(0),
   history = ref<z.infer<typeof reportListSchema>>({ reports: [], total: 0 });
+type ReportSelection = { kind: 'latest' } | { kind: 'pinned'; id: string };
 let alive = true,
   timer: ReturnType<typeof setTimeout> | undefined,
-  pollEpoch = 0;
+  pollEpoch = 0,
+  reportRequest = 0,
+  reportLoading = false;
+let reportSelection: ReportSelection = { kind: 'latest' };
+function selectReport(selection: ReportSelection) {
+  reportSelection = selection;
+  reportLoading = true;
+  report.value = null;
+  return ++reportRequest;
+}
+function currentReportRead(selection: ReportSelection, request: number) {
+  return alive && reportSelection === selection && reportRequest === request;
+}
 const subject = (node: NodeView): TestSubject => ({
   kind: 'node',
   resourceId: node.resourceId,
@@ -165,27 +177,33 @@ async function file(event: Event) {
 }
 async function start() {
   await act(async () => {
-    const result = speedReportSchema.parse(
-      await props.api('/api/miaospeed/tests', {
-        name: name.value,
-        subjects: selectedSubjects.value,
-        metrics: metrics.value,
-        scripts: enabledScripts.value
-          .filter((s) => selectedScripts.value.includes(s.id))
-          .map(({ id, revision }) => ({ id, revision })),
-        settings: settings.value,
-      }),
-    );
-    if (alive) {
+    const selection: ReportSelection = { kind: 'latest' };
+    const request = selectReport(selection);
+    try {
+      const result = speedReportSchema.parse(
+        await props.api('/api/miaospeed/tests', {
+          name: name.value,
+          subjects: selectedSubjects.value,
+          metrics: metrics.value,
+          scripts: enabledScripts.value
+            .filter((s) => selectedScripts.value.includes(s.id))
+            .map(({ id, revision }) => ({ id, revision })),
+          settings: settings.value,
+        }),
+      );
+      if (!currentReportRead(selection, request)) return;
       report.value = result;
-      followCurrent.value = true;
       content.value = '';
       url.value = '';
       preview.value = null;
       temporaryIndices.value = [];
       message.value = '已开始综合测试，离开页面后继续运行。';
-      await refresh();
+    } catch (error) {
+      if (currentReportRead(selection, request)) throw error;
+    } finally {
+      if (currentReportRead(selection, request)) reportLoading = false;
     }
+    if (currentReportRead(selection, request)) await refresh();
   });
 }
 async function coreTest() {
@@ -195,19 +213,49 @@ async function coreTest() {
     await refresh();
   });
 }
+async function readReport(selection: ReportSelection, historyLookup = false) {
+  const request = ++reportRequest;
+  try {
+    if (historyLookup && selection.kind === 'pinned') {
+      const value = speedReportSchema.parse(
+        await props.api('/api/miaospeed/reports/' + selection.id),
+      );
+      if (currentReportRead(selection, request) && value.id === selection.id) report.value = value;
+      return;
+    }
+    const current = z
+      .object({ report: speedReportSchema.nullable() })
+      .parse(await props.api('/api/miaospeed/tests/current')).report;
+    if (!currentReportRead(selection, request)) return;
+    if (selection.kind === 'latest' || current?.id === selection.id) report.value = current;
+    else {
+      reportLoading = true;
+      const value = speedReportSchema.parse(
+        await props.api('/api/miaospeed/reports/' + selection.id),
+      );
+      if (currentReportRead(selection, request) && value.id === selection.id) report.value = value;
+    }
+  } catch (error) {
+    if (currentReportRead(selection, request))
+      message.value = error instanceof Error ? error.message : '报告读取失败。';
+  } finally {
+    if (currentReportRead(selection, request)) reportLoading = false;
+  }
+}
 async function refresh() {
   const epoch = ++pollEpoch;
+  const selection = reportSelection;
   try {
-    const [state, current] = await Promise.all([
+    const [state] = await Promise.all([
       props.api('/api/miaospeed/status'),
-      followCurrent.value ? props.api('/api/miaospeed/tests/current') : Promise.resolve(null),
+      !reportLoading && (selection.kind === 'latest' || report.value?.state === 'running')
+        ? readReport(selection)
+        : Promise.resolve(),
     ]);
-    if (!alive || epoch !== pollEpoch) return;
-    status.value = speedStatusSchema.parse(state);
-    if (current)
-      report.value = z.object({ report: speedReportSchema.nullable() }).parse(current).report;
+    if (alive && epoch === pollEpoch && reportSelection === selection)
+      status.value = speedStatusSchema.parse(state);
   } catch (error) {
-    if (alive && epoch === pollEpoch)
+    if (alive && epoch === pollEpoch && reportSelection === selection)
       message.value = error instanceof Error ? error.message : '状态读取失败。';
   }
 }
@@ -222,9 +270,9 @@ async function loadHistory() {
 }
 async function viewReport(id: string) {
   await act(async () => {
-    followCurrent.value = false;
-    const value = speedReportSchema.parse(await props.api('/api/miaospeed/reports/' + id));
-    if (alive) report.value = value;
+    const selection: ReportSelection = { kind: 'pinned', id };
+    selectReport(selection);
+    await readReport(selection, true);
   });
 }
 function repeatReport() {
@@ -306,6 +354,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   alive = false;
   pollEpoch++;
+  reportRequest++;
   clearTimeout(timer);
   content.value = '';
   url.value = '';
@@ -572,7 +621,10 @@ onBeforeUnmount(() => {
               @click="
                 act(async () => {
                   await api('/api/miaospeed/reports/' + item.id, {}, 'DELETE');
-                  if (report?.id === item.id) report = null;
+                  if (report?.id === item.id) {
+                    reportRequest++;
+                    report = null;
+                  }
                   await loadHistory();
                 })
               "
@@ -660,7 +712,6 @@ onBeforeUnmount(() => {
           if (report) {
             await api('/api/miaospeed/tests/' + report.id + '/cancel', {});
             message = '正在取消；已发出的后端单节点探测结束前不会启动新批次。';
-            followCurrent = true;
             await refresh();
           }
         })

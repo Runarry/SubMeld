@@ -4,10 +4,11 @@ import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { fixture, ref } from './upstream-fixture.mjs';
-import { node, TEST_PASSWORD } from './fixtures.mjs';
+import { node, TEST_PASSWORD, UUID } from './fixtures.mjs';
 import { toUpstream } from '../dist/server/converter/model.js';
 import { newSubscription, outputFormats } from '../dist/server/shared/subscriptions.js';
 import { openSettings } from '../dist/server/database.js';
+import { UpstreamResources } from '../dist/server/upstream-resources.js';
 export async function add(f, drafts = [node('ss')], name = 'imported') {
   return f.nodes.create({
     name,
@@ -18,6 +19,119 @@ export async function add(f, drafts = [node('ss')], name = 'imported') {
 function plan(inputs, formats = [...outputFormats]) {
   return { ...newSubscription(), name: 'native-output', inputs, formats };
 }
+
+test('local deletion only ignores candidate ports for valid HY2 hopping ranges', async (t) => {
+  async function deletion(ports, changed = {}, succeeds = false, type = 'hysteria2') {
+    const kept = {
+      ...toUpstream(node('hysteria2')),
+      type,
+      name: 'keep',
+      port: 20120,
+      ...(ports === undefined ? {} : { ports }),
+    };
+    const record = {
+      name: 'candidate-ports',
+      source: 'local',
+      content: JSON.stringify({ proxies: [toUpstream(node('ss')), kept], extra: 'preserved' }),
+      process: [],
+      _submeld: { id: UUID },
+    };
+    const before = structuredClone(record);
+    let writes = 0;
+    const resources = new UpstreamResources({
+      exclusive: (work) => work(),
+      records: async (kind) => (kind === 'sub' ? [structuredClone(record)] : []),
+      preview: async (_kind, current) => {
+        const proxies = JSON.parse(current.content).proxies;
+        const checking = proxies.length === 1;
+        const original = proxies.map((raw, index) => ({
+          ...raw,
+          id: index,
+          _subName: current.name,
+          ...(raw.name === 'keep'
+            ? { port: checking ? 20122 : 20121, ...(checking ? changed : {}) }
+            : {}),
+        }));
+        return { original, processed: structuredClone(original) };
+      },
+      api: async (_path, patch) => {
+        writes++;
+        Object.assign(record, patch);
+      },
+    });
+    await resources.sync();
+    const list = await resources.list(UUID);
+    assert.deepEqual(list.errors, []);
+    const removing = resources.deleteNodes({ nodes: [ref(list.nodes[0])] });
+    if (succeeds) {
+      assert.deepEqual(await removing, { deleted: 1 });
+      assert.equal(writes, 1);
+      assert.deepEqual(JSON.parse(record.content), { proxies: [kept], extra: 'preserved' });
+    } else {
+      await assert.rejects(removing, { code: 'NODE_DELETE_UNSAFE' });
+      assert.equal(writes, 0);
+      assert.deepEqual(record, before);
+    }
+  }
+  for (const ports of ['20120-20200', '20120,20200-20300', '20120'])
+    await t.test('valid ports: ' + ports, () => deletion(ports, {}, true));
+  for (const changed of [
+    { server: 'changed.example.com' },
+    { password: 'changed-test-password' },
+    { sni: 'changed.example.com' },
+    { fingerprint: 'cd'.repeat(32) },
+    { ports: '20120-20300' },
+    { obfs: '' },
+    { 'obfs-password': 'changed-test-obfs' },
+    { 'hop-interval': 20 },
+    { nativeOption: 'changed' },
+  ])
+    await t.test('changed ' + Object.keys(changed)[0], () => deletion('20120-20200', changed));
+  for (const ports of [undefined, '', ' ', 'invalid', '20200-20120', '20120-65536', 20120])
+    await t.test('ordinary port with invalid or absent ports: ' + String(ports), () =>
+      deletion(ports),
+    );
+  await t.test('ordinary port for another protocol', () =>
+    deletion('20120-20200', {}, false, 'ss'),
+  );
+});
+
+test('real upstream local deletion preserves HY2 range and mport URI lines and native operations', async (t) => {
+  const f = await fixture(t);
+  const removed =
+    'ss://' + Buffer.from('aes-128-gcm:test-only').toString('base64') + '@example.com:443#remove';
+  const lines = [
+    '# preserved heading',
+    removed,
+    '',
+    'hysteria2://test-only@example.com:20120-20200?sni=example.com&pinSHA256=' +
+      'ab'.repeat(32) +
+      '#range',
+    '# preserved between nodes',
+    'hy2://test-only@example.com:30120?mport=30120-30200&sni=example.com&obfs=salamander&obfs-password=test-only-obfs#mport',
+    '',
+  ];
+  const resource = await f.nodes.create({
+    name: 'HY2 retained content',
+    source: 'local',
+    content: lines.join('\r\n'),
+  });
+  await f.client.api(
+    '/api/sub/' + resource.upstreamName,
+    { process: [{ type: 'Flag Operator', args: { mode: 'remove' } }] },
+    'PATCH',
+  );
+  const before = (await f.client.records('sub'))[0];
+  await f.resources.sync();
+  const list = await f.nodes.list(resource.id);
+  assert.deepEqual(list.errors, []);
+  assert.equal(list.total, 3);
+  await f.nodes.delete({ nodes: [ref(list.nodes.find((entry) => entry.name === 'remove'))] });
+  assert.deepEqual((await f.client.records('sub'))[0], {
+    ...before,
+    content: lines.filter((line) => line !== removed).join('\r\n'),
+  });
+});
 
 test('HY2 hopping selections survive upstream random ports and native artifacts retain the certificate pin', async (t) => {
   const f = await fixture(t),

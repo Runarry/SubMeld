@@ -16,6 +16,8 @@ import { storedTelegramSettings } from './legacy-test-data.js';
 
 export const QUEUE_TTL_MS = 30 * 60 * 1000;
 const rowSchema = z.object({ value: z.string() });
+const taskTableSchema =
+  '(id TEXT PRIMARY KEY,bot_id TEXT NOT NULL,update_id INTEGER NOT NULL,created_at TEXT NOT NULL,value TEXT NOT NULL,chat_id TEXT NOT NULL,message_id INTEGER NOT NULL,UNIQUE(bot_id,chat_id,message_id))';
 export const unfinished = (task: TelegramTask) =>
   ['queued', 'preparing', 'running'].includes(task.state);
 export class TelegramStore {
@@ -24,9 +26,28 @@ export class TelegramStore {
     private defaults: () => TelegramProfile,
     private now = Date.now,
   ) {
-    db.exec(
-      'CREATE TABLE IF NOT EXISTS telegram_tasks(id TEXT PRIMARY KEY,bot_id TEXT NOT NULL,update_id INTEGER NOT NULL,created_at TEXT NOT NULL,value TEXT NOT NULL,UNIQUE(bot_id,update_id));',
-    );
+    db.exec('CREATE TABLE IF NOT EXISTS telegram_tasks' + taskTableSchema);
+    const columns = z
+      .array(z.object({ name: z.string() }))
+      .parse(db.prepare('PRAGMA table_info(telegram_tasks)').all());
+    if (!columns.some((column) => column.name === 'chat_id')) {
+      db.transaction(() => {
+        db.exec('CREATE TABLE telegram_tasks_migrating' + taskTableSchema);
+        const insert = db.prepare(
+          'INSERT INTO telegram_tasks_migrating(rowid,id,bot_id,update_id,created_at,value,chat_id,message_id) SELECT rowid,id,bot_id,update_id,created_at,value,?,? FROM telegram_tasks WHERE id=?',
+        );
+        const rows = z
+          .array(rowSchema.extend({ id: z.string() }))
+          .parse(db.prepare('SELECT id,value FROM telegram_tasks ORDER BY rowid').all());
+        for (const row of rows) {
+          const task = telegramTaskSchema.parse(JSON.parse(row.value));
+          insert.run(task.chatId, task.messageId, row.id);
+        }
+        db.exec(
+          'DROP TABLE telegram_tasks; ALTER TABLE telegram_tasks_migrating RENAME TO telegram_tasks',
+        );
+      })();
+    }
     for (const task of this.all()) {
       if (unfinished(task)) {
         task.state = 'interrupted';
@@ -109,15 +130,19 @@ export class TelegramStore {
     return row ? z.number().int().nonnegative().parse(JSON.parse(row.value)) : 0;
   }
   advance(botId: string, updateId: number) {
+    this.setOffset(botId, updateId + 1);
+  }
+  setOffset(botId: string, offset: number) {
     this.db
       .prepare(
         'INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
       )
-      .run('telegram.offset.' + botId, JSON.stringify(updateId + 1));
+      .run('telegram.offset.' + botId, JSON.stringify(offset));
   }
-  create(
-    input: Pick<TelegramTask, 'botId' | 'userId' | 'chatId' | 'updateId' | 'messageId'>,
-  ): TelegramTask {
+  create(input: Pick<TelegramTask, 'botId' | 'userId' | 'chatId' | 'updateId' | 'messageId'>): {
+    task: TelegramTask;
+    created: boolean;
+  } {
     const task = telegramTaskSchema.parse({
       ...input,
       id: randomUUID(),
@@ -135,19 +160,37 @@ export class TelegramStore {
       deliveryAttempts: 0,
       nextDeliveryAt: null,
     });
-    this.db.transaction(() => {
-      this.saveTask(task);
+    return this.db.transaction(() => {
+      const row = rowSchema
+        .optional()
+        .parse(
+          this.db
+            .prepare(
+              'SELECT value FROM telegram_tasks WHERE bot_id=? AND chat_id=? AND message_id=?',
+            )
+            .get(task.botId, task.chatId, task.messageId),
+        );
+      const existing = row ? telegramTaskSchema.parse(JSON.parse(row.value)) : undefined;
+      if (!existing) this.saveTask(task);
       this.advance(task.botId, task.updateId);
+      return { task: existing ?? task, created: !existing };
     })();
-    return task;
   }
   saveTask(task: TelegramTask) {
     const value = telegramTaskSchema.parse(task);
     this.db
       .prepare(
-        'INSERT INTO telegram_tasks(id,bot_id,update_id,created_at,value) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
+        'INSERT INTO telegram_tasks(id,bot_id,update_id,created_at,value,chat_id,message_id) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
       )
-      .run(value.id, value.botId, value.updateId, value.createdAt, JSON.stringify(value));
+      .run(
+        value.id,
+        value.botId,
+        value.updateId,
+        value.createdAt,
+        JSON.stringify(value),
+        value.chatId,
+        value.messageId,
+      );
   }
   get(id: string): TelegramTask {
     const row = rowSchema

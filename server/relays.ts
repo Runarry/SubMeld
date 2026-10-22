@@ -454,7 +454,7 @@ export class RelayStore {
     try {
       return this.machines.task(saved.step.requestId);
     } catch (error) {
-      if (!(error instanceof AppError) || error.status !== 404) throw error;
+      if (!(error instanceof AppError) || error.code !== 'MACHINE_TASK_NOT_FOUND') throw error;
       return undefined;
     }
   }
@@ -621,17 +621,14 @@ export class RelayStore {
           '线路更新尚未完成，请先重试应用并完成旧资源清理。',
           409,
         );
-      if (saved.step) {
-        let task;
+      if (saved.step && this.taskFor(saved)?.status === 'queued') {
         try {
-          task = this.machines.task(saved.step.requestId);
-        } catch {
-          /* intent not queued */
+          await this.machines.cancel(saved.step.machineId, saved.step.requestId);
+        } catch (error) {
+          if (!(error instanceof AppError) || error.code !== 'MACHINE_TASK_RUNNING') throw error;
         }
-        if (task?.status === 'queued') await this.machines.cancel(saved.step.machineId, task.id);
-        else if (task && active(task, this.machines))
-          throw new AppError('MACHINE_BUSY', '请等待正在执行的线路操作结束。', 409);
       }
+      await this.reconcileStep(saved);
       saved.deleting = true;
       saved.stage = 0;
       delete saved.step;
@@ -1069,12 +1066,7 @@ export class RelayStore {
           }
           if (['failed', 'stale'].includes(saved.route.status)) continue;
           if (saved.step) {
-            let task;
-            try {
-              task = this.machines.task(saved.step.requestId);
-            } catch (e) {
-              if (!(e instanceof AppError) || e.status !== 404) throw e;
-            }
+            let task = this.taskFor(saved);
             if (!task)
               task = (
                 await this.machines.enqueue(

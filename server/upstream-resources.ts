@@ -364,7 +364,7 @@ export class UpstreamResources {
         if (change.removed.size) {
           const remaining = snapshot.original
             .filter((_, index) => !change.removed.has(index))
-            .map(cleanRaw);
+            .map((raw) => cleanRaw(snapshotNode(raw)));
           const content = await removeLocalNodes(
             String(entry.record.content ?? ''),
             change.removed,
@@ -376,7 +376,7 @@ export class UpstreamResources {
             content,
             process: [],
           });
-          if (hash(checked.original.map(cleanRaw)) !== hash(remaining))
+          if (hash(checked.original.map((raw) => cleanRaw(snapshotNode(raw)))) !== hash(remaining))
             throw new AppError(
               'NODE_DELETE_UNSAFE',
               '无法保证其他节点字段完整，请在 Sub-Store 原生页面编辑。',

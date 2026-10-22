@@ -13,6 +13,8 @@ import { controlledNetwork } from './miaospeed-fixture.mjs';
 import { KernelManager } from '../dist/server/kernels.js';
 import { MiaospeedClient } from '../dist/server/miaospeed-client.js';
 import { MiaospeedTester, validateTargets } from '../dist/server/miaospeed.js';
+import { AppError } from '../dist/server/errors.js';
+import { TestActivity } from '../dist/server/test-activity.js';
 import { MiaospeedInput } from '../dist/server/miaospeed-input.js';
 import { MiaospeedStore } from '../dist/server/miaospeed-store.js';
 import { launchBridge, freeBridgePort } from '../dist/server/miaospeed-bridge.js';
@@ -27,6 +29,349 @@ import { portReady } from '../dist/server/node-probe.js';
 import { toUpstream } from '../dist/server/converter/model.js';
 import { newSubscription } from '../dist/server/shared/subscriptions.js';
 import Database from 'better-sqlite3';
+
+function lifecycleFixture() {
+  const calls = {
+    acquire: 0,
+    release: 0,
+    sync: 0,
+    refresh: 0,
+    capture: 0,
+    create: 0,
+    snapshot: 0,
+    leaseRelease: 0,
+    backend: 0,
+    close: 0,
+  };
+  const activity = new TestActivity();
+  const acquire = activity.acquire.bind(activity);
+  activity.acquire = (owner) => {
+    const release = acquire(owner);
+    calls.acquire++;
+    return () => {
+      calls.release++;
+      release();
+    };
+  };
+  let saved;
+  const store = {
+    create(report) {
+      calls.create++;
+      saved = structuredClone(report);
+    },
+    save(report) {
+      saved = structuredClone(report);
+    },
+    saveRow(_id, row) {
+      saved.results[row.index] = structuredClone(row);
+    },
+    get() {
+      return structuredClone(saved);
+    },
+  };
+  const input = {
+    resources: {
+      async sync() {
+        calls.sync++;
+      },
+    },
+    async refresh() {
+      calls.refresh++;
+    },
+    capture() {
+      calls.capture++;
+      return {
+        name: 'lifecycle-fixture',
+        protocol: 'socks5',
+        raw: { server: 'fixture.invalid', password: 'public-fixture-only' },
+        error: null,
+      };
+    },
+    discard() {},
+    async payload(_raw, _name, signal) {
+      signal.throwIfAborted();
+      return '{}';
+    },
+    matches: () => true,
+    close() {
+      calls.close++;
+      assert.equal(activity.current(), null, 'Input must outlive the whole batch');
+    },
+  };
+  const lease = {
+    binaries: new Map(),
+    async release() {
+      calls.leaseRelease++;
+    },
+  };
+  const kernels = {
+    snapshot() {
+      calls.snapshot++;
+      return lease;
+    },
+  };
+  const signals = [];
+  const tester = new MiaospeedTester(
+    store,
+    { selected: () => [] },
+    input,
+    kernels,
+    {},
+    activity,
+    {
+      dataDir: '.',
+      miaospeedUrl: 'ws://unused.invalid',
+      miaospeedToken: 'public-fixture-only',
+      miaospeedBridgeHost: '127.0.0.1',
+    },
+    async (_settings, _metrics, signal) => {
+      signals.push(signal);
+      signal.throwIfAborted();
+    },
+  );
+  tester.client.run = async (_settings, _nodes, _matrices, _scripts, signal) => {
+    calls.backend++;
+    signals.push(signal);
+    return {
+      version: 'fixture',
+      slots: [{ Matrices: [{ Type: 'TEST_HTTP_CODE', Payload: '{"Values":[204]}' }] }],
+    };
+  };
+  const request = {
+    settings: {},
+    scripts: [],
+    metrics: ['TEST_HTTP_CODE'],
+    subjects: [
+      {
+        kind: 'node',
+        resourceId: randomUUID(),
+        revision: 'a'.repeat(64),
+        snapshotHash: 'b'.repeat(64),
+        nodeIndex: 0,
+      },
+    ],
+  };
+  return { tester, request, activity, input, kernels, lease, store, calls, signals };
+}
+
+const stoppedTest = (error) => error.code === 'TEST_UNAVAILABLE' && error.status === 503;
+const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
+
+for (const stage of ['sync', 'refresh'])
+  test(`miaospeed lifecycle close waits for pending ${stage} before releasing input and lock`, async () => {
+    const f = lifecycleFixture();
+    const gate = Promise.withResolvers();
+    const entered = Promise.withResolvers();
+    const source = stage === 'sync' ? f.input.resources : f.input;
+    source[stage] = async () => {
+      f.calls[stage]++;
+      entered.resolve();
+      await gate.promise;
+    };
+    const starting = assert.rejects(f.tester.start(f.request), stoppedTest);
+    await entered.promise;
+    const closing = f.tester.close();
+    let closed = false;
+    const observed = closing.then(() => {
+      closed = true;
+    });
+    assert.equal(f.tester.close(), closing);
+    try {
+      await nextTurn();
+      assert.equal(closed, false);
+      assert.equal(f.calls.close, 0);
+      assert.equal(f.calls.create, 0);
+      assert.equal(f.calls.backend, 0);
+      assert.equal(f.activity.current(), 'miaospeed');
+      assert.throws(
+        () => f.activity.acquire('three-core'),
+        (error) => error.code === 'TEST_BUSY',
+      );
+    } finally {
+      gate.resolve();
+      await Promise.all([starting, observed]);
+    }
+    assert.equal(f.calls.refresh, stage === 'refresh' ? 1 : 0);
+    assert.equal(f.calls.capture, 0);
+    assert.equal(f.calls.snapshot, 0);
+    assert.equal(f.calls.create, 0);
+    assert.equal(f.calls.backend, 0);
+    assert.equal(f.calls.release, 1);
+    assert.equal(f.calls.close, 1);
+    assert.equal(f.activity.current(), null);
+    await f.tester.close();
+    await assert.rejects(f.tester.start(f.request), stoppedTest);
+    assert.equal(f.calls.acquire, 1);
+    assert.equal(f.calls.release, 1);
+    assert.equal(f.calls.close, 1);
+  });
+
+test('miaospeed lifecycle immediate close stops preparation before it starts', async () => {
+  const f = lifecycleFixture();
+  const starting = assert.rejects(f.tester.start(f.request), stoppedTest);
+  await f.tester.close();
+  await starting;
+  assert.equal(f.calls.sync, 0);
+  assert.equal(f.calls.create, 0);
+  assert.equal(f.calls.backend, 0);
+  assert.equal(f.calls.release, 1);
+  assert.equal(f.calls.close, 1);
+});
+
+test('miaospeed lifecycle preparation failure releases the lock and remains observable at close', async () => {
+  const f = lifecycleFixture();
+  const failure = new Error('fixture preparation failed');
+  f.input.refresh = async () => {
+    throw failure;
+  };
+  await assert.rejects(f.tester.start(f.request), (error) => error === failure);
+  assert.equal(f.activity.current(), null);
+  assert.equal(f.calls.release, 1);
+  assert.equal(f.calls.snapshot, 0);
+  assert.equal(f.calls.create, 0);
+  assert.equal(f.calls.backend, 0);
+  await assert.rejects(f.tester.close(), (error) => error === failure);
+  await assert.rejects(f.tester.close(), (error) => error === failure);
+  assert.equal(f.calls.close, 1);
+});
+
+test('miaospeed lifecycle cancelling a previous report cannot abort a preparing batch', async () => {
+  const f = lifecycleFixture();
+  const previous = await f.tester.start(f.request);
+  await nextTurn();
+  assert.equal(f.store.get(previous.id).state, 'completed');
+  assert.equal(f.activity.current(), null);
+  const gate = Promise.withResolvers();
+  const entered = Promise.withResolvers();
+  f.input.resources.sync = async () => {
+    entered.resolve();
+    await gate.promise;
+  };
+  const starting = f.tester.start(f.request);
+  await entered.promise;
+  try {
+    assert.equal(f.tester.cancel(previous.id).state, 'completed');
+    assert.equal(f.tester.abort.signal.aborted, false);
+    assert.equal(f.activity.current(), 'miaospeed');
+  } finally {
+    gate.resolve();
+  }
+  const current = await starting;
+  await nextTurn();
+  assert.notEqual(current.id, previous.id);
+  assert.equal(f.store.get(current.id).state, 'completed');
+  await f.tester.close();
+  assert.equal(f.calls.backend, 2);
+  assert.equal(f.calls.release, 2);
+  assert.equal(f.calls.leaseRelease, 2);
+});
+
+test('miaospeed lifecycle shutdown waits for execution and keeps partial results', async () => {
+  const f = lifecycleFixture();
+  f.request.subjects.push({ ...f.request.subjects[0], nodeIndex: 1 });
+  const entered = Promise.withResolvers();
+  const gate = Promise.withResolvers();
+  let backendSignal;
+  f.tester.client.run = async (_settings, _nodes, _matrices, _scripts, signal, progress) => {
+    f.calls.backend++;
+    backendSignal = signal;
+    progress({ Matrices: [{ Type: 'TEST_HTTP_CODE', Payload: '{"Values":[204]}' }] }, 0, 'fixture');
+    entered.resolve();
+    await gate.promise;
+    signal.throwIfAborted();
+    assert.fail('The running backend must receive cancellation');
+  };
+  const starting = f.tester.start(f.request);
+  const preparationSignal = f.tester.abort.signal;
+  const report = await starting;
+  assert.equal(report.state, 'running');
+  assert.equal(report.completed, 0);
+  assert.ok(report.results.every((row) => row.state === 'pending'));
+  await entered.promise;
+  const closing = f.tester.close();
+  let closed = false;
+  const observed = closing.then(() => {
+    closed = true;
+  });
+  try {
+    await nextTurn();
+    assert.equal(closed, false);
+    assert.equal(f.calls.close, 0);
+    assert.equal(f.calls.release, 0);
+    assert.equal(f.calls.leaseRelease, 0);
+    assert.equal(backendSignal, preparationSignal);
+    assert.deepEqual(f.signals, [preparationSignal]);
+    assert.equal(backendSignal.aborted, true);
+  } finally {
+    gate.resolve();
+    await observed;
+  }
+  const saved = f.store.get(report.id);
+  assert.equal(saved.state, 'cancelled');
+  assert.equal(saved.completed, 1);
+  assert.ok(saved.results.every((row) => row.state === 'cancelled'));
+  assert.equal(saved.results[0].measurements[0].value, '204');
+  assert.equal(f.calls.backend, 1);
+  assert.equal(f.calls.leaseRelease, 1);
+  assert.equal(f.calls.release, 1);
+  assert.equal(f.calls.close, 1);
+});
+
+for (const stage of ['create', 'save', 'lease'])
+  test(`miaospeed lifecycle ${stage} failure is observed and still releases resources`, async () => {
+    const f = lifecycleFixture();
+    const failure = new Error(`fixture ${stage} failed`);
+    if (stage === 'create') {
+      f.store.create = () => {
+        throw failure;
+      };
+      await assert.rejects(f.tester.start(f.request), (error) => error === failure);
+    } else {
+      if (stage === 'save') {
+        const save = f.store.save;
+        f.store.save = (report) => {
+          if (report.finishedAt) throw failure;
+          save(report);
+        };
+      } else {
+        f.lease.release = async () => {
+          f.calls.leaseRelease++;
+          throw failure;
+        };
+      }
+      await f.tester.start(f.request);
+    }
+    // Allow rejection reporting before close attaches its handler. The test runner must see no
+    // unhandled rejection, while close must still expose the original failure after cleanup.
+    await nextTurn();
+    assert.equal(f.activity.current(), null);
+    assert.equal(f.calls.leaseRelease, 1);
+    assert.equal(f.calls.release, 1);
+    await assert.rejects(f.tester.close(), (error) => error === failure);
+    await assert.rejects(f.tester.close(), (error) => error === failure);
+    assert.equal(f.calls.close, 1);
+  });
+
+test('miaospeed lifecycle backend disconnect keeps completed results and stops pending nodes', async () => {
+  const f = lifecycleFixture();
+  f.request.subjects.push({ ...f.request.subjects[0], nodeIndex: 1 });
+  f.tester.client.run = async (_settings, _nodes, _matrices, _scripts, _signal, progress) => {
+    f.calls.backend++;
+    progress({ Matrices: [{ Type: 'TEST_HTTP_CODE', Payload: '{"Values":[204]}' }] }, 0, 'fixture');
+    throw new AppError('MIAOSPEED_DISCONNECTED', 'fixture disconnected', 502);
+  };
+  const report = await f.tester.start(f.request);
+  await nextTurn();
+  await f.tester.close();
+  const saved = f.store.get(report.id);
+  assert.equal(saved.state, 'failed');
+  assert.equal(saved.results[0].state, 'failed');
+  assert.equal(saved.results[0].measurements[0].value, '204');
+  assert.equal(saved.results[1].state, 'cancelled');
+  assert.equal(f.calls.backend, 1);
+  assert.equal(f.calls.leaseRelease, 1);
+  assert.equal(f.calls.release, 1);
+});
 
 async function reportReadFixture(t) {
   const f = await fixture(t);

@@ -1,7 +1,7 @@
 /* global document, window, caches */
 import { test, expect } from '@playwright/test';
 import { UUID } from './fixtures.mjs';
-import { login, navigate, noOverflow } from './browser-helpers.mjs';
+import { login, api, cleanup, navigate, noOverflow } from './browser-helpers.mjs';
 async function native(page, path, body, method = 'POST') {
   const response = await page.request.fetch('/upstream/sub-store' + path, {
     method,
@@ -79,6 +79,169 @@ test('login and navigation preserve valid node bookmarks and legacy aliases', as
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page).toHaveURL(/#\/support-files$/);
   await expect(page.getByRole('heading', { name: '配套脚本与模板', exact: true })).toBeVisible();
+});
+
+test('node search stays locked during a request and replays only the latest hash after stale responses or errors', async ({
+  page,
+}, info) => {
+  await login(page);
+  const resource = await api(page, '/api/nodes', {
+    name: 'query-navigation-' + info.project.name,
+    source: 'local',
+    content: ['navigation-A', 'navigation-B']
+      .map((name) => 'vless://' + UUID + '@example.com:443?security=tls#' + name)
+      .join('\n'),
+  });
+  const hash = (search) => '#/nodes?resource=' + resource.id + '&search=' + search;
+  const search = page.getByRole('textbox', { name: '搜索节点', exact: true });
+  const requests = [];
+  let delayed;
+  try {
+    await page.goto('/submeld/' + hash('navigation-A'));
+    await expect(
+      page.getByRole('checkbox', { name: '选择 navigation-A', exact: true }),
+    ).toBeVisible();
+    await expect(search).toBeEnabled();
+    await page.route('**/api/nodes?*', async (route) => {
+      const query = new URL(route.request().url()).searchParams.get('search');
+      requests.push(query);
+      if (query !== 'navigation-B') return route.continue();
+      const current = delayed;
+      const response = await route.fetch();
+      current.started.resolve();
+      await current.release.promise;
+      if (current.failure)
+        await route.fulfill({
+          status: 502,
+          json: { code: 'STALE_QUERY_FIXTURE', message: '过期查询错误' },
+        });
+      else await route.fulfill({ response });
+    });
+    for (const failure of [false, true]) {
+      delayed = {
+        failure,
+        started: Promise.withResolvers(),
+        release: Promise.withResolvers(),
+      };
+      const before = requests.length;
+      await page.getByRole('checkbox', { name: '选择 navigation-A', exact: true }).check();
+      await page.goto('/submeld/' + hash('navigation-B'));
+      await delayed.started.promise;
+      await expect(search).toBeDisabled();
+      await expect(search).toHaveValue('navigation-B');
+      await expect(page.locator('.selection-bar')).toContainText('已选 0');
+      await page.goBack();
+      await expect(search).toHaveValue('navigation-A');
+      if (!failure) {
+        await page.goto('/submeld/' + hash('navigation-intermediate'));
+        await expect(search).toHaveValue('navigation-intermediate');
+        await page.goto('/submeld/' + hash('navigation-A'));
+        await expect(search).toHaveValue('navigation-A');
+      }
+      await expect(search).toBeDisabled();
+      expect(requests.slice(before)).toEqual(['navigation-B']);
+      delayed.release.resolve();
+      await expect(search).toBeEnabled();
+      await expect(page.locator('.node-row')).toHaveCount(1);
+      await expect(
+        page.getByRole('checkbox', { name: '选择 navigation-A', exact: true }),
+      ).not.toBeChecked();
+      await expect(
+        page.getByRole('checkbox', { name: '选择 navigation-B', exact: true }),
+      ).toHaveCount(0);
+      await expect(page).toHaveURL(
+        new RegExp('#/nodes\\?resource=' + resource.id + '&search=navigation-A$'),
+      );
+      await expect(page.getByText('过期查询错误', { exact: true })).toHaveCount(0);
+      expect(requests.slice(before)).toEqual(['navigation-B', 'navigation-A']);
+    }
+    await noOverflow(page);
+  } finally {
+    delayed?.release.resolve();
+    await page.unrouteAll({ behavior: 'wait' });
+    await cleanup(page, { resource });
+  }
+});
+
+test('node creation stays exclusive and preserves the latest navigation while its response is delayed', async ({
+  page,
+}, info) => {
+  await login(page);
+  const resource = await api(page, '/api/nodes', {
+    name: 'mutation-navigation-' + info.project.name,
+    source: 'local',
+    content: ['mutation-A', 'mutation-B']
+      .map((name) => 'vless://' + UUID + '@example.com:443?security=tls#' + name)
+      .join('\n'),
+  });
+  const hash = (search) => '#/nodes?resource=' + resource.id + '&search=' + search;
+  const search = page.getByRole('textbox', { name: '搜索节点', exact: true });
+  const started = Promise.withResolvers(),
+    release = Promise.withResolvers();
+  let created,
+    writes = 0;
+  const reads = [];
+  try {
+    await page.goto('/submeld/' + hash('mutation-A'));
+    await expect(
+      page.getByRole('checkbox', { name: '选择 mutation-A', exact: true }),
+    ).toBeVisible();
+    await expect(search).toBeEnabled();
+    await page.route('**/api/nodes?*', (route) => {
+      reads.push(new URL(route.request().url()).searchParams.get('search'));
+      return route.continue();
+    });
+    await page.route('**/api/nodes', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      writes++;
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      created = await response.json();
+      started.resolve();
+      await release.promise;
+      await route.fulfill({ response });
+    });
+    await page.getByRole('button', { name: '添加节点或订阅', exact: true }).click();
+    const form = page.getByRole('dialog', { name: '添加节点或订阅', exact: true });
+    await form.getByLabel('订阅名称', { exact: true }).fill('delayed-create-' + info.project.name);
+    await form
+      .getByLabel('节点文本', { exact: true })
+      .fill('vless://' + UUID + '@example.com:443?security=tls#created-node');
+    await form.getByRole('button', { name: '保存到 Sub-Store', exact: true }).click();
+    await started.promise;
+    await expect(
+      form.getByRole('button', { name: '保存到 Sub-Store', exact: true }),
+    ).toBeDisabled();
+    await form.locator('#add-resource').dispatchEvent('submit');
+    await page.goto('/submeld/' + hash('mutation-intermediate'));
+    await expect(search).toHaveValue('mutation-intermediate');
+    await page.goto('/submeld/' + hash('mutation-B'));
+    await expect(search).toHaveValue('mutation-B');
+    await expect(search).toBeDisabled();
+    expect(reads).toEqual([]);
+    release.resolve();
+    await expect(form).toHaveCount(0);
+    await expect(search).toBeEnabled();
+    await expect(page.locator('.node-row')).toHaveCount(1);
+    await expect(
+      page.getByRole('checkbox', { name: '选择 mutation-B', exact: true }),
+    ).toBeVisible();
+    await expect(search).toHaveValue('mutation-B');
+    await expect(page).toHaveURL(
+      new RegExp('#/nodes\\?resource=' + resource.id + '&search=mutation-B$'),
+    );
+    expect(reads).toEqual(['mutation-B']);
+    expect(writes).toBe(1);
+    expect(
+      (await api(page, '/api/nodes/resources')).resources.some((item) => item.id === created.id),
+    ).toBe(true);
+    await noOverflow(page);
+  } finally {
+    release.resolve();
+    await page.unrouteAll({ behavior: 'wait' });
+    if (created) await cleanup(page, { resource: created });
+    await cleanup(page, { resource });
+  }
 });
 
 test('Sub-Store offline cache preserves enhanced navigation, reloads and fresh assets', async ({

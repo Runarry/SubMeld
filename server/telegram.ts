@@ -38,6 +38,7 @@ const updateSchema = z.object({
     })
     .optional(),
 });
+const updateEnvelopeSchema = updateSchema.pick({ update_id: true });
 type Input = z.infer<typeof previewInputSchema> | { kind: 'telegram-file'; fileId: string };
 type Pending = {
   input?: Input;
@@ -234,17 +235,25 @@ export class TelegramService {
                 this.patch(task.id, { deliveryState: 'suppressed', nextDeliveryAt: null });
             }
         }
+        const requestedOffset = this.store.offset(botId);
         const updates = z.array(z.unknown()).parse(
           await client.call(
             'getUpdates',
             {
-              offset: this.store.offset(botId),
+              offset: requestedOffset,
               timeout: 30,
               allowed_updates: ['message', 'callback_query'],
             },
             signal,
           ),
         );
+        if (signal.aborted) return;
+        const first = updates
+          .map((update) => updateEnvelopeSchema.safeParse(update))
+          .find((envelope) => envelope.success);
+        // Bot API falls back to the queue head when a saved offset exceeds its new tail.
+        if (first?.success && first.data.update_id < requestedOffset)
+          this.store.setOffset(botId, first.data.update_id);
         for (const update of updates) {
           if (signal.aborted) return;
           await this.receive(update, botId, client, signal);
@@ -300,7 +309,7 @@ export class TelegramService {
     );
   }
   private async receive(raw: unknown, botId: string, client: TelegramClient, signal: AbortSignal) {
-    const envelope = z.object({ update_id: z.number().int().nonnegative() }).safeParse(raw);
+    const envelope = updateEnvelopeSchema.safeParse(raw);
     if (!envelope.success || envelope.data.update_id < this.store.offset(botId)) return;
     const parsed = updateSchema.safeParse(raw);
     if (!parsed.success) {
@@ -431,13 +440,14 @@ export class TelegramService {
       await this.reply(client, from.id, safeError(error), signal).catch(() => {});
       return;
     }
-    const task = this.store.create({
+    const { task, created } = this.store.create({
       botId,
       userId,
       chatId: userId,
       updateId: update.update_id,
       messageId: message.message_id,
     });
+    if (!created) return;
     this.queue.set(task.id, {
       input,
       profile: structuredClone(this.store.settings().profile),

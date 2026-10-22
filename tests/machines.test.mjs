@@ -170,6 +170,70 @@ test('complete private snapshots preserve native fields; ordinary details exclud
   assert.equal(response.snapshot.exports[0].tlsSpkiSha256, 'public-certificate-digest');
 });
 
+test('native token requests reject private deployment files while ordinary sharing and revocation work', async (t) => {
+  const f = await fixture(t);
+  for (const role of ['machine-snapshot', 'machine-command', 'relay-route']) {
+    const name = 'private-' + role;
+    await f.client.api('/api/files', {
+      name,
+      type: 'file',
+      source: 'local',
+      content: secret,
+      process: [],
+      _submeld: { id: randomUUID(), role, version: 1, parent: randomUUID() },
+    });
+    const rejected = await status(
+      await f.request('/upstream/sub-store/api/token', {
+        payload: { type: 'file', name },
+        options: {},
+      }),
+      403,
+    );
+    assert.equal(rejected.code, 'PRIVATE_DEPLOYMENT_FILE');
+    assert.equal((await f.client.tokens(name)).length, 0);
+
+    // Existing upstream tokens still cannot publish deployment credentials.
+    await f.client.api('/api/token', { payload: { type: 'file', name }, options: {} });
+    const [token] = await f.client.tokens(name);
+    const share = '/share/file/' + encodeURIComponent(name) + '?token=' + token.token;
+    for (const prefix of ['', '/upstream/sub-store']) {
+      const response = await status(await f.app.request(prefix + share), 403);
+      assert.equal(response.code, 'PRIVATE_DEPLOYMENT_FILE');
+      assert.equal(JSON.stringify(response).includes(secret), false);
+    }
+    await status(
+      await f.request(
+        '/upstream/sub-store/api/token/' +
+          encodeURIComponent(token.token) +
+          '?type=file&name=' +
+          encodeURIComponent(name),
+        undefined,
+        'DELETE',
+      ),
+      200,
+    );
+    assert.equal((await f.client.tokens(name)).length, 0);
+  }
+  const name = 'ordinary-share';
+  await f.client.api('/api/files', {
+    name,
+    type: 'file',
+    source: 'local',
+    content: 'public-fixture',
+    process: [],
+  });
+  const created = await status(
+    await f.request('/upstream/sub-store/api/token', {
+      payload: { type: 'file', name },
+      options: {},
+    }),
+    200,
+  );
+  const response = await f.app.request('/share/file/' + name + '?token=' + created.data.token);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'public-fixture');
+});
+
 test('machine overview and editable native fields expose useful state without credentials', async (t) => {
   const initial = snapshot('a', [exported()], ['sing-box']);
   Object.assign(initial.nodes[0], {

@@ -433,6 +433,7 @@ test('node drawer keeps dirty input through revision conflicts and leaves unknow
     const body = (await submission).postDataJSON();
     expect(body.expectedRevision).toBe(machine.snapshot.revision);
     expect(body.params).toEqual({ id: node.id, port: 9443 });
+    await expect(editor.getByRole('status')).toContainText('排队中');
     await finishTask(page, machine, 'unknown', machine.snapshot);
     await expect(editor.getByRole('status')).toContainText('结果未知', { timeout: 10000 });
     await expect(editor.getByRole('status')).toContainText('不会自动重试');
@@ -442,6 +443,117 @@ test('node drawer keeps dirty input through revision conflicts and leaves unknow
       ),
     ).toHaveLength(1);
     await noOverflow(page);
+  } finally {
+    await retire(page, machine);
+  }
+});
+
+test('node drawer adopts an explicit task conflict before one manual retry and locks unknown results', async ({
+  page,
+}, info) => {
+  await login(page);
+  const machine = await machineFixture(
+    page,
+    '任务冲突-' + info.project.name + '-' + randomUUID().slice(0, 8),
+  );
+  const node = machine.snapshot.nodes[0];
+  try {
+    await openMachine(page, machine, '&node=' + node.id + '&edit=1');
+    const editor = page.getByRole('dialog', { name: '编辑机器节点', exact: true });
+    const port = editor.getByLabel('监听端口', { exact: true });
+    const sni = editor.getByLabel('服务器名称 SNI', { exact: true });
+    const installDeps = editor.getByLabel('自动安装必要系统工具', { exact: true });
+    const save = editor.getByRole('button', { name: '保存修改', exact: true });
+    const adopt = editor.getByRole('button', { name: '采用最新版本', exact: true });
+    await port.fill('9443');
+    await sni.fill('manual.example.test');
+    await installDeps.uncheck();
+    await save.click();
+    await expect(editor.getByRole('status')).toContainText('排队中');
+    await expect(port).toBeDisabled();
+    await expect(save).toHaveCount(0);
+    await expect(adopt).toHaveCount(0);
+    const next = {
+      ...machine.snapshot,
+      revision: revision(machine.machine.id + 'task-conflict'),
+      nodes: machine.snapshot.nodes.map((item) =>
+        item.id === node.id ? { ...item, name: '任务冲突后的名称', port: 8443 } : item,
+      ),
+    };
+    await finishTask(page, machine, 'conflict', next);
+    await expect(editor.getByRole('status')).toContainText('本次任务未应用', { timeout: 10000 });
+    await expect(port).toHaveValue('9443');
+    await expect(sni).toHaveValue('manual.example.test');
+    await expect(installDeps).not.toBeChecked();
+    await expect(adopt).toBeEnabled();
+    expect((await api(page, '/api/machines/' + machine.machine.id)).tasks).toHaveLength(1);
+    await adopt.click();
+    await expect(editor.getByLabel('节点名称', { exact: true })).toHaveValue('任务冲突后的名称');
+    await expect(port).toHaveValue('9443');
+    await expect(sni).toHaveValue('manual.example.test');
+    await expect(installDeps).not.toBeChecked();
+    await expect(editor.getByLabel('节点变更摘要', { exact: true })).toContainText('8443 → 9443');
+    await expect(save).toBeEnabled();
+    const retry = page.waitForRequest(
+      (request) => request.method() === 'POST' && request.url().endsWith('/commands'),
+    );
+    await save.click();
+    const body = (await retry).postDataJSON();
+    expect(body.expectedRevision).toBe(next.revision);
+    expect(body.params).toEqual({ id: node.id, port: 9443, sni: 'manual.example.test' });
+    await expect(editor.getByRole('status')).toContainText('排队中');
+    await finishTask(page, machine, 'unknown', machine.snapshot);
+    await expect(editor.getByRole('status')).toContainText('不会自动重试', { timeout: 10000 });
+    machine.snapshot = {
+      ...machine.snapshot,
+      revision: revision(machine.machine.id + 'unknown-latest'),
+      nodes: machine.snapshot.nodes.map((item) =>
+        item.id === node.id ? { ...item, name: '未知结果后的最新名称' } : item,
+      ),
+    };
+    await report(page, machine);
+    await expect(editor.locator('.editor-subtitle')).toContainText('未知结果后的最新名称', {
+      timeout: 10000,
+    });
+    await expect(editor.getByLabel('监听端口', { exact: true })).toBeDisabled();
+    await expect(save).toHaveCount(0);
+    await expect(adopt).toHaveCount(0);
+    expect((await api(page, '/api/machines/' + machine.machine.id)).tasks).toHaveLength(2);
+    await noOverflow(page);
+  } finally {
+    await retire(page, machine);
+  }
+});
+
+test('node drawer cannot retry a conflicted task when its node is missing from the latest snapshot', async ({
+  page,
+}, info) => {
+  await login(page);
+  const machine = await machineFixture(
+    page,
+    '节点移除-' + info.project.name + '-' + randomUUID().slice(0, 8),
+  );
+  const node = machine.snapshot.nodes[0];
+  try {
+    await openMachine(page, machine, '&node=' + node.id + '&edit=1');
+    const editor = page.getByRole('dialog', { name: '编辑机器节点', exact: true });
+    await editor.getByLabel('监听端口', { exact: true }).fill('9443');
+    await editor.getByRole('button', { name: '保存修改', exact: true }).click();
+    await expect(editor.getByRole('status')).toContainText('排队中');
+    await finishTask(page, machine, 'conflict', {
+      ...machine.snapshot,
+      revision: revision(machine.machine.id + 'node-removed'),
+      nodes: machine.snapshot.nodes.filter((item) => item.id !== node.id),
+      exports: machine.snapshot.exports.filter((item) => item.id !== node.id),
+    });
+    await expect(editor.getByRole('status')).toContainText('节点已不在最新快照中', {
+      timeout: 10000,
+    });
+    await expect(editor.getByLabel('监听端口', { exact: true })).toHaveValue('9443');
+    await expect(editor.getByLabel('监听端口', { exact: true })).toBeDisabled();
+    await expect(editor.getByRole('button', { name: '采用最新版本', exact: true })).toHaveCount(0);
+    await expect(editor.getByRole('button', { name: '保存修改', exact: true })).toHaveCount(0);
+    expect((await api(page, '/api/machines/' + machine.machine.id)).tasks).toHaveLength(1);
   } finally {
     await retire(page, machine);
   }

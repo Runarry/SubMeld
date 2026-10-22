@@ -47,7 +47,15 @@ function readLocation() {
 readLocation();
 function locationChanged() {
   if (!/^#\/?nodes(?:\?|$)/.test(location.hash)) return;
+  ticket++;
   readLocation();
+  selected.value = [];
+  message.value = '';
+  errors.value = [];
+  if (busy.value) {
+    reloadPending = true;
+    return;
+  }
   void act(() => load());
 }
 const native = '/?api=' + encodeURIComponent(location.origin + '/upstream/sub-store');
@@ -63,7 +71,8 @@ const subject = (node: NodeView): TestSubject => ({ kind: 'node', ...nodeRef(nod
 const testing = useNodeTests(() => nodes.value.filter((n) => n.testable).map(subject), props.api);
 const chosen = computed(() => nodes.value.filter((n) => selected.value.includes(key(n))));
 let alive = true,
-  ticket = 0;
+  ticket = 0,
+  reloadPending = false;
 onBeforeUnmount(() => {
   alive = false;
   ticket++;
@@ -76,21 +85,28 @@ async function act(action: () => Promise<void>) {
   try {
     await action();
   } catch (e) {
-    if (alive) message.value = e instanceof Error ? e.message : '操作失败。';
+    if (alive && !reloadPending) message.value = e instanceof Error ? e.message : '操作失败。';
   } finally {
-    if (alive) busy.value = false;
+    if (alive) {
+      busy.value = false;
+      if (reloadPending) {
+        reloadPending = false;
+        void act(() => load());
+      }
+    }
   }
 }
 async function load(force = false) {
   const current = ++ticket;
+  const requested = { page: page.value, resourceId: resourceId.value, search: search.value };
   const result = nodeListSchema.parse(
     await props.api(
       '/api/nodes?page=' +
-        page.value +
+        requested.page +
         '&resourceId=' +
-        encodeURIComponent(resourceId.value) +
+        encodeURIComponent(requested.resourceId) +
         '&search=' +
-        encodeURIComponent(search.value) +
+        encodeURIComponent(requested.search) +
         (force ? '&refresh=1' : ''),
     ),
   );
@@ -101,12 +117,12 @@ async function load(force = false) {
   errors.value = result.errors.map((e) => e.message);
   selected.value = [];
   const query = new URLSearchParams();
-  if (resourceId.value) query.set('resource', resourceId.value);
-  if (search.value) query.set('search', search.value);
-  if (page.value) query.set('page', String(page.value));
+  if (requested.resourceId) query.set('resource', requested.resourceId);
+  if (requested.search) query.set('search', requested.search);
+  if (requested.page) query.set('page', String(requested.page));
   history.replaceState(null, '', '#/nodes' + (query.size ? '?' + query : ''));
-  if (!nodes.value.length && page.value) {
-    page.value--;
+  if (!nodes.value.length && requested.page) {
+    page.value = requested.page - 1;
     await load(force);
   }
 }
@@ -115,19 +131,21 @@ async function save() {
   const saved = resourceSchema.parse(await props.api('/api/nodes', form.value));
   if (!alive) return;
   form.value = null;
+  if (reloadPending) return;
   resourceId.value = saved.id;
   page.value = 0;
   search.value = '';
   await load();
-  message.value = '已保存到 Sub-Store。';
+  if (alive && !reloadPending) message.value = '已保存到 Sub-Store。';
 }
 async function remove() {
   if (!deleting.value) return;
   await props.api('/api/nodes/delete', { nodes: deleting.value.map(nodeRef) });
   if (!alive) return;
   deleting.value = null;
+  if (reloadPending) return;
   await load();
-  message.value = '删除操作已保存到 Sub-Store。';
+  if (alive && !reloadPending) message.value = '删除操作已保存到 Sub-Store。';
 }
 onMounted(() => {
   window.addEventListener('hashchange', locationChanged);
@@ -182,6 +200,7 @@ onMounted(() => {
         v-model="search"
         aria-label="搜索节点"
         placeholder="搜索名称、协议、订阅"
+        :disabled="busy"
         @keydown.enter.prevent="
           page = 0;
           act(() => load());
@@ -249,7 +268,10 @@ onMounted(() => {
             :disabled="busy"
             @click="
               act(async () => {
-                detail = nodeDetailsSchema.parse(await api('/api/nodes/detail', nodeRef(node)));
+                const result = nodeDetailsSchema.parse(
+                  await api('/api/nodes/detail', nodeRef(node)),
+                );
+                if (alive && !reloadPending) detail = result;
               })
             "
           >

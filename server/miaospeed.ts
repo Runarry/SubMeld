@@ -85,6 +85,8 @@ export class MiaospeedTester {
   private currentValidity: { id: string; value?: ReportValidity } | undefined;
   private reportChecks = new Map<string, Promise<ReportValidity>>();
   private task: Promise<void> | undefined;
+  private activeId: string | null = null;
+  private closing: Promise<void> | undefined;
   private abort = new AbortController();
   private closed = false;
   private statusValue = {
@@ -228,294 +230,334 @@ export class MiaospeedTester {
     if (!this.client.configured())
       throw new AppError('MIAOSPEED_UNCONFIGURED', '请先配置 miaospeed 后端。', 503);
     const release = this.activity.acquire('miaospeed');
+    this.abort = new AbortController();
+    const signal = this.abort.signal;
+    let resolveReady!: (report: SpeedReport) => void;
+    let rejectReady!: (error: unknown) => void;
+    const ready = new Promise<SpeedReport>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+    const captured: ReturnType<MiaospeedInput['capture']>[] = [];
     let lease: ReturnType<KernelManager['snapshot']> | undefined;
-    try {
-      await this.input.resources.sync();
-      await this.input.refresh(value.subjects);
-      const scripts = this.scripts.selected(value.scripts);
-      const captured = value.subjects.map((subject) => this.input.capture(subject));
-      lease = this.kernels.snapshot();
-      const report: SpeedReport = {
-        id: reportId,
-        origin,
-        name: value.name,
-        state: 'running',
-        createdAt: new Date().toISOString(),
-        finishedAt: null,
-        backendVersion: null,
-        settings,
-        metrics: value.metrics,
-        scripts: scripts.map(({ id, name, revision, source }) => ({ id, name, revision, source })),
-        total: captured.length,
-        completed: 0,
-        current: null,
-        error: null,
-        results: captured.map((node, index) => ({
-          index,
-          subject: value.subjects[index]!,
-          name: node.name,
-          protocol: node.protocol,
-          state: 'pending',
-          stale: false,
-          message: '',
-          testedAt: null,
-          coreVersion: null,
-          measurements: [],
-        })),
-      };
-      this.store.create(report);
-      this.currentId = report.id;
-      this.currentValidity = undefined;
-      this.abort = new AbortController();
-      const signal = this.abort.signal,
-        heldLease = lease;
-      const refs = new Set(
-        value.subjects.flatMap((subject) =>
-          subject.kind === 'temporary' ? [subject.previewId] : [],
-        ),
-      );
-      this.input.discard(refs);
-      this.task = Promise.resolve()
-        .then(async () => {
-          await this.targetCheck(settings, value.metrics, signal);
-          for (const row of report.results) {
-            if (signal.aborted) break;
-            row.state = 'running';
-            report.current = row.name;
-            this.store.saveRow(report.id, row);
-            this.store.save(report);
-            const node = captured[row.index]!;
-            let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
-            try {
-              if (node.error) throw new AppError('TARGET_UNSUPPORTED', node.error, 422);
-              if (row.subject.kind !== 'temporary') {
-                await this.input.refresh([row.subject]);
-                this.input.capture(row.subject);
-              }
-              const name = 'sm-' + row.index;
-              let payload: string;
-              const core = executionCore(settings);
-              if (core !== 'native') {
-                const binary = heldLease.binaries.get(core);
-                if (!binary)
-                  throw new AppError('TARGET_UNSUPPORTED', '所选执行内核尚未安装。', 422);
-                row.coreVersion = binary.version;
-                bridge = await startBridge(
-                  binary,
-                  this.input.bridgeItem(node),
-                  this.converter,
-                  this.config.dataDir,
-                  this.config.miaospeedBridgeHost,
-                  signal,
-                  this.config.miaospeedBridgeBind,
-                );
-                payload = bridge.payload;
-              } else payload = await this.input.payload(node.raw!, name, signal);
-              const ids = [
-                ...new Set(
-                  value.metrics.map((id) =>
-                    id === 'TEST_PING_MAX_CONN' ? 'TEST_PING_TOTAL_CONN' : id,
-                  ),
-                ),
-              ];
-              if (value.metrics.some((id) => id.startsWith('TEST_PING_'))) {
-                for (const id of [
-                  'TEST_PING_TOTAL_RTT',
-                  'TEST_PING_TOTAL_CONN',
-                  'TEST_HTTP_CODE',
-                ] as const)
-                  if (!ids.includes(id)) ids.push(id);
-              }
-              const matrices: Matrix[] = [
-                ...ids.map((Type) => ({ Type, Params: '' })),
-                ...scripts.map((s) => ({ Type: 'TEST_SCRIPT', Params: s.id })),
-              ];
-              const update = (slot: Parameters<typeof measurements>[0], version: string) => {
-                report.backendVersion = version || report.backendVersion;
-                // A bridge's address is internal, including in progress or cancelled reports.
-                const result = bridge
-                  ? {
-                      ...slot,
-                      Matrices: slot.Matrices?.filter((m) => m.Type !== 'GEOIP_INBOUND') ?? null,
-                    }
-                  : slot;
-                row.measurements = measurements(result, value.metrics, scripts);
-                this.store.saveRow(report.id, row);
-                this.store.save(report);
-              };
-              const result = await this.client.run(
-                settings,
-                [{ Name: name, Payload: payload }],
-                matrices,
-                scripts.map(backendScript),
-                signal,
-                (slot, _index, version) => update(slot, version),
-              );
-              if (result.slots.length !== 1)
-                throw new AppError('MIAOSPEED_PROTOCOL', '后端返回的节点数量与请求不一致。', 502);
-              update(result.slots[0]!, result.version);
-              this.statusValue = {
-                connected: true,
-                version: result.version,
-                checkedAt: new Date().toISOString(),
-                error: null,
-              };
-              const entry = bridge ? node.raw : null;
-              if (entry && value.metrics.includes('GEOIP_INBOUND')) {
-                const entryMetric = row.measurements.find((m) => m.id === 'GEOIP_INBOUND')!;
-                try {
-                  const entryPayload = await this.input.payload(entry, 'node-entry', signal);
-                  const entryResult = await this.client.run(
-                    settings,
-                    [{ Name: 'node-entry', Payload: entryPayload }],
-                    [{ Type: 'GEOIP_INBOUND', Params: '' }],
-                    [],
-                    signal,
-                  );
-                  Object.assign(
-                    entryMetric,
-                    measurements(
-                      entryResult.slots[0] ?? { Matrices: [] },
-                      ['GEOIP_INBOUND'],
-                      [],
-                    )[0],
-                  );
-                  entryMetric.message = '真实节点地址信息；出口与性能经所选内核测得。';
-                } catch (error) {
-                  if (signal.aborted) throw error;
-                  Object.assign(entryMetric, {
-                    value: null,
-                    geo: [],
-                    status: 'unknown',
-                    message: '无法取得真实入口节点信息。',
-                  });
-                }
-              }
-              row.state = row.measurements.every((m) => m.status === 'measured')
-                ? 'completed'
-                : 'partial';
-              row.message =
-                row.state === 'partial'
-                  ? '部分检测没有确定结论；请查看各项结果。'
-                  : '检测完成；具体可用性以各项结果为准。';
-            } catch (error) {
-              row.state = signal.aborted
-                ? 'cancelled'
-                : error instanceof AppError &&
-                    (error.code === 'TARGET_UNSUPPORTED' ||
-                      error.diagnostics?.some(
-                        (diagnostic) => diagnostic.code === 'TARGET_UNSUPPORTED',
-                      ))
-                  ? 'unsupported'
-                  : error instanceof AppError && error.code === 'REVISION_CONFLICT'
-                    ? 'stale'
-                    : 'failed';
-              row.message = signal.aborted
-                ? '已取消，已有结果保留。'
-                : error instanceof AppError
-                  ? error.diagnostics
-                      ?.filter((diagnostic) => diagnostic.level === 'error')
-                      .map((diagnostic) => diagnostic.message)
-                      .join(' ') || error.message
-                  : '测试无法完成，未将未知结果视为成功。';
-              row.stale = row.state === 'stale';
-              if (error instanceof AppError && error.code.startsWith('MIAOSPEED_')) {
-                report.state = 'failed';
-                report.error = row.message;
-              }
-            } finally {
-              await bridge?.close();
-              if (row.subject.kind !== 'temporary' && !signal.aborted) {
-                try {
-                  await this.input.refresh([row.subject]);
-                  if (!this.input.matches(row.subject)) {
-                    row.stale = true;
-                    row.state = 'stale';
-                    row.message = '内容已变化，结果仅作为历史记录。';
-                  }
-                } catch {
-                  row.stale = true;
-                  row.state = 'stale';
-                  row.message = '内容已变化或无法核对，结果仅作为历史记录。';
-                }
-              }
-              row.testedAt = new Date().toISOString();
-              report.completed++;
+    const checkAvailable = () => {
+      if (this.closed || signal.aborted)
+        throw new AppError('TEST_UNAVAILABLE', '测试服务已停止。', 503);
+    };
+    this.activeId = reportId;
+    this.task = Promise.resolve().then(async () => {
+      try {
+        checkAvailable();
+        await this.input.resources.sync();
+        checkAvailable();
+        await this.input.refresh(value.subjects);
+        checkAvailable();
+        const scripts = this.scripts.selected(value.scripts);
+        for (const subject of value.subjects) captured.push(this.input.capture(subject));
+        lease = this.kernels.snapshot();
+        const report: SpeedReport = {
+          id: reportId,
+          origin,
+          name: value.name,
+          state: 'running',
+          createdAt: new Date().toISOString(),
+          finishedAt: null,
+          backendVersion: null,
+          settings,
+          metrics: value.metrics,
+          scripts: scripts.map(({ id, name, revision, source }) => ({
+            id,
+            name,
+            revision,
+            source,
+          })),
+          total: captured.length,
+          completed: 0,
+          current: null,
+          error: null,
+          results: captured.map((node, index) => ({
+            index,
+            subject: value.subjects[index]!,
+            name: node.name,
+            protocol: node.protocol,
+            state: 'pending',
+            stale: false,
+            message: '',
+            testedAt: null,
+            coreVersion: null,
+            measurements: [],
+          })),
+        };
+        this.store.create(report);
+        this.currentId = report.id;
+        this.currentValidity = undefined;
+        const heldLease = lease;
+        const refs = new Set(
+          value.subjects.flatMap((subject) =>
+            subject.kind === 'temporary' ? [subject.previewId] : [],
+          ),
+        );
+        this.input.discard(refs);
+        resolveReady(this.store.get(report.id));
+        await Promise.resolve()
+          .then(async () => {
+            await this.targetCheck(settings, value.metrics, signal);
+            for (const row of report.results) {
+              if (signal.aborted) break;
+              row.state = 'running';
+              report.current = row.name;
               this.store.saveRow(report.id, row);
               this.store.save(report);
-              captured[row.index] = {
-                name: node.name,
-                protocol: node.protocol,
-                raw: null,
-                error: null,
-              };
+              const node = captured[row.index]!;
+              let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
+              try {
+                if (node.error) throw new AppError('TARGET_UNSUPPORTED', node.error, 422);
+                if (row.subject.kind !== 'temporary') {
+                  await this.input.refresh([row.subject]);
+                  this.input.capture(row.subject);
+                }
+                const name = 'sm-' + row.index;
+                let payload: string;
+                const core = executionCore(settings);
+                if (core !== 'native') {
+                  const binary = heldLease.binaries.get(core);
+                  if (!binary)
+                    throw new AppError('TARGET_UNSUPPORTED', '所选执行内核尚未安装。', 422);
+                  row.coreVersion = binary.version;
+                  bridge = await startBridge(
+                    binary,
+                    this.input.bridgeItem(node),
+                    this.converter,
+                    this.config.dataDir,
+                    this.config.miaospeedBridgeHost,
+                    signal,
+                    this.config.miaospeedBridgeBind,
+                  );
+                  payload = bridge.payload;
+                } else payload = await this.input.payload(node.raw!, name, signal);
+                const ids = [
+                  ...new Set(
+                    value.metrics.map((id) =>
+                      id === 'TEST_PING_MAX_CONN' ? 'TEST_PING_TOTAL_CONN' : id,
+                    ),
+                  ),
+                ];
+                if (value.metrics.some((id) => id.startsWith('TEST_PING_'))) {
+                  for (const id of [
+                    'TEST_PING_TOTAL_RTT',
+                    'TEST_PING_TOTAL_CONN',
+                    'TEST_HTTP_CODE',
+                  ] as const)
+                    if (!ids.includes(id)) ids.push(id);
+                }
+                const matrices: Matrix[] = [
+                  ...ids.map((Type) => ({ Type, Params: '' })),
+                  ...scripts.map((s) => ({ Type: 'TEST_SCRIPT', Params: s.id })),
+                ];
+                const update = (slot: Parameters<typeof measurements>[0], version: string) => {
+                  report.backendVersion = version || report.backendVersion;
+                  // A bridge's address is internal, including in progress or cancelled reports.
+                  const result = bridge
+                    ? {
+                        ...slot,
+                        Matrices: slot.Matrices?.filter((m) => m.Type !== 'GEOIP_INBOUND') ?? null,
+                      }
+                    : slot;
+                  row.measurements = measurements(result, value.metrics, scripts);
+                  this.store.saveRow(report.id, row);
+                  this.store.save(report);
+                };
+                const result = await this.client.run(
+                  settings,
+                  [{ Name: name, Payload: payload }],
+                  matrices,
+                  scripts.map(backendScript),
+                  signal,
+                  (slot, _index, version) => update(slot, version),
+                );
+                if (result.slots.length !== 1)
+                  throw new AppError('MIAOSPEED_PROTOCOL', '后端返回的节点数量与请求不一致。', 502);
+                update(result.slots[0]!, result.version);
+                this.statusValue = {
+                  connected: true,
+                  version: result.version,
+                  checkedAt: new Date().toISOString(),
+                  error: null,
+                };
+                const entry = bridge ? node.raw : null;
+                if (entry && value.metrics.includes('GEOIP_INBOUND')) {
+                  const entryMetric = row.measurements.find((m) => m.id === 'GEOIP_INBOUND')!;
+                  try {
+                    const entryPayload = await this.input.payload(entry, 'node-entry', signal);
+                    const entryResult = await this.client.run(
+                      settings,
+                      [{ Name: 'node-entry', Payload: entryPayload }],
+                      [{ Type: 'GEOIP_INBOUND', Params: '' }],
+                      [],
+                      signal,
+                    );
+                    Object.assign(
+                      entryMetric,
+                      measurements(
+                        entryResult.slots[0] ?? { Matrices: [] },
+                        ['GEOIP_INBOUND'],
+                        [],
+                      )[0],
+                    );
+                    entryMetric.message = '真实节点地址信息；出口与性能经所选内核测得。';
+                  } catch (error) {
+                    if (signal.aborted) throw error;
+                    Object.assign(entryMetric, {
+                      value: null,
+                      geo: [],
+                      status: 'unknown',
+                      message: '无法取得真实入口节点信息。',
+                    });
+                  }
+                }
+                row.state = row.measurements.every((m) => m.status === 'measured')
+                  ? 'completed'
+                  : 'partial';
+                row.message =
+                  row.state === 'partial'
+                    ? '部分检测没有确定结论；请查看各项结果。'
+                    : '检测完成；具体可用性以各项结果为准。';
+              } catch (error) {
+                row.state = signal.aborted
+                  ? 'cancelled'
+                  : error instanceof AppError &&
+                      (error.code === 'TARGET_UNSUPPORTED' ||
+                        error.diagnostics?.some(
+                          (diagnostic) => diagnostic.code === 'TARGET_UNSUPPORTED',
+                        ))
+                    ? 'unsupported'
+                    : error instanceof AppError && error.code === 'REVISION_CONFLICT'
+                      ? 'stale'
+                      : 'failed';
+                row.message = signal.aborted
+                  ? '已取消，已有结果保留。'
+                  : error instanceof AppError
+                    ? error.diagnostics
+                        ?.filter((diagnostic) => diagnostic.level === 'error')
+                        .map((diagnostic) => diagnostic.message)
+                        .join(' ') || error.message
+                    : '测试无法完成，未将未知结果视为成功。';
+                row.stale = row.state === 'stale';
+                if (error instanceof AppError && error.code.startsWith('MIAOSPEED_')) {
+                  report.state = 'failed';
+                  report.error = row.message;
+                }
+              } finally {
+                await bridge?.close();
+                if (row.subject.kind !== 'temporary' && !signal.aborted) {
+                  try {
+                    await this.input.refresh([row.subject]);
+                    if (!this.input.matches(row.subject)) {
+                      row.stale = true;
+                      row.state = 'stale';
+                      row.message = '内容已变化，结果仅作为历史记录。';
+                    }
+                  } catch {
+                    row.stale = true;
+                    row.state = 'stale';
+                    row.message = '内容已变化或无法核对，结果仅作为历史记录。';
+                  }
+                }
+                row.testedAt = new Date().toISOString();
+                report.completed++;
+                this.store.saveRow(report.id, row);
+                this.store.save(report);
+                captured[row.index] = {
+                  name: node.name,
+                  protocol: node.protocol,
+                  raw: null,
+                  error: null,
+                };
+              }
+              if (report.state === 'failed') break;
             }
-            if (report.state === 'failed') break;
-          }
-        })
-        .catch((error) => {
-          report.state = signal.aborted ? 'cancelled' : 'failed';
-          report.error = signal.aborted
-            ? '测试已取消。'
-            : error instanceof AppError
-              ? error.message
-              : '任务停止，已完成的结果保留。';
-          if (error instanceof AppError && error.code === 'TEST_TARGET_ERROR')
-            for (const row of report.results) {
-              row.state = 'failed';
-              row.message = error.message;
-              row.measurements = value.metrics.map((id) => ({
-                id,
-                label: metricDefinitions.find((m) => m[0] === id)![1],
-                unit: '',
-                status: 'target_error',
-                value: null,
-                samples: [],
-                geo: [],
-                color: null,
-                message: error.message,
-              }));
-              this.store.saveRow(report.id, row);
-            }
-        })
-        .finally(async () => {
-          for (const row of report.results)
-            if (row.state === 'pending' || row.state === 'running') {
-              row.state = 'cancelled';
-              row.message = signal.aborted ? '测试已取消。' : '批次停止，此项未执行。';
-              this.store.saveRow(report.id, row);
-            }
-          if (report.state === 'running') report.state = signal.aborted ? 'cancelled' : 'completed';
-          report.current = null;
-          report.finishedAt = new Date().toISOString();
-          this.store.save(report);
-          captured.length = 0;
-          await heldLease.release();
+          })
+          .catch((error) => {
+            report.state = signal.aborted ? 'cancelled' : 'failed';
+            report.error = signal.aborted
+              ? '测试已取消。'
+              : error instanceof AppError
+                ? error.message
+                : '任务停止，已完成的结果保留。';
+            if (error instanceof AppError && error.code === 'TEST_TARGET_ERROR')
+              for (const row of report.results) {
+                row.state = 'failed';
+                row.message = error.message;
+                row.measurements = value.metrics.map((id) => ({
+                  id,
+                  label: metricDefinitions.find((m) => m[0] === id)![1],
+                  unit: '',
+                  status: 'target_error',
+                  value: null,
+                  samples: [],
+                  geo: [],
+                  color: null,
+                  message: error.message,
+                }));
+                this.store.saveRow(report.id, row);
+              }
+          })
+          .finally(() => {
+            for (const row of report.results)
+              if (row.state === 'pending' || row.state === 'running') {
+                row.state = 'cancelled';
+                row.message = signal.aborted ? '测试已取消。' : '批次停止，此项未执行。';
+                this.store.saveRow(report.id, row);
+              }
+            if (report.state === 'running')
+              report.state = signal.aborted ? 'cancelled' : 'completed';
+            report.current = null;
+            report.finishedAt = new Date().toISOString();
+            this.store.save(report);
+          });
+      } finally {
+        captured.length = 0;
+        try {
+          await lease?.release();
+        } finally {
+          this.activeId = null;
           release();
-          this.task = undefined;
-        });
-      return this.store.get(report.id);
-    } catch (error) {
-      await lease?.release();
-      release();
-      throw error;
-    }
+        }
+      }
+    });
+    // Observe preparation and late cleanup failures without creating an unhandled rejection.
+    void this.task.catch(rejectReady);
+    return ready;
   }
   cancel(id: string) {
     const report = this.store.get(id);
-    if (id === this.currentId && this.task) {
+    if (id === this.activeId) {
       this.abort.abort();
       report.current = '正在取消，等待后端当前项结束';
       this.store.save(report);
     }
     return this.store.get(id);
   }
-  async close() {
+  close() {
+    if (this.closing) return this.closing;
     this.closed = true;
     this.currentValidity = undefined;
     this.reportChecks.clear();
     this.abort.abort();
-    await this.task;
-    this.input.close();
+    this.closing = (async () => {
+      try {
+        await this.task;
+      } catch (error) {
+        if (!(
+          error instanceof AppError &&
+          error.code === 'TEST_UNAVAILABLE' &&
+          error.status === 503
+        ))
+          throw error;
+      } finally {
+        this.input.close();
+      }
+    })();
+    return this.closing;
   }
 }

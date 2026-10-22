@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fixture, subject } from './upstream-fixture.mjs';
 import { RelayStore, relayEndpoint } from '../dist/server/relays.js';
 import { createApp } from '../dist/server/app.js';
+import { AppError } from '../dist/server/errors.js';
 
 const digest = (text) => createHash('sha256').update(text).digest('hex');
 async function legacyChain(f, entry, exit) {
@@ -76,14 +77,14 @@ async function createMachine(f, name, value) {
   await report(f, machine);
   return machine;
 }
-async function report(f, m) {
+async function report(f, m, tunnels = []) {
   return f.machines.report(
     {
       machineId: m.machine.id,
       agentVersion: 'fixture',
       bootId: m.bootId,
       snapshot: m.snapshot,
-      tunnels: [],
+      tunnels,
     },
     'Bearer ' + m.token,
   );
@@ -344,6 +345,184 @@ test('deleting a route never adopts namesakes after its recorded native IDs disa
   assert.equal((await f.routes.list()).routes[0].status, 'deleted');
   assert.equal(f.entry.snapshot.relay.exits[0].id, 'unrelated-exit');
   assert.equal(f.entry.snapshot.relay.forwards[0].id, 'unrelated-forward');
+});
+
+for (const role of ['hop', 'entry']) {
+  test(`deletion consumes the applied tunnel ${role} receipt before its next tick or heartbeat`, async (t) => {
+    const f = await setup(t);
+    const { route } = await f.routes.create({
+      ...f.input,
+      kind: 'tunnel',
+      hops: [{ machineId: f.target.machine.id, address: 'target.example.com', port: 23457 }],
+    });
+    await f.routes.tick();
+    const hop = await complete(f, f.target, 'tunnel.apply');
+    let applied = hop;
+    if (role === 'entry') {
+      await f.routes.tick();
+      applied = await complete(f, f.entry, 'tunnel.apply');
+    }
+    const before = savedRoute(f, route.id);
+    assert.equal(before.step.requestId, applied.requestId);
+    assert.equal(
+      role === 'entry' ? before.entryTunnelRevision : before.hops[0].appliedRevision,
+      '',
+    );
+    for (const machine of [f.entry, f.target])
+      assert.deepEqual(await f.machines.getTunnelReports(machine.machine.id), []);
+
+    await f.routes.remove(route.id, (await currentRoute(f)).revision);
+    const deleting = savedRoute(f, route.id);
+    assert.equal(deleting.step, undefined);
+    assert.equal(deleting.stage, 0);
+    assert.equal(
+      role === 'entry' ? deleting.entryTunnelRevision : deleting.hops[0].appliedRevision,
+      applied.params.revision,
+    );
+    await f.routes.tick();
+    const machine = role === 'entry' ? f.entry : f.target;
+    const { command } = await f.machines.poll(machine.machine.id, 'Bearer ' + machine.token, 0);
+    assert.equal(command.action, 'tunnel.delete');
+    assert.equal(command.params.id, applied.params.id);
+    assert.equal(command.params['expected-tunnel-revision'], applied.params.revision);
+    assert.notEqual(command.requestId, applied.requestId);
+    await f.routes.tick();
+    assert.equal((await currentRoute(f)).status, 'deleting');
+    assert.equal(savedRoute(f, route.id).step.requestId, command.requestId);
+
+    await complete(f, machine, 'tunnel.delete');
+    await f.routes.tick();
+    if (role === 'entry') {
+      assert.equal((await currentRoute(f)).status, 'deleting');
+      const cleanup = await complete(f, f.target, 'tunnel.delete');
+      assert.equal(cleanup.params.id, hop.params.id);
+      assert.equal(cleanup.params['expected-tunnel-revision'], hop.params.revision);
+      await f.routes.tick();
+    }
+    assert.equal((await currentRoute(f)).status, 'deleted');
+  });
+}
+
+for (const observed of ['submitted', 'modified']) {
+  test(`deletion reconciles an unknown tunnel apply using its observed ${observed} revision`, async (t) => {
+    const f = await setup(t);
+    const { route } = await f.routes.create({
+      ...f.input,
+      kind: 'tunnel',
+      hops: [{ machineId: f.target.machine.id, address: 'target.example.com', port: 23457 }],
+    });
+    await f.routes.tick();
+    const unknown = await failCommand(f, f.target, 'unknown');
+    const before = savedRoute(f, route.id);
+    for (const tunnels of [
+      [],
+      [{ id: randomUUID(), revision: unknown.params.revision, running: true, error: '' }],
+    ]) {
+      await report(f, f.target, tunnels);
+      await assert.rejects(f.routes.remove(route.id, (await currentRoute(f)).revision), {
+        code: 'RELAY_RESULT_UNKNOWN',
+      });
+      assert.deepEqual(savedRoute(f, route.id), before);
+      assert.equal(f.machines.activeTask(f.target.machine.id), null);
+    }
+    const revision = observed === 'submitted' ? unknown.params.revision : digest('modified tunnel');
+    await report(f, f.target, [{ id: unknown.params.id, revision, running: true, error: '' }]);
+    await f.routes.remove(route.id, (await currentRoute(f)).revision);
+    await f.routes.tick();
+    const deleting = await complete(f, f.target, 'tunnel.delete');
+    assert.equal(deleting.params.id, unknown.params.id);
+    assert.equal(deleting.params['expected-tunnel-revision'], revision);
+    await f.routes.tick();
+    assert.equal((await currentRoute(f)).status, 'deleted');
+  });
+}
+
+test('deletion cancels a queued apply before delivery', async (t) => {
+  const f = await setup(t);
+  const { route } = await f.routes.create(f.input);
+  await f.routes.tick();
+  const { step } = savedRoute(f, route.id);
+  await f.routes.remove(route.id, (await currentRoute(f)).revision);
+  assert.equal(f.machines.task(step.requestId).status, 'cancelled');
+  assert.equal(
+    (await f.machines.poll(f.entry.machine.id, 'Bearer ' + f.entry.token, 0)).command,
+    null,
+  );
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'deleted');
+  assert.deepEqual(savedRoute(f, route.id).route.taskIds, [step.requestId]);
+});
+
+for (const result of ['running', 'applied']) {
+  test(`deletion rechecks a queued apply that becomes ${result} before cancellation`, async (t) => {
+    const f = await setup(t);
+    const { route } = await f.routes.create({
+      ...f.input,
+      kind: 'tunnel',
+      hops: [{ machineId: f.target.machine.id, address: 'target.example.com', port: 23457 }],
+    });
+    await f.routes.tick();
+    const before = savedRoute(f, route.id);
+    const cancel = f.machines.cancel.bind(f.machines);
+    f.machines.cancel = async (...args) => {
+      if (result === 'applied') await complete(f, f.target, 'tunnel.apply');
+      else await f.machines.poll(f.target.machine.id, 'Bearer ' + f.target.token, 0);
+      return cancel(...args);
+    };
+    if (result === 'running') {
+      await assert.rejects(f.routes.remove(route.id, (await currentRoute(f)).revision), {
+        code: 'MACHINE_BUSY',
+      });
+      assert.deepEqual(savedRoute(f, route.id), before);
+      await complete(f, f.target, 'tunnel.apply');
+    }
+    await f.routes.remove(route.id, (await currentRoute(f)).revision);
+    assert.equal(
+      savedRoute(f, route.id).hops[0].appliedRevision,
+      before.step.operation.params.revision,
+    );
+    await f.routes.tick();
+    const deleting = await complete(f, f.target, 'tunnel.delete');
+    assert.equal(deleting.params.id, before.step.operation.params.id);
+    assert.equal(
+      deleting.params['expected-tunnel-revision'],
+      before.step.operation.params.revision,
+    );
+    await f.routes.tick();
+    assert.equal((await currentRoute(f)).status, 'deleted');
+  });
+}
+
+test('only an explicitly missing task lets deletion discard an undelivered intent', async (t) => {
+  const f = await setup(t);
+  const { route } = await f.routes.create(f.input);
+  const enqueue = f.machines.enqueue.bind(f.machines);
+  f.machines.enqueue = async () => {
+    throw new AppError('SUB_STORE_FAILED', 'Controlled enqueue failure.', 502);
+  };
+  await f.routes.tick();
+  f.machines.enqueue = enqueue;
+  const before = savedRoute(f, route.id);
+  assert.equal(before.route.status, 'failed');
+  assert.throws(() => f.machines.task(before.step.requestId), { code: 'MACHINE_TASK_NOT_FOUND' });
+
+  const task = f.machines.task.bind(f.machines);
+  for (const error of [
+    new AppError('MACHINE_NOT_FOUND', 'Controlled machine lookup failure.', 404),
+    new Error('Controlled task lookup failure.'),
+  ]) {
+    f.machines.task = () => {
+      throw error;
+    };
+    await assert.rejects(f.routes.remove(route.id, (await currentRoute(f)).revision), error);
+    assert.deepEqual(savedRoute(f, route.id), before);
+  }
+  f.machines.task = task;
+  await f.routes.remove(route.id, (await currentRoute(f)).revision);
+  await f.routes.tick();
+  assert.equal((await currentRoute(f)).status, 'deleted');
+  assert.deepEqual(savedRoute(f, route.id).route.taskIds, [before.step.requestId]);
+  assert.equal(f.machines.activeTask(f.entry.machine.id), null);
 });
 
 test('a changed tunnel target invalidates its published test result and rejects late results', async (t) => {
