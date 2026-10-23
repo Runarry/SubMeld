@@ -1,7 +1,90 @@
+/* global document, window, getComputedStyle */
 import { test, expect } from '@playwright/test';
 import { login, api, cleanup, noOverflow, navigate } from './browser-helpers.mjs';
 import { node } from './fixtures.mjs';
 import { toUpstream } from '../dist/server/converter/model.js';
+
+test('light UI keeps pages, checkbox labels and modal actions usable across viewport sizes', async ({
+  page,
+}, info) => {
+  test.setTimeout(90000);
+  const widths = info.project.name === 'desktop' ? [1440, 768] : [390, 360];
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: widths[0], height: 900 });
+  await page.goto('/submeld/');
+  await expect(page.getByRole('heading', { name: '管理员登录', exact: true })).toBeVisible();
+  await noOverflow(page);
+  await page.screenshot({ path: info.outputPath('login.png'), fullPage: true });
+  await login(page);
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const [name, heading] of [
+      ['机器', '机器'],
+      ['节点', '节点'],
+      ['中转线路', '中转线路'],
+      ['输出方案', '输出方案'],
+      ['测试中心', '测试中心'],
+      ['配套文件', '配套脚本与模板'],
+    ]) {
+      await navigate(page, name);
+      await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+      await noOverflow(page);
+      expect(
+        await page.locator('.content').evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+      ).toBe(true);
+      expect(
+        await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme),
+      ).toBe('light');
+      await page.locator('.content').evaluate((el) => el.scrollTo(0, 0));
+      await page.screenshot({ path: info.outputPath(`${width}-${name}.png`), fullPage: true });
+    }
+    await navigate(page, '测试中心');
+    const option = page.locator('.test-options label').first();
+    await expect(option).toBeVisible();
+    const placement = await option.evaluate((label) => {
+      const checkbox = label.querySelector('input').getBoundingClientRect();
+      const text = Array.from(label.childNodes).find(
+        (node) => node.nodeType === 3 && node.textContent.trim(),
+      );
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const caption = range.getBoundingClientRect();
+      return {
+        afterCheckbox: caption.left >= checkbox.right,
+        sameLine:
+          Math.abs(caption.top + caption.height / 2 - checkbox.top - checkbox.height / 2) < 4,
+      };
+    });
+    expect(placement).toEqual({ afterCheckbox: true, sameLine: true });
+    await navigate(page, '节点');
+    await page.getByRole('button', { name: '添加节点或订阅', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '添加节点或订阅', exact: true });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel('订阅名称', { exact: true }).focus();
+    await page.keyboard.press('Tab');
+    expect(
+      await page.evaluate(() => {
+        const style = getComputedStyle(document.activeElement);
+        return style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2;
+      }),
+    ).toBe(true);
+    const save = dialog.getByRole('button', { name: '保存到 Sub-Store', exact: true });
+    expect(
+      await save.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        return (
+          rect.top >= 0 &&
+          rect.bottom <= window.innerHeight &&
+          el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+        );
+      }),
+    ).toBe(true);
+    expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`${width}-node-dialog.png`), fullPage: true });
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+  }
+});
 test('unified nodes import a batch, show raw data, delete a single original node and logout', async ({
   page,
 }, info) => {

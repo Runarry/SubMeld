@@ -122,42 +122,44 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside));
   min-width: 0;
 }
 label {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
 }
 .select-input {
   position: relative;
 }
 .select-input input {
-  padding-right: 30px;
+  padding-right: var(--space-8);
 }
 .select-input > span {
   position: absolute;
-  right: 12px;
-  top: 8px;
+  right: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
   pointer-events: none;
   color: var(--muted);
 }
 .select-options {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + var(--space-1));
   left: 0;
   right: 0;
-  z-index: 90;
+  z-index: var(--z-popover);
   max-height: 250px;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 5px;
-  background: white;
-  box-shadow: 0 8px 24px #14231e20;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-1);
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
 }
 .select-options button {
   display: grid;
+  justify-content: stretch;
   text-align: left;
   width: 100%;
   border: 0;
-  padding: 10px;
-  gap: 3px;
+  padding: var(--space-3);
+  gap: var(--space-1);
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -167,16 +169,16 @@ label {
 }
 .select-options small,
 .select-options p {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
-  font-weight: 400;
+  font-weight: var(--weight-normal);
 }
 .select-options p {
-  padding: 8px;
+  padding: var(--space-2);
   margin: 0;
 }
 .select-options .unavailable {
-  opacity: 0.55;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 </style>

@@ -398,23 +398,23 @@ onMounted(() => {
 </template>
 <style scoped>
 .machine-origin {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--primary);
 }
 .connection-summary {
   display: grid;
   grid-template-columns: 130px 1fr;
-  gap: 12px;
-  padding: 16px;
+  gap: var(--space-3);
+  padding: var(--space-4);
   background: var(--bg);
-  border-radius: 8px;
+  border-radius: var(--radius);
   overflow-wrap: anywhere;
 }
 .connection-summary dd {
   margin: 0;
 }
 details {
-  margin-block: 16px;
+  margin-block: var(--space-4);
 }
 summary {
   cursor: pointer;
@@ -426,19 +426,19 @@ summary {
 .actions,
 .pagination {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
 }
 .filters {
   flex-direction: row;
   align-items: flex-end;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 .filters label {
   display: grid;
   flex: 0 1 240px;
-  gap: 6px;
+  gap: var(--space-2);
   text-align: left;
   max-width: 100%;
 }
@@ -451,17 +451,21 @@ summary {
   max-width: 100%;
 }
 .selection-bar {
-  margin: 16px 0;
+  margin: var(--space-4) 0;
 }
 .node-list {
-  padding: 0 18px;
+  padding: 0 var(--space-4);
+  max-height: none;
 }
 .node-row {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-4) 0;
+  border: 0;
+  border-bottom: var(--border-width) solid var(--border);
+  border-radius: 0;
+  margin: 0;
 }
 .node-row:last-child {
   border: 0;
@@ -472,15 +476,15 @@ summary {
   overflow-wrap: anywhere;
 }
 .node-main p {
-  margin: 5px 0;
+  margin: var(--space-1) 0;
 }
 .node-form {
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .node-form label {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
 }
 .node-form textarea,
 .node-form input,
@@ -496,7 +500,7 @@ pre {
 }
 .pagination {
   justify-content: flex-end;
-  margin-top: 18px;
+  margin-top: var(--space-5);
 }
 @media (max-width: 650px) {
   .node-row {
@@ -506,7 +510,7 @@ pre {
     flex-basis: 80%;
   }
   .row-actions {
-    margin-left: 28px;
+    margin-left: var(--space-7);
   }
   .filters label {
     display: grid;

@@ -289,113 +289,113 @@ h2 {
   outline: none;
 }
 h3 {
-  margin: 0 0 12px;
-  font-size: 16px;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
 }
 p {
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: var(--text-sm);
+  line-height: var(--line-height);
 }
 .machine-context {
-  margin-top: 8px;
+  margin-top: var(--space-2);
   color: var(--muted);
   overflow-wrap: anywhere;
 }
 .deletion-counts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin: 18px 0;
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
 }
 .deletion-counts div {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
 }
 dt,
 small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 dd {
-  margin: 8px 0 0;
-  font-size: 20px;
-  font-weight: 650;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-strong);
 }
 .deletion-section {
-  border-top: 1px solid var(--border);
-  padding: 20px 0 0;
+  border-top: var(--border-width) solid var(--border);
+  padding: var(--space-5) 0 0;
 }
 .deletion-section h3:not(:first-child) {
-  margin-top: 22px;
+  margin-top: var(--space-6);
 }
 textarea {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  line-height: 1.6;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  line-height: var(--line-height);
   resize: vertical;
   min-height: 110px;
 }
 .uninstall-note {
-  padding: 12px;
+  padding: var(--space-3);
   background: var(--warn-bg);
   color: var(--warn-text);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .confirm-uninstall {
   flex-direction: row;
   align-items: flex-start;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  line-height: 1.7;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  line-height: var(--line-height);
 }
 .confirm-uninstall input {
   flex-shrink: 0;
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .blocker-list,
 .pending-tasks ul {
   list-style: none;
   padding: 0;
-  margin: 16px 0;
+  margin: var(--space-4) 0;
 }
 .blocker-list li {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--border);
 }
 .blocker-list span {
   display: grid;
-  gap: 5px;
+  gap: var(--space-1);
   min-width: 0;
   overflow-wrap: anywhere;
 }
 .blocker-list a {
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .pending-tasks {
-  margin: 20px 0 0;
-  padding: 14px;
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4);
   background: var(--warn-bg);
   color: var(--warn-text);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .pending-tasks summary {
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
 }
 .pending-tasks li {
   display: grid;
-  gap: 6px;
-  font-size: 13px;
-  margin: 12px 0;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  margin: var(--space-3) 0;
   overflow-wrap: anywhere;
 }
 .pending-tasks p {

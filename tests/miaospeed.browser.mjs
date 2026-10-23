@@ -1,9 +1,11 @@
+/* global document, window, getComputedStyle, CanvasRenderingContext2D */
 import { test, expect } from '@playwright/test';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { speedReportSchema } from '../dist/server/shared/miaospeed.js';
+import { measurementText, speedReportSchema } from '../dist/server/shared/miaospeed.js';
 import { login, api, noOverflow } from './browser-helpers.mjs';
 
 test('temporary text, URL and file, script editing, reports and PNG/CSV exports', async ({
@@ -68,6 +70,7 @@ test('temporary text, URL and file, script editing, reports and PNG/CSV exports'
     expect(report.settings.uploadSeconds).toBe(90);
     expect(report.results[0].coreVersion).toBeTruthy();
     expect(report.results[0].measurements[0].value).toBe('受控 VM 检测完成');
+    expect(report.results[0].measurements[0].color).toBe('#bae67e');
     expect(report.results[1].state).toBe('unsupported');
     expect(JSON.stringify(report)).not.toContain(raw.password);
     await expect(page.getByRole('region', { name: '综合测试报告', exact: true })).toContainText(
@@ -262,6 +265,161 @@ async function openControlledReports(page, reports) {
   );
   return fixture;
 }
+
+test('report cells preserve data colors and PNG uses current theme colors and fonts', async ({
+  page,
+}, info) => {
+  const cases = [
+    { id: 'dark', status: 'unknown', color: '#123456', textToken: '--data-on-dark' },
+    // Saturated red needs black text by relative luminance, unlike a brightness threshold.
+    { id: 'light', status: 'failed', color: '#ff0000', textToken: '--data-on-light' },
+    ...Object.entries({
+      measured: 'measured',
+      failed: 'failed',
+      target_error: 'target-error',
+      unknown: 'unknown',
+      unsupported: 'unknown',
+    }).map(([status, token]) => ({
+      id: status,
+      status,
+      backgroundToken: `--measurement-${token}-bg`,
+      textToken: `--measurement-${token}-text`,
+    })),
+    {
+      id: 'missing',
+      backgroundToken: '--measurement-unknown-bg',
+      textToken: '--measurement-unknown-text',
+    },
+  ];
+  const base = reportFixture('报告颜色与字体');
+  const report = speedReportSchema.parse({
+    ...base,
+    metrics: [],
+    scripts: cases.map(({ id }) => ({
+      id,
+      name: id,
+      revision: 'c'.repeat(64),
+      source: '受控回归',
+    })),
+    results: [
+      {
+        ...base.results[0],
+        measurements: cases
+          .filter((item) => item.status)
+          .map((item) => ({
+            id: 'script:' + item.id,
+            label: item.id,
+            unit: '',
+            status: item.status,
+            color: item.color ?? null,
+            value: item.status === 'measured' ? 23 : null,
+            message: item.status,
+          })),
+      },
+    ],
+  });
+  await openControlledReports(page, [report]);
+  const expected = await page.evaluate(() => {
+    const overrides = {
+      '--bg': '#d9e4ef',
+      '--surface': '#fff1e4',
+      '--text': '#213140',
+      '--measurement-measured-bg': '#d4f2de',
+      '--measurement-measured-text': '#14532d',
+      '--measurement-failed-bg': '#ffd6d6',
+      '--measurement-failed-text': '#991b1b',
+      '--measurement-target-error-bg': '#fff0c2',
+      '--measurement-target-error-text': '#854d0e',
+      '--measurement-unknown-bg': '#e9e4f4',
+      '--measurement-unknown-text': '#53426c',
+      '--export-title-font': '600 26px serif',
+      '--export-body-font': '17px serif',
+      '--export-row-font': '600 21px serif',
+      '--export-metric-font': '14px serif',
+    };
+    for (const [name, value] of Object.entries(overrides))
+      document.documentElement.style.setProperty(name, value);
+    const styles = getComputedStyle(document.documentElement);
+    const probe = document.createElement('span');
+    document.body.appendChild(probe);
+    const context = document.createElement('canvas').getContext('2d');
+    const colors = {},
+      fonts = {};
+    for (const token of [...Object.keys(overrides), '--data-on-light', '--data-on-dark']) {
+      const value = styles.getPropertyValue(token).trim();
+      if (token.endsWith('-font')) {
+        context.font = value;
+        fonts[token] = context.font;
+      } else {
+        probe.style.color = value;
+        context.fillStyle = value;
+        colors[token] = { css: getComputedStyle(probe).color, canvas: context.fillStyle };
+      }
+    }
+    probe.remove();
+    const original = CanvasRenderingContext2D.prototype.fillText;
+    window.reportDrawing = [];
+    window.restoreReportDrawing = () => (CanvasRenderingContext2D.prototype.fillText = original);
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, ...args) {
+      window.reportDrawing.push({ text, x, y, color: this.fillStyle, font: this.font });
+      return original.call(this, text, x, y, ...args);
+    };
+    return { colors, fonts };
+  });
+  const cells = page.locator('.report-scroll tbody td');
+  for (const [index, item] of cases.entries()) {
+    await expect(cells.nth(index)).toHaveCSS(
+      'background-color',
+      item.color
+        ? `rgb(${[1, 3, 5].map((start) => parseInt(item.color.slice(start, start + 2), 16)).join(', ')})`
+        : expected.colors[item.backgroundToken].css,
+    );
+    await expect(cells.nth(index)).toHaveCSS('color', expected.colors[item.textToken].css);
+  }
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出本页 PNG', exact: true }).click();
+  const png = await download;
+  await png.saveAs(info.outputPath('themed-report.png'));
+  const data = await readFile(info.outputPath('themed-report.png'));
+  expect(data.subarray(1, 4).toString()).toBe('PNG');
+  const image = await loadImage(data);
+  expect(image.width).toBe(1500);
+  const context = createCanvas(image.width, image.height).getContext('2d');
+  context.drawImage(image, 0, 0);
+  const pixel = (x, y) =>
+    '#' +
+    [...context.getImageData(x, y, 1, 1).data]
+      .slice(0, 3)
+      .map((channel) => channel.toString(16).padStart(2, '0'))
+      .join('');
+  const drawn = await page.evaluate(() => {
+    window.restoreReportDrawing();
+    return window.reportDrawing;
+  });
+  expect(pixel(0, 0)).toBe(expected.colors['--bg'].canvas);
+  expect(drawn[0]).toMatchObject({
+    text: report.name,
+    color: expected.colors['--text'].canvas,
+    font: expected.fonts['--export-title-font'],
+  });
+  expect(drawn[1].font).toBe(expected.fonts['--export-body-font']);
+  const rowTitle = drawn.find((item) => item.text.startsWith(report.results[0].name + ' ·'));
+  expect(rowTitle.font).toBe(expected.fonts['--export-row-font']);
+  expect(pixel(21, rowTitle.y - 27)).toBe(expected.colors['--surface'].canvas);
+  for (const item of cases) {
+    const metric = report.results[0].measurements.find((value) => value.id === 'script:' + item.id);
+    const drawing = drawn.find(
+      (value) => value.text === item.id + ': ' + (metric ? measurementText(metric) : '待测'),
+    );
+    expect(drawing).toMatchObject({
+      color: expected.colors[item.textToken].canvas,
+      font: expected.fonts['--export-metric-font'],
+    });
+    expect(pixel(drawing.x - 6, drawing.y - 23)).toBe(
+      item.color ?? expected.colors[item.backgroundToken].canvas,
+    );
+  }
+});
 
 for (const delayedFailure of [false, true]) {
   test(`history selection ignores a delayed current ${delayedFailure ? 'error' : 'response'} and keeps exports and retest selected`, async ({

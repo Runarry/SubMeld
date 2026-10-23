@@ -364,7 +364,6 @@ onBeforeUnmount(() => {
   <section class="test-center library" aria-label="测试中心">
     <header class="page-header">
       <div>
-        <p class="eyebrow">SUBMELD / MIAOSPEED</p>
         <h1>测试中心</h1>
         <p class="muted">从当前部署位置测试节点的速度、稳定性、解锁和拓扑。</p>
       </div>

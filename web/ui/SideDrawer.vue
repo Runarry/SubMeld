@@ -137,34 +137,35 @@ onUnmounted(async () => {
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: var(--z-drawer);
   display: flex;
   justify-content: flex-end;
-  background: rgb(14 27 22 / 40%);
+  background: var(--overlay);
 }
 .side-drawer {
-  width: min(590px, 100vw);
+  width: min(var(--drawer-width), 100vw);
   height: 100dvh;
   background: var(--surface);
-  box-shadow: -16px 0 48px rgb(15 35 27 / 14%);
+  box-shadow: var(--shadow-drawer);
   display: flex;
   flex-direction: column;
   min-width: 0;
   outline: none;
+  border-radius: var(--radius-dialog) 0 0 var(--radius-dialog);
 }
 .drawer-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 20px;
-  padding: 24px 28px 20px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-7) var(--space-5);
+  border-bottom: var(--border-width) solid var(--border);
 }
 .side-drawer.wide {
-  width: min(720px, 100vw);
+  width: min(var(--drawer-wide), 100vw);
 }
 .drawer-header h2 {
-  font-size: 21px;
+  font-size: var(--text-xl);
   margin: 0;
 }
 .drawer-header > div {
@@ -173,38 +174,42 @@ onUnmounted(async () => {
 }
 .drawer-close {
   flex-shrink: 0;
-  font-size: 24px;
+  font-size: var(--text-title);
   border: 0;
-  padding: 0 5px;
+  padding: 0 var(--space-1);
   line-height: 1;
+  min-width: var(--control-height);
 }
 .drawer-body {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding: 0 28px 24px;
+  scroll-padding-block: var(--space-4);
+  padding: 0 var(--space-7) var(--space-6);
 }
 .drawer-footer {
-  padding: 18px 28px;
-  border-top: 1px solid var(--border);
+  padding: var(--space-5) var(--space-7);
+  border-top: var(--border-width) solid var(--border);
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--space-3);
   flex-wrap: wrap;
   background: var(--surface);
 }
 @media (max-width: 650px) {
   .side-drawer {
     width: 100vw;
+    border-radius: 0;
   }
   .drawer-header {
-    padding: 20px;
+    padding: var(--space-5);
   }
   .drawer-body {
-    padding-inline: 20px;
+    padding-inline: var(--space-5);
   }
   .drawer-footer {
-    padding: 16px 20px;
+    padding: var(--space-4) var(--space-5);
+    padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
   }
 }
 </style>

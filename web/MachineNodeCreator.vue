@@ -547,44 +547,44 @@ async function create() {
 
 <style scoped>
 .creator-subtitle {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .creator-summary {
   flex-basis: 100%;
   min-width: 0;
   display: grid;
-  gap: 5px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  border-bottom: var(--border-width) solid var(--border);
   overflow-wrap: anywhere;
 }
 .creator-summary strong {
   color: var(--primary);
 }
 .creator-summary span {
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .creator-section {
-  padding: 22px 0;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-6) 0;
+  border-bottom: var(--border-width) solid var(--border);
 }
 h3,
 summary {
-  font-size: 15px;
-  font-weight: 650;
-  margin: 0 0 16px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-strong);
+  margin: 0 0 var(--space-4);
 }
 summary {
   cursor: pointer;
 }
 summary span {
   display: block;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
-  font-weight: 400;
-  margin-top: 5px;
+  font-weight: var(--weight-normal);
+  margin-top: var(--space-1);
   overflow-wrap: anywhere;
 }
 details:not([open]) > summary {
@@ -594,46 +594,46 @@ details:not([open]) > summary {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
 }
 .section-heading h3 {
   margin: 0;
 }
 .section-heading button {
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .template-cards,
 .creator-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 .template-card {
   display: grid;
-  gap: 8px;
+  justify-content: stretch;
+  gap: var(--space-2);
   text-align: left;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-panel);
   white-space: normal;
 }
 .template-card strong {
-  font-size: 16px;
+  font-size: var(--text-md);
 }
 .template-card span {
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .template-card.selected {
   border-color: var(--primary);
-  background: var(--ok-bg);
-  box-shadow: inset 0 0 0 1px var(--primary);
+  background: var(--primary-soft);
 }
 .template-card:disabled {
-  opacity: 0.65;
+  opacity: var(--disabled-opacity);
 }
 .more-protocols {
-  margin-top: 18px;
+  margin-top: var(--space-5);
 }
 .full {
   grid-column: 1 / -1;
@@ -653,9 +653,9 @@ details:not([open]) > summary {
 small,
 .creator-help {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  line-height: var(--line-height);
 }
 .field-source {
   color: var(--primary);
@@ -667,45 +667,45 @@ small,
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
-  margin-top: 16px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 .creator-checkbox input {
   flex-shrink: 0;
 }
 .credentials-note {
-  padding: 12px 16px;
-  background: var(--ok-bg);
-  border-radius: 8px;
-  font-size: 13px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--info-bg);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
 }
 .creator-warning {
-  padding: 14px;
-  margin-top: 16px;
+  padding: var(--space-4);
+  margin-top: var(--space-4);
   background: var(--warn-bg);
   color: var(--warn-text);
-  border: 1px solid #e7d5a8;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.7;
+  border: var(--border-width) solid var(--warn-border);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  line-height: var(--line-height);
   overflow-wrap: anywhere;
 }
 .creator-warning p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
 .creator-warning small {
   display: block;
 }
 .creator-warning button,
 .creator-task button {
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 .creator-task {
-  margin-top: 16px;
-  padding: 16px;
-  border-radius: 8px;
-  background: var(--ok-bg);
-  color: var(--ok-text);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  background: var(--info-bg);
+  color: var(--info-text);
   overflow-wrap: anywhere;
 }
 .creator-task.warning {
@@ -713,9 +713,9 @@ small,
   color: var(--warn-text);
 }
 .creator-task p {
-  font-size: 13px;
-  line-height: 1.7;
-  margin: 8px 0;
+  font-size: var(--text-sm);
+  line-height: var(--line-height);
+  margin: var(--space-2) 0;
 }
 .creator-task small {
   display: block;
@@ -725,8 +725,8 @@ small,
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-top: 16px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 .footer-help {
   margin-right: auto;
@@ -737,10 +737,10 @@ small,
     grid-template-columns: 1fr;
   }
   .template-cards {
-    gap: 10px;
+    gap: var(--space-3);
   }
   .template-card {
-    padding: 12px;
+    padding: var(--space-3);
   }
   .template-card span {
     overflow-wrap: anywhere;

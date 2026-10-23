@@ -164,41 +164,40 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
         :key="item.view"
         type="button"
         :class="{ active: view === item.view, 'nav-secondary': !primaryViews.includes(item.view) }"
+        :aria-current="view === item.view ? 'page' : undefined"
         @click="setView(item.view)"
       >
         <svg
-          v-if="item.view === 'machines'"
-          viewBox="0 0 16 16"
+          viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
           aria-hidden="true"
         >
-          <rect x="2" y="1.5" width="12" height="13" rx="2" />
-          <path d="M2 8h12M5 5h1M5 11h1M9 5h3M9 11h3" />
-        </svg>
-        <svg
-          v-else-if="item.view === 'relays'"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M2 5h11l-3-3M14 11H3l3 3" />
-        </svg>
-        <svg v-else-if="item.view === 'subscriptions'" viewBox="0 0 16 16" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5zM4 5h8v1.5H4zm0 3h5v1.5H4z"
-          />
-        </svg>
-        <svg v-else-if="item.view === 'library'" viewBox="0 0 16 16" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M3 2.5A1.5 1.5 0 0 1 4.5 1h7A1.5 1.5 0 0 1 13 2.5V14l-5-2-5 2z"
-          />
-        </svg>
-        <svg v-else viewBox="0 0 16 16" aria-hidden="true">
-          <path fill="currentColor" d="M2 3h12v2H2zm0 4h8v2H2zm0 4h12v2H2z" />
+          <template v-if="item.view === 'machines'">
+            <rect x="4" y="3" width="16" height="18" rx="3" />
+            <path d="M4 12h16M8 7.5h.01M8 16.5h.01M12 7.5h4M12 16.5h4" />
+          </template>
+          <template v-else-if="item.view === 'library'">
+            <circle cx="12" cy="5" r="2.5" />
+            <circle cx="5" cy="18" r="2.5" />
+            <circle cx="19" cy="18" r="2.5" />
+            <path d="m10.8 7.2-4.6 8.6m7-8.6 4.6 8.6M7.5 18h9" />
+          </template>
+          <path v-else-if="item.view === 'relays'" d="M4 7h15l-4-4M20 17H5l4 4" />
+          <template v-else-if="item.view === 'subscriptions'">
+            <path
+              d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5"
+            />
+          </template>
+          <template v-else-if="item.view === 'tests'">
+            <path d="M3 12h4l3-7 4 14 3-7h4M3 21h18" />
+          </template>
+          <template v-else>
+            <path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-12-2 16" />
+          </template>
         </svg>
         {{ item.label }}
       </button>
@@ -208,7 +207,17 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
         :aria-expanded="mobileMore"
         @click="mobileMore = !mobileMore"
       >
-        <span aria-hidden="true">•••</span>更多
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          aria-hidden="true"
+        >
+          <circle cx="5" cy="12" r="1.5" />
+          <circle cx="12" cy="12" r="1.5" />
+          <circle cx="19" cy="12" r="1.5" /></svg
+        >更多
       </button>
       <div v-if="mobileMore" class="nav-more-panel" aria-label="更多页面">
         <button

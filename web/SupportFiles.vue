@@ -72,22 +72,22 @@ onMounted(
 </template>
 <style scoped>
 .support-files > p {
-  margin: 12px 0;
+  margin: var(--space-3) 0;
 }
 .support-files article {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
   justify-content: space-between;
-  padding: 12px 0;
-  border-top: 1px solid var(--border);
+  padding: var(--space-3) 0;
+  border-top: var(--border-width) solid var(--border);
 }
 .support-files article div {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 .support-files article p {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 @media (max-width: 650px) {
@@ -95,7 +95,7 @@ onMounted(
     display: block;
   }
   .support-files article button {
-    margin-top: 8px;
+    margin-top: var(--space-2);
   }
 }
 </style>

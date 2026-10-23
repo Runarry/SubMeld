@@ -141,15 +141,15 @@ function choose(event: Event) {
 </template>
 <style scoped>
 .picker {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
   min-width: 0;
 }
 .picker label {
   display: grid;
-  gap: 6px;
-  margin: 8px 0;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
 }
 .picker select,
 .picker input {
@@ -158,7 +158,7 @@ function choose(event: Event) {
 }
 .picker-search {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .muted {
   overflow-wrap: anywhere;

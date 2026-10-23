@@ -222,6 +222,8 @@ macvlan 部署应复用已配置的外部网络，仅将 SubMeld 加入局域网
 
 ## 接口与验证
 
+SubMeld 界面固定使用冷灰与蓝色的浅色主题。共享视觉常量统一维护在 [web/tokens.css](web/tokens.css)，页面、组件和浏览器 PNG 导出共同使用；后续界面改动遵循 [界面规范](docs/ui-style.md)。
+
 `/api/nodes` 负责统一节点管理；`/api/subscriptions` 适配上游方案文件；`/api/node-tests`、`/api/kernels` 保留三内核检查。`/api/miaospeed/{preview,tests,reports,scripts,settings,status}` 提供综合测试；`/api/telegram/{settings,status,check,tasks}` 管理可选机器人与任务，任务支持 `cancel`、`resend`；`/api/integrations/files` 管理配套文件更新。上游原生管理使用 `/upstream/sub-store/*`。
 
 | 命令                 | 内容                                                                 |

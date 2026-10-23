@@ -8,7 +8,7 @@ import {
   type SpeedReport,
   type SpeedRow,
 } from '../server/shared/miaospeed';
-import { exportCsv, exportPng } from './reportExport';
+import { exportCsv, exportPng, measurementColors } from './reportExport';
 import { formatTime } from './format';
 import ListPagination from './ui/ListPagination.vue';
 const props = defineProps<{ report: SpeedReport }>();
@@ -179,10 +179,7 @@ async function png() {
                 'measurement-' +
                 (row.measurements.find((m) => m.id === column.id)?.status || 'unknown')
               "
-              :style="{
-                backgroundColor:
-                  row.measurements.find((m) => m.id === column.id)?.color || undefined,
-              }"
+              :style="measurementColors(row.measurements.find((m) => m.id === column.id))"
               :title="row.measurements.find((m) => m.id === column.id)?.message || row.message"
             >
               <span>{{

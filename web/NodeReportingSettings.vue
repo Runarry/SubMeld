@@ -150,14 +150,15 @@ onMounted(() => void act(load));
 form,
 .reporting-token {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 label {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
 }
 .reporting-switch {
   display: flex;
+  flex-direction: row;
   align-items: center;
 }
 .reporting-switch input {

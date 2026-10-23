@@ -1,0 +1,134 @@
+/* SubMeld light theme. See docs/ui-style.md before adding visual constants. */
+:root {
+  color-scheme: light;
+
+  /* Surfaces and text */
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-subtle: #f1f5f9;
+  --text: #0f172a;
+  --muted: #475569;
+  --border: #e2e8f0;
+  --control-border: #7c8ba1;
+  --border-hover: #64748b;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-pressed: #1e40af;
+  --primary-soft: #eff6ff;
+  --primary-border: #bfdbfe;
+  --on-primary: #ffffff;
+  --row-hover: var(--bg);
+  --row-active: var(--primary-soft);
+  --focus-ring: var(--primary);
+  --sidebar: var(--surface-subtle);
+  --sidebar-text: var(--muted);
+  --sidebar-active: var(--primary-hover);
+
+  /* Status colors describe the existing status, never infer test success. */
+  --danger: #b91c1c;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --error-text: var(--danger);
+  --warn-text: #b45309;
+  --warn-bg: #fffbeb;
+  --warn-border: #fde68a;
+  --ok-text: #15803d;
+  --ok-bg: #f0fdf4;
+  --ok-border: #bbf7d0;
+  --info-text: var(--primary-hover);
+  --info-bg: var(--primary-soft);
+  --info-border: var(--primary-border);
+  --neutral-text: var(--muted);
+  --neutral-bg: var(--surface-subtle);
+  --protocol-violet-text: #6d28d9;
+  --protocol-violet-bg: #f5f3ff;
+  --protocol-rose-text: #be185d;
+  --protocol-rose-bg: #fdf2f8;
+  --chart-line: var(--primary);
+  --measurement-measured-bg: var(--ok-bg);
+  --measurement-measured-text: var(--ok-text);
+  --measurement-unknown-bg: var(--neutral-bg);
+  --measurement-unknown-text: var(--neutral-text);
+  --measurement-failed-bg: var(--danger-bg);
+  --measurement-failed-text: var(--danger);
+  --measurement-target-error-bg: var(--warn-bg);
+  --measurement-target-error-text: var(--warn-text);
+  /* Keep these black/white: arbitrary script colors need maximum contrast. */
+  --data-on-light: #000000;
+  --data-on-dark: #ffffff;
+
+  /* Typography */
+  --font: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-title: 24px;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+  --line-height: 1.6;
+  --line-tight: 1.35;
+  --tracking-tight: -0.025em;
+  --tracking-label: 0.08em;
+  --export-title-font: 600 24px var(--font);
+  --export-body-font: 16px var(--font);
+  --export-row-font: 600 19px var(--font);
+  --export-metric-font: 15px var(--font);
+
+  /* Spacing and shape */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-panel: 12px;
+  --radius-dialog: 16px;
+  --radius-pill: 999px;
+  --border-width: 1px;
+  --focus-width: 2px;
+  --focus-offset: 3px;
+
+  /* Shared dimensions. Component-specific geometry stays with its component. */
+  --viewport-min: 360px;
+  --sidebar-width: 224px;
+  --mobile-header: 52px;
+  --bottom-nav: 64px;
+  --control-height: 36px;
+  --control-height-touch: 44px;
+  --icon-size: 18px;
+  --checkbox-size: 16px;
+  --dialog-width: 640px;
+  --dialog-wide: 1040px;
+  --drawer-width: 590px;
+  --drawer-wide: 720px;
+
+  /* Elevation and interaction */
+  --overlay: rgb(15 23 42 / 40%);
+  --shadow-panel: 0 1px 2px rgb(15 23 42 / 4%);
+  --shadow-popover: 0 8px 24px rgb(15 23 42 / 12%);
+  --shadow-dialog: 0 24px 64px rgb(15 23 42 / 18%);
+  --shadow-drawer: -16px 0 48px rgb(15 23 42 / 14%);
+  --shadow-footer: 0 -4px 16px rgb(15 23 42 / 4%);
+  --z-table: 2;
+  --z-sticky: 5;
+  --z-modal: 50;
+  --z-modal-elevated: 60;
+  --z-nav: 70;
+  --z-popover: 90;
+  --z-drawer: 120;
+  --duration-fast: 140ms;
+  --ease: ease-out;
+  --disabled-opacity: 0.45;
+}

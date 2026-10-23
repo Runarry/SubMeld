@@ -1156,7 +1156,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .relays-page {
   display: grid;
-  gap: 20px;
+  gap: var(--space-5);
   max-width: 1500px;
   margin: 0 auto;
 }
@@ -1165,26 +1165,29 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 .page-header h1 {
-  font-size: 25px;
+  font-size: var(--text-title);
 }
 .page-header p {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 .actions,
 .breadcrumb,
 .status-line {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
 }
-.actions a,
+.actions a {
+  color: var(--text);
+  font-size: var(--text-sm);
+}
 .breadcrumb button {
   color: var(--primary);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .breadcrumb {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 .breadcrumb button {
@@ -1197,29 +1200,29 @@ onBeforeUnmount(() => {
   padding: 0;
   margin: 0;
   list-style: none;
-  gap: 20px;
+  gap: var(--space-5);
 }
 .wizard-steps li {
   flex: 1;
-  border-bottom: 2px solid var(--border);
-  padding-bottom: 12px;
+  border-bottom: var(--focus-width) solid var(--border);
+  padding-bottom: var(--space-3);
 }
 .wizard-steps button {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
   border: 0;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   background: none;
   color: var(--muted);
 }
 .wizard-steps button span {
   display: grid;
   place-items: center;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   width: 30px;
   height: 30px;
-  background: #e2e9e5;
+  background: var(--border);
 }
 .wizard-steps .current,
 .wizard-steps .complete {
@@ -1232,29 +1235,29 @@ onBeforeUnmount(() => {
 .wizard-steps .current span,
 .wizard-steps .complete span {
   background: var(--primary);
-  color: white;
+  color: var(--on-primary);
 }
 .wizard-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.42fr);
-  gap: 20px;
+  gap: var(--space-5);
   align-items: start;
 }
 .wizard-form {
   display: grid;
-  gap: 24px;
-  padding: 24px;
+  gap: var(--space-6);
+  padding: var(--space-6);
 }
 .wizard-form h2 {
-  font-size: 16px;
-  margin-bottom: 14px;
+  font-size: var(--text-md);
+  margin-bottom: var(--space-4);
 }
 .wizard-form > h2 {
   margin: 0;
 }
 .wizard-form section {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .wizard-form section > h2 {
   margin-bottom: 0;
@@ -1262,12 +1265,12 @@ onBeforeUnmount(() => {
 .endpoint-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--space-3);
+  padding: var(--space-3);
   background: var(--bg);
-  border-radius: 7px;
+  border-radius: var(--radius);
   align-items: center;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .endpoint-summary button {
   margin-left: auto;
@@ -1275,43 +1278,42 @@ onBeforeUnmount(() => {
 .kind-options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-3);
 }
 .kind-options button {
   text-align: left;
   color: var(--text);
-  padding: 15px 12px;
+  padding: var(--space-4) var(--space-3);
   display: grid;
-  gap: 10px;
+  gap: var(--space-3);
 }
 .kind-options button > span {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .kind-options b {
-  font-size: 16px;
+  font-size: var(--text-md);
   color: var(--muted);
 }
 .kind-options .selected {
   border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary);
-  background: #f1f7f3;
+  background: var(--primary-soft);
 }
 .kind-options .selected b {
   color: var(--primary);
 }
 small {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  line-height: var(--line-height);
 }
 .form-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(100px, 0.32fr);
-  gap: 14px;
+  gap: var(--space-4);
 }
 .form-grid input[readonly] {
   background: var(--bg);
@@ -1319,22 +1321,22 @@ small {
 }
 .hop-fields {
   display: grid;
-  gap: 12px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 16px;
+  gap: var(--space-3);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
   margin: 0;
   min-width: 0;
 }
 .hop-fields legend {
   color: var(--primary);
-  padding-inline: 8px;
-  font-size: 13px;
-  font-weight: 600;
+  padding-inline: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
 }
 .hop-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--space-2);
   justify-content: flex-end;
 }
 .hop-menu {
@@ -1343,9 +1345,9 @@ small {
 }
 .hop-menu > summary {
   list-style: none;
-  padding: 8px;
-  font-size: 20px;
-  line-height: 1;
+  padding: var(--space-2);
+  font-size: var(--text-xl);
+  line-height: var(--line-tight);
 }
 .hop-menu > summary::-webkit-details-marker {
   display: none;
@@ -1354,125 +1356,125 @@ small {
   position: absolute;
   right: 0;
   top: 100%;
-  z-index: 95;
+  z-index: var(--z-popover);
   display: grid;
   min-width: 110px;
-  gap: 4px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: white;
-  box-shadow: 0 8px 20px #14231e18;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
 }
 @media (min-width: 1200px) {
   .hop-fields {
     grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.1fr) 28px;
     align-items: end;
-    gap: 10px;
-    padding: 10px 12px 14px;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-3) var(--space-4);
   }
   .hop-fields .form-grid {
     grid-template-columns: minmax(0, 1fr) 78px;
-    gap: 10px;
+    gap: var(--space-3);
   }
 }
 .hop-actions button {
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 summary {
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  padding-block: 10px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+  padding-block: var(--space-3);
 }
 summary small {
-  margin-left: 12px;
+  margin-left: var(--space-3);
 }
 .path-preview {
   position: sticky;
   top: 0;
-  padding: 20px;
+  padding: var(--space-5);
   display: grid;
-  gap: 20px;
+  gap: var(--space-5);
 }
 .topology {
   display: grid;
   justify-items: center;
   background: var(--bg);
-  padding: 16px;
-  border-radius: 8px;
+  padding: var(--space-4);
+  border-radius: var(--radius);
 }
 .path-node {
   width: 100%;
-  background: white;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px;
+  background: var(--surface);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
   display: grid;
-  gap: 5px;
+  gap: var(--space-1);
   overflow-wrap: anywhere;
 }
 .path-node > div {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
   justify-content: space-between;
 }
 .path-node strong {
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .path-node.client {
   width: auto;
-  padding: 10px 30px;
-  font-size: 14px;
+  padding: var(--space-3) var(--space-8);
+  font-size: var(--text-base);
 }
 .role-label {
   color: var(--primary);
   background: var(--row-active);
-  border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 11px;
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
   white-space: nowrap;
 }
 .arrow {
   color: var(--primary);
-  font-size: 24px;
-  padding: 8px;
+  font-size: var(--text-title);
+  padding: var(--space-2);
 }
 .preview-note {
   background: var(--bg);
-  border-radius: 8px;
-  padding: 14px;
-  font-size: 13px;
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 .preview-note p {
-  margin: 8px 0 0;
-  line-height: 1.6;
+  margin: var(--space-2) 0 0;
+  line-height: var(--line-height);
 }
 .wizard-footer {
   position: sticky;
-  bottom: -32px;
-  z-index: 30;
-  background: white;
-  border-top: 1px solid var(--border);
-  padding: 16px 24px;
+  bottom: calc(-1 * var(--space-8));
+  z-index: var(--z-sticky);
+  background: var(--surface);
+  border-top: var(--border-width) solid var(--border);
+  padding: var(--space-4) var(--space-6);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  box-shadow: 0 -6px 20px #14231e05;
+  gap: var(--space-3);
+  box-shadow: var(--shadow-footer);
 }
 .wizard-footer > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .review-fields {
   display: grid;
   grid-template-columns: 90px 1fr;
-  gap: 18px;
+  gap: var(--space-5);
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 .review-fields dt {
   color: var(--muted);
@@ -1482,17 +1484,17 @@ summary small {
   overflow-wrap: anywhere;
 }
 .change-list {
-  padding: 16px;
-  border: 1px solid #e8d7ad;
-  background: #fffaf0;
-  border-radius: 8px;
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--warn-border);
+  background: var(--warn-bg);
+  border-radius: var(--radius);
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .change-list > div {
   display: grid;
-  gap: 5px;
-  font-size: 13px;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 .change-list span {
@@ -1501,11 +1503,11 @@ summary small {
 .is-warning {
   background: var(--warn-bg);
   color: var(--warn-text);
-  border-color: #e8d7ad;
+  border-color: var(--warn-border);
 }
 .route-filters {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .route-filters input {
   flex: 1;
@@ -1514,15 +1516,15 @@ summary small {
   width: 200px;
 }
 .route-list {
-  padding: 0 20px;
+  padding: 0 var(--space-5);
 }
 .relay-route {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 180px auto;
-  gap: 20px;
-  padding: 20px 0;
+  gap: var(--space-5);
+  padding: var(--space-5) 0;
   align-items: center;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-width) solid var(--border);
 }
 .relay-route:last-child {
   border: 0;
@@ -1532,46 +1534,46 @@ summary small {
   background: none;
   padding: 0;
   color: var(--primary);
-  font-size: 15px;
+  font-size: var(--text-md);
   text-align: left;
   overflow-wrap: anywhere;
 }
 .route-main .muted {
-  margin-top: 7px;
+  margin-top: var(--space-2);
 }
 .route-path {
-  font-size: 13px;
-  line-height: 1.8;
+  font-size: var(--text-sm);
+  line-height: var(--line-height);
   overflow-wrap: anywhere;
   color: var(--text);
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
 }
 .route-state {
   display: grid;
   justify-items: start;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .state-pill {
   display: inline-flex;
   width: fit-content;
-  border-radius: 20px;
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  background: #edf1ef;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-strong);
+  background: var(--neutral-bg);
   color: var(--muted);
 }
 .state-pill[data-state='active'],
 .state-pill[data-state='applied'] {
-  color: var(--primary);
-  background: #e4f5eb;
+  color: var(--ok-text);
+  background: var(--ok-bg);
 }
 .state-pill[data-state='pending'],
 .state-pill[data-state='pending_restart'],
 .state-pill[data-state='applying'],
 .state-pill[data-state='stale'] {
   color: var(--warn-text);
-  background: #fff1d5;
+  background: var(--warn-bg);
 }
 .state-pill[data-state='failed'],
 .state-pill[data-state='conflict'],
@@ -1581,30 +1583,30 @@ summary small {
 }
 .route-overview {
   display: grid;
-  gap: 16px;
-  font-size: 13px;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
 }
 .route-overview p {
   margin: 0;
 }
 .route-overview .route-path {
   background: var(--bg);
-  padding: 18px;
-  border-radius: 8px;
-  font-size: 16px;
+  padding: var(--space-5);
+  border-radius: var(--radius);
+  font-size: var(--text-md);
 }
 .task-timeline {
   list-style: none;
   padding: 0;
-  margin: 14px 0 0;
+  margin: var(--space-4) 0 0;
 }
 .task-timeline li {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
-  padding-block: 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  border-bottom: var(--border-width) solid var(--border);
+  font-size: var(--text-sm);
 }
 .task-timeline li > div {
   flex: 1;
@@ -1612,34 +1614,34 @@ summary small {
   overflow-wrap: anywhere;
 }
 .task-timeline p {
-  margin: 7px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
-  line-height: 1.6;
+  line-height: var(--line-height);
 }
 .task-timeline a {
   white-space: nowrap;
   color: var(--primary);
 }
 .empty-state {
-  padding: 32px 12px;
+  padding: var(--space-8) var(--space-3);
   text-align: center;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 @media (max-width: 1150px) {
   .wizard-layout {
     grid-template-columns: minmax(0, 1fr) 260px;
-    gap: 12px;
+    gap: var(--space-3);
   }
   .wizard-form {
-    padding: 18px;
+    padding: var(--space-5);
   }
   .kind-options {
     grid-template-columns: 1fr;
   }
   .kind-options button {
-    gap: 5px;
-    padding: 12px;
+    gap: var(--space-1);
+    padding: var(--space-3);
   }
   .relay-route {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -1661,17 +1663,17 @@ summary small {
     position: static;
   }
   .wizard-steps {
-    gap: 8px;
+    gap: var(--space-2);
   }
   .wizard-steps button {
     flex-direction: column;
-    font-size: 12px;
+    font-size: var(--text-xs);
     align-items: flex-start;
-    line-height: 1.5;
+    line-height: var(--line-height);
   }
   .wizard-footer {
-    bottom: -16px;
-    padding: 12px 0;
+    bottom: calc(-1 * var(--space-4));
+    padding: var(--space-3) 0;
   }
   .wizard-footer > span {
     display: none;
@@ -1692,7 +1694,7 @@ summary small {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 12px;
+    gap: var(--space-3);
   }
   .route-state {
     display: flex;
@@ -1709,10 +1711,10 @@ summary small {
   }
   .review-fields {
     grid-template-columns: 1fr;
-    gap: 8px;
+    gap: var(--space-2);
   }
   .review-fields dd {
-    margin-bottom: 12px;
+    margin-bottom: var(--space-3);
   }
 }
 </style>

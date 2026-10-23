@@ -412,26 +412,26 @@ onMounted(() => void act(load));
 <style scoped>
 .plan-row {
   display: flex;
-  gap: 16px;
+  gap: var(--space-4);
   align-items: center;
   justify-content: space-between;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-4) 0;
+  border-bottom: var(--border-width) solid var(--border);
 }
 .plan-row h2 {
-  font-size: 18px;
+  font-size: var(--text-lg);
 }
 .plan-row p {
   overflow-wrap: anywhere;
 }
 .plan-form {
   display: grid;
-  gap: 18px;
+  gap: var(--space-5);
 }
 .plan-form > label {
   display: flex;
   flex-direction: row;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
 }
 .plan-form input:not([type='checkbox']) {
@@ -440,74 +440,74 @@ onMounted(() => void act(load));
 }
 fieldset {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
 }
 .formats,
 .settings-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .formats label {
   display: flex;
   flex-direction: row;
-  gap: 7px;
+  gap: var(--space-2);
   align-items: center;
 }
 .settings-grid label {
   display: grid;
-  gap: 5px;
-  margin-top: 10px;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
 }
 .add-input,
 .actions,
 .pagination {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
 }
 .add-input label {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .add-input select {
   max-width: 100%;
 }
 .input-list {
-  padding-left: 22px;
+  padding-left: var(--space-6);
 }
 .input-list li {
-  padding: 8px 0;
+  padding: var(--space-2) 0;
   overflow-wrap: anywhere;
 }
 .input-list li div {
   display: flex;
-  gap: 6px;
-  margin-top: 5px;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 .output-section {
-  margin-top: 24px;
-  border-top: 1px solid var(--border);
-  padding-top: 18px;
+  margin-top: var(--space-6);
+  border-top: var(--border-width) solid var(--border);
+  padding-top: var(--space-5);
 }
 .output-section > textarea {
   width: 100%;
   font-family: var(--mono);
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .share-row {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: flex-end;
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .share-row label {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 1;
   min-width: 0;
 }
@@ -517,7 +517,7 @@ fieldset {
 }
 .pagination {
   justify-content: flex-end;
-  margin-top: 18px;
+  margin-top: var(--space-5);
 }
 @media (max-width: 650px) {
   .formats,
@@ -534,7 +534,7 @@ fieldset {
   .actions label {
     width: 100%;
     display: grid;
-    gap: 6px;
+    gap: var(--space-2);
   }
 }
 </style>

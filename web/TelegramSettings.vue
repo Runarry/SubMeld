@@ -226,7 +226,14 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <section aria-label="Telegram 测试">
-    <p v-if="message" class="notice" :role="failed ? 'alert' : 'status'">{{ message }}</p>
+    <p
+      v-if="message"
+      class="notice"
+      :class="{ 'is-error': failed }"
+      :role="failed ? 'alert' : 'status'"
+    >
+      {{ message }}
+    </p>
     <form v-if="configuration" aria-label="Telegram 设置" @submit.prevent="save">
       <section class="test-card">
         <div class="page-header">

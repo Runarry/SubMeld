@@ -229,55 +229,55 @@ async function save() {
 </template>
 <style scoped>
 .editor-subtitle {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .editor-context {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 18px 0;
+  gap: var(--space-2);
+  padding: var(--space-5) 0;
 }
 .editor-context span {
-  padding: 5px 12px;
-  background: #f0f3f1;
-  border-radius: 20px;
-  font-size: 12px;
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
 }
 .editor-context small,
 .editor-help,
 small {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  line-height: var(--line-height);
 }
 .editor-section {
-  border-top: 1px solid var(--border);
-  padding: 20px 0;
+  border-top: var(--border-width) solid var(--border);
+  padding: var(--space-5) 0;
 }
 .editor-section h3,
 summary {
-  font-size: 15px;
-  font-weight: 650;
-  margin: 0 0 16px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-strong);
+  margin: 0 0 var(--space-4);
 }
 summary {
   cursor: pointer;
 }
 summary span {
   float: right;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--muted);
-  font-weight: 400;
-  margin-right: 8px;
+  font-weight: var(--weight-normal);
+  margin-right: var(--space-2);
 }
 .editor-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 .full {
   grid-column: 1 / -1;
@@ -289,15 +289,15 @@ summary span {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .editor-help {
-  margin: 8px 0 18px;
+  margin: var(--space-2) 0 var(--space-5);
 }
 .change-summary {
-  padding: 16px;
-  background: #f1f6f3;
-  border-radius: 10px;
+  padding: var(--space-4);
+  background: var(--info-bg);
+  border-radius: var(--radius-panel);
   overflow-wrap: anywhere;
 }
 .change-summary strong {
@@ -305,36 +305,36 @@ summary span {
 }
 .change-summary p,
 .change-summary ul {
-  margin: 8px 0;
-  font-size: 13px;
-  line-height: 1.7;
+  margin: var(--space-2) 0;
+  font-size: var(--text-sm);
+  line-height: var(--line-height);
 }
 .change-summary ul {
-  padding-left: 18px;
+  padding-left: var(--space-5);
 }
 .editor-warning {
   background: var(--warn-bg);
   color: var(--warn-text);
-  border: 1px solid #e7d5a8;
-  padding: 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.7;
+  border: var(--border-width) solid var(--warn-border);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  line-height: var(--line-height);
 }
 .editor-warning button {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   display: block;
 }
 .submitted-task {
-  padding: 16px;
-  background: var(--ok-bg);
-  color: var(--ok-text);
-  border-radius: 8px;
-  margin-top: 16px;
+  padding: var(--space-4);
+  background: var(--info-bg);
+  color: var(--info-text);
+  border-radius: var(--radius);
+  margin-top: var(--space-4);
 }
 .submitted-task p {
-  margin: 8px 0;
-  font-size: 13px;
+  margin: var(--space-2) 0;
+  font-size: var(--text-sm);
 }
 @media (max-width: 420px) {
   .editor-fields {
@@ -343,7 +343,7 @@ summary span {
   summary span {
     float: none;
     display: block;
-    margin-top: 4px;
+    margin-top: var(--space-1);
   }
 }
 </style>
