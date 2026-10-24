@@ -28,6 +28,7 @@ before(async () => {
     fetch: createApp({
       webRoot,
       resources: settings.resources,
+      websiteRouting: settings.websiteRouting,
       config,
       auth,
 
@@ -71,11 +72,17 @@ function post(path, body, headers = {}) {
     body: JSON.stringify(body),
   });
 }
-test('built homepage and its JavaScript/CSS are served with same-origin CSP', async () => {
+test('built homepage allows HTTPS probes while scripts and styles remain same-origin', async () => {
   const response = await fetch(origin + '/submeld/');
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
-  assert.doesNotMatch(response.headers.get('content-security-policy'), /unsafe-|https:/);
+  const csp = response.headers.get('content-security-policy');
+  assert.doesNotMatch(csp, /unsafe-/);
+  assert.match(csp, /(?:^|; )script-src 'self';/);
+  assert.match(csp, /(?:^|; )style-src 'self';/);
+  assert.match(csp, /(?:^|; )connect-src 'self' https:;/);
+  const apiResponse = await fetch(origin + '/api/auth/me');
+  assert.match(apiResponse.headers.get('content-security-policy'), /connect-src 'self';/);
   const html = await response.text();
   assert.match(html, /<title>SubMeld · 订融<\/title>/);
   const assets = [...html.matchAll(/(?:src|href)="(\/submeld\/assets\/[^"]+)"/g)].map((m) => m[1]);

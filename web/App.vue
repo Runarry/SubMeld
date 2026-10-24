@@ -9,16 +9,19 @@ import { type TestSubject } from '../server/shared/node-tests';
 import SubscriptionLibrary from './SubscriptionLibrary.vue';
 import MachinesPage from './MachinesPage.vue';
 import RelaysPage from './RelaysPage.vue';
+import WebsiteRoutingPage from './WebsiteRoutingPage.vue';
 
 import { ApiError, request } from './api';
 
-type View = 'library' | 'subscriptions' | 'tests' | 'supportFiles' | 'machines' | 'relays';
+type View =
+  'library' | 'subscriptions' | 'tests' | 'supportFiles' | 'machines' | 'relays' | 'websiteRouting';
 const nav = [
   { view: 'machines' as const, hash: 'machines', label: '机器' },
   { view: 'library' as const, hash: 'nodes', label: '节点' },
   { view: 'relays' as const, hash: 'relays', label: '中转线路' },
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
   { view: 'tests' as const, hash: 'tests', label: '测试中心' },
+  { view: 'websiteRouting' as const, hash: 'website-routing', label: '网站分流测试' },
   { view: 'supportFiles' as const, hash: 'support-files', label: '配套文件' },
 ];
 const mobileMore = ref(false);
@@ -53,6 +56,7 @@ function parseHash(): View | null {
   if (key === 'koipy') return 'tests';
   if (key === 'support-files' || key === 'tools') return 'supportFiles';
   if (key === 'tests') return 'tests';
+  if (key === 'website-routing') return 'websiteRouting';
   if (key === 'chains') return 'relays';
   if (key === 'machines') return 'machines';
   if (key === 'relays') return 'relays';
@@ -195,6 +199,11 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
           <template v-else-if="item.view === 'tests'">
             <path d="M3 12h4l3-7 4 14 3-7h4M3 21h18" />
           </template>
+          <template v-else-if="item.view === 'websiteRouting'">
+            <circle cx="12" cy="12" r="9" />
+            <ellipse cx="12" cy="12" rx="4" ry="9" />
+            <path d="M3 12h18" />
+          </template>
           <template v-else>
             <path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-12-2 16" />
           </template>
@@ -260,6 +269,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       <SubscriptionLibrary v-if="view === 'subscriptions'" :api="api" />
       <MachinesPage v-if="view === 'machines'" :api="api" />
       <RelaysPage v-if="view === 'relays'" :api="api" />
+      <WebsiteRoutingPage v-if="view === 'websiteRouting'" :api="api" />
     </main>
   </div>
 </template>

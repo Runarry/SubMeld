@@ -110,6 +110,7 @@ const app = createApp({
 
   nodes: settings.nodes,
   nodeReporting: settings.nodeReporting,
+  websiteRouting: settings.websiteRouting,
 
   subscriptions: settings.subscriptions,
 });
@@ -143,6 +144,7 @@ const httpApp = createApp({
   machines: settings.machines,
   relays,
   nodeReporting: settings.nodeReporting,
+  websiteRouting: settings.websiteRouting,
   miaospeed,
   telegram,
   resources: settings.resources,

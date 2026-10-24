@@ -24,6 +24,7 @@ test('light UI keeps pages, checkbox labels and modal actions usable across view
       ['中转线路', '中转线路'],
       ['输出方案', '输出方案'],
       ['测试中心', '测试中心'],
+      ['网站分流测试', '网站分流测试'],
       ['配套文件', '配套脚本与模板'],
     ]) {
       await navigate(page, name);

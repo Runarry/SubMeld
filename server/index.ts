@@ -77,6 +77,7 @@ async function main() {
 
       nodes: settings.nodes,
       nodeReporting: settings.nodeReporting,
+      websiteRouting: settings.websiteRouting,
 
       subscriptions: settings.subscriptions,
     });

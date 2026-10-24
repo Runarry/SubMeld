@@ -33,11 +33,13 @@ import type { MachineStore } from './machines.js';
 import { registerMachineRoutes } from './machine-routes.js';
 import { registerRelayRoutes, type RelayStore } from './relays.js';
 import { registerAgentAssets, assertPrivateFileNotShared } from './machine-assets.js';
+import type { WebsiteRoutingStore } from './website-routing.js';
 
 export type AppOptions = {
   files?: UpstreamFiles;
   certificates?: Hy2Certificates;
   nodeReporting?: NodeReporting;
+  websiteRouting?: WebsiteRoutingStore;
   machines?: MachineStore;
   relays?: RelayStore;
   miaospeed?: MiaospeedTester;
@@ -54,6 +56,7 @@ export function createApp({
   files,
   certificates,
   nodeReporting,
+  websiteRouting,
   machines,
   relays,
   miaospeed,
@@ -81,15 +84,20 @@ export function createApp({
     '/api/telegram',
     '/api/machines',
     '/api/relays',
+    '/api/website-routing',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
     context.header('Referrer-Policy', 'no-referrer');
-    if (context.req.path.startsWith('/submeld') || context.req.path.startsWith('/api/'))
+    if (context.req.path.startsWith('/submeld') || context.req.path.startsWith('/api/')) {
+      const connect = context.req.path.startsWith('/submeld') ? "'self' https:" : "'self'";
       context.header(
         'Content-Security-Policy',
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src " +
+          connect +
+          "; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       );
+    }
     await next();
   });
   app.use('/api/*', async (context, next) => {
@@ -109,6 +117,7 @@ export function createApp({
         '/api/telegram/',
         '/api/machines/',
         '/api/relays/',
+        '/api/website-routing/',
       ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
@@ -150,6 +159,20 @@ export function createApp({
   if (machines) registerMachineRoutes(app, machines, config);
   if (relays) registerRelayRoutes(app, relays);
   registerAgentAssets(app);
+  const routing = () => {
+    if (!websiteRouting)
+      throw new AppError('WEBSITE_ROUTING_UNAVAILABLE', '网站列表暂时不可用。', 503);
+    return websiteRouting;
+  };
+  app.get('/api/website-routing/sites', (c) => c.json({ sites: routing().list() }));
+  app.post('/api/website-routing/sites', async (c) =>
+    c.json({ site: routing().add(await readJson(c.req.raw, 4096)) }, 201),
+  );
+  app.delete('/api/website-routing/sites/:id', async (c) => {
+    z.strictObject({}).parse(await readJson(c.req.raw, 1024));
+    routing().remove(c.req.param('id'));
+    return c.json({ removed: true });
+  });
   app.post('/api/internal/hy2-certificates/resolve', async (c) => {
     if (!certificates)
       throw new AppError('HY2_RESOLVER_UNAVAILABLE', 'HY2 证书解析服务未就绪。', 503);
