@@ -10,11 +10,19 @@ import SubscriptionLibrary from './SubscriptionLibrary.vue';
 import MachinesPage from './MachinesPage.vue';
 import RelaysPage from './RelaysPage.vue';
 import WebsiteRoutingPage from './WebsiteRoutingPage.vue';
+import IpQualityPage from './IpQualityPage.vue';
 
 import { ApiError, request } from './api';
 
 type View =
-  'library' | 'subscriptions' | 'tests' | 'supportFiles' | 'machines' | 'relays' | 'websiteRouting';
+  | 'library'
+  | 'subscriptions'
+  | 'tests'
+  | 'supportFiles'
+  | 'machines'
+  | 'relays'
+  | 'websiteRouting'
+  | 'ipQuality';
 const nav = [
   { view: 'machines' as const, hash: 'machines', label: '机器' },
   { view: 'library' as const, hash: 'nodes', label: '节点' },
@@ -22,6 +30,7 @@ const nav = [
   { view: 'subscriptions' as const, hash: 'subscriptions', label: '输出方案' },
   { view: 'tests' as const, hash: 'tests', label: '测试中心' },
   { view: 'websiteRouting' as const, hash: 'website-routing', label: '网站分流测试' },
+  { view: 'ipQuality' as const, hash: 'ip-quality', label: 'IP 质量' },
   { view: 'supportFiles' as const, hash: 'support-files', label: '配套文件' },
 ];
 const mobileMore = ref(false);
@@ -57,6 +66,7 @@ function parseHash(): View | null {
   if (key === 'support-files' || key === 'tools') return 'supportFiles';
   if (key === 'tests') return 'tests';
   if (key === 'website-routing') return 'websiteRouting';
+  if (key === 'ip-quality') return 'ipQuality';
   if (key === 'chains') return 'relays';
   if (key === 'machines') return 'machines';
   if (key === 'relays') return 'relays';
@@ -97,9 +107,14 @@ function lockWorkspace() {
   message.value = '';
   view.value = 'library';
 }
-async function api(path: string, body?: unknown, method?: string): Promise<unknown> {
+async function api(
+  path: string,
+  body?: unknown,
+  method?: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
   try {
-    return await request(path, body, method);
+    return await request(path, body, method, signal);
   } catch (error) {
     if (error instanceof ApiError && error.status === 401 && path !== '/api/auth/login')
       lockWorkspace();
@@ -204,6 +219,9 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
             <ellipse cx="12" cy="12" rx="4" ry="9" />
             <path d="M3 12h18" />
           </template>
+          <template v-else-if="item.view === 'ipQuality'">
+            <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6zM8 12l3 3 5-6" />
+          </template>
           <template v-else>
             <path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-12-2 16" />
           </template>
@@ -270,6 +288,7 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', onHashChange));
       <MachinesPage v-if="view === 'machines'" :api="api" />
       <RelaysPage v-if="view === 'relays'" :api="api" />
       <WebsiteRoutingPage v-if="view === 'websiteRouting'" :api="api" />
+      <IpQualityPage v-if="view === 'ipQuality'" :api="api" />
     </main>
   </div>
 </template>

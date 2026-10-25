@@ -5,6 +5,7 @@ export default defineConfig({
     'browser.spec.mjs',
     'node-tests.browser.mjs',
     'website-routing.browser.mjs',
+    'ip-quality.browser.mjs',
     'hy2.browser.mjs',
     'node-reporting.browser.mjs',
     'machines.browser.mjs',

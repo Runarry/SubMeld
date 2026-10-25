@@ -34,12 +34,14 @@ import { registerMachineRoutes } from './machine-routes.js';
 import { registerRelayRoutes, type RelayStore } from './relays.js';
 import { registerAgentAssets, assertPrivateFileNotShared } from './machine-assets.js';
 import type { WebsiteRoutingStore } from './website-routing.js';
+import { IpQualityService } from './ip-quality.js';
 
 export type AppOptions = {
   files?: UpstreamFiles;
   certificates?: Hy2Certificates;
   nodeReporting?: NodeReporting;
   websiteRouting?: WebsiteRoutingStore;
+  ipQuality?: IpQualityService;
   machines?: MachineStore;
   relays?: RelayStore;
   miaospeed?: MiaospeedTester;
@@ -57,6 +59,7 @@ export function createApp({
   certificates,
   nodeReporting,
   websiteRouting,
+  ipQuality = new IpQualityService(),
   machines,
   relays,
   miaospeed,
@@ -85,6 +88,7 @@ export function createApp({
     '/api/machines',
     '/api/relays',
     '/api/website-routing',
+    '/api/ip-quality',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -118,6 +122,7 @@ export function createApp({
         '/api/machines/',
         '/api/relays/',
         '/api/website-routing/',
+        '/api/ip-quality/',
       ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
@@ -159,6 +164,9 @@ export function createApp({
   if (machines) registerMachineRoutes(app, machines, config);
   if (relays) registerRelayRoutes(app, relays);
   registerAgentAssets(app);
+  app.post('/api/ip-quality/query', async (c) =>
+    c.json(await ipQuality.query(await readJson(c.req.raw, 1024), c.req.raw.signal)),
+  );
   const routing = () => {
     if (!websiteRouting)
       throw new AppError('WEBSITE_ROUTING_UNAVAILABLE', '网站列表暂时不可用。', 503);
