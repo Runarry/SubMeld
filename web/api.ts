@@ -13,11 +13,9 @@ export async function request(
   path: string,
   body?: unknown,
   method = body === undefined ? 'GET' : 'POST',
-  signal?: AbortSignal,
 ): Promise<unknown> {
   const response = await fetch(path, {
     method,
-    signal,
     cache: 'no-store',
     credentials: 'same-origin',
     headers:
