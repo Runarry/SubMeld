@@ -209,6 +209,8 @@ test('unified local deletion preserves other fields and operations; SQLite has n
       'machine_tasks',
       'machines',
       'node_test_results',
+      'reality_scan_results',
+      'reality_scans',
       'settings',
       'speed_reports',
       'speed_results',

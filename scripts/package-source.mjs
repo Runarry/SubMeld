@@ -39,12 +39,19 @@ const sources = [
     .map((name) => 'agent/' + name),
   'upstreams.lock.json',
   'miaospeed-scripts.lock.json',
+  'reality-scanner.lock.json',
   'docs',
 ];
 if (existsSync('dist/diagnostics/manifest.json'))
   sources.push('dist/diagnostics/manifest.json', 'dist/diagnostics/source.tar.gz');
 if (existsSync('dist/hy2-cert-probe/source.tar.gz'))
   sources.push('dist/hy2-cert-probe/source.tar.gz');
+if (existsSync('dist/reality-scanner/source.tar.gz'))
+  sources.push(
+    'dist/reality-scanner/source.tar.gz',
+    'dist/reality-scanner/manifest.json',
+    'dist/reality-scanner/LICENSE',
+  );
 if (existsSync('dist/kernel-sources/manifest.json'))
   sources.push(
     'dist/kernel-sources/manifest.json',

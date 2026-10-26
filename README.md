@@ -167,6 +167,20 @@ Mihomo 与 sing-box 经上游转换输出；Xray 使用随项目交付、在 Sub
 
 自定义域名使用 HTTPS `/cdn-cgi/trace`，已知预置域名使用对应检测接口。请求不携带 Cookie 或认证信息，不自动跟随重定向；SubMeld 页面允许 HTTPS 网络请求，脚本和样式仍仅同源加载。接口不提供有效公网 IP、网络或跨域限制、超时均如实展示，不代表网站不可用；国家或地区缺失时显示未知。耗时包含浏览器请求过程，不是 Ping 延迟，也不用于推断代理规则、直连或平台解锁。
 
+### REALITY 扫描
+
+“REALITY 扫描”页面（`#/reality-scanner`）在 **SubMeld 服务器**执行有限扫描，独立于节点测速和机器 Agent。支持 IP、域名、CIDR、逐行文本、UTF-8 TXT 文件，以及从指定网页提取绝对 HTTP(S) 链接中的域名。网页仅抓取一页，允许最多 4 次重定向，20 秒超时，正文和输入文本最多 4 MiB。提取后可编辑目标列表，再开始扫描。
+
+目标展开并去重后每次最多 65,536 个；无效行明确报错，不静默丢弃。默认端口 443、并发 2（1–32）、超时 10 秒（1–60 秒，连接和 TLS 握手分别计时）。IPv6 默认关闭，启用后域名仍按上游选择一个允许的地址，不是同时遍历所有 DNS 地址。所有目标通过官方程序的 `-in` 列表模式执行；单个 IP 或域名也只检查一次，不进入周边持续扫描。
+
+页面显示实时进度、候选、不符合及失败结果，可停止并保留部分结果。切换页面或关闭浏览器后任务继续；服务停止或重启会标记中断，不自动重跑。同时仅运行一个扫描任务，不占用现有节点测速批次锁。历史记录持续保留，可查看、搜索、筛选、分页和删除；运行中的记录须先停止。
+
+“候选”仅表示符合 RealiTLScanner 的 TLS 1.3、HTTP/2 与证书字段筛选条件。上游不验证证书信任链，扫描结果不代表 REALITY 实际部署可用；通配符证书域名保留原样，不推导可用 SNI。上游未提供的来源、地区或错误细节显示未知。支持复制 IP、来源域名、证书域名及目标地址，按当前筛选导出 CSV、IP TXT 或来源域名 TXT；TXT 域名列表不把证书通配符转换为主机名。
+
+官方 [RealiTLScanner v0.2.3](https://github.com/XTLS/RealiTLScanner/releases/tag/v0.2.3) 的 Windows/Linux x64 程序由正常构建准备，版本、二进制及源码 SHA-256 固定于 [reality-scanner.lock.json](reality-scanner.lock.json)。下载缓存在 `.cache/reality-scanner/`，构建产物、对应源码及 MPL-2.0 许可证位于 `dist/reality-scanner/`；运行时不自动下载或更新，不新增容器。
+
+GeoIP 可选：将兼容的 Country MMDB 数据库放在 `$DATA_DIR/reality-scanner/Country.mmdb`（默认容器路径 `/data/reality-scanner/Country.mmdb`）。启动和实际扫描会检查是否可读；缺失或损坏不影响扫描，地区显示未知。数据库自行提供，不自动下载。任务参数、版本、计数及结构化结果存入 SQLite；临时输入在任务结束后清理，网页正文与原始 URL 不进入历史。扫描不会修改节点、机器配置或 Sub-Store 文件。
+
 ### Telegram 测速
 
 在测试中心的“Telegram”栏目保存 Bot Token、Telegram 数字用户 ID 白名单和独立测试预设，再启用机器人。用户私聊 `/start` 可查看自己的 ID。支持可选 HTTP/HTTPS 代理及代理认证，代理仅用于 Telegram 收发消息和文件，不影响 Sub-Store、miaospeed 或测试流量。设置读取不返回 Token 或代理认证信息；留空保留原值，显式清除才删除。Token 与运行设置存放在现有私有 SQLite 数据目录中。
@@ -233,6 +247,8 @@ macvlan 部署应复用已配置的外部网络，仅将 SubMeld 加入局域网
 SubMeld 界面固定使用冷灰与蓝色的浅色主题。共享视觉常量统一维护在 [web/tokens.css](web/tokens.css)，页面、组件和浏览器 PNG 导出共同使用；后续界面改动遵循 [界面规范](docs/ui-style.md)。
 
 `/api/nodes` 负责统一节点管理；`/api/subscriptions` 适配上游方案文件；`/api/node-tests`、`/api/kernels` 保留三内核检查。`/api/miaospeed/{preview,tests,reports,scripts,settings,status}` 提供综合测试；`/api/telegram/{settings,status,check,tasks}` 管理可选机器人与任务，任务支持 `cancel`、`resend`；`/api/integrations/files` 管理配套文件更新。上游原生管理使用 `/upstream/sub-store/*`。
+
+`/api/reality-scanner/{status,preview,scans}` 提供扫描状态、目标解析和任务管理；任务支持 `results`、`export`、`cancel` 和删除。全部接口使用现有网页登录和同源校验。
 
 | 命令                 | 内容                                                                 |
 | -------------------- | -------------------------------------------------------------------- |

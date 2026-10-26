@@ -54,6 +54,8 @@ test('new settings initialize once, preserve password hashes and enforce single 
         'speed_reports',
         'speed_results',
         'telegram_tasks',
+        'reality_scans',
+        'reality_scan_results',
       ].sort(),
     );
     db.close();
@@ -211,6 +213,8 @@ test('empty v2 business definitions upgrade while preserving account settings an
         'machine_tasks',
         'machines',
         'node_test_results',
+        'reality_scan_results',
+        'reality_scans',
         'settings',
         'speed_reports',
         'speed_results',

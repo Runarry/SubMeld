@@ -1,0 +1,16 @@
+{
+  "repo": "XTLS/RealiTLScanner",
+  "tag": "v0.2.3",
+  "version": "0.2.3",
+  "sourceSha256": "55c389bea50e2a26c2965d99a8666c45d81e0f7ab70e57c32aaf689a53222edd",
+  "platforms": {
+    "linux-x64": {
+      "asset": "RealiTLScanner-linux-amd64",
+      "sha256": "a55595446de9f1c2e6c5c3cd766a7320a11115947df48f101749bb62c8055592"
+    },
+    "win32-x64": {
+      "asset": "RealiTLScanner-windows-64.exe",
+      "sha256": "03d4b8fa92cbc23e92d1af70ca74f90f650f1f51d19a5d769016dd71964559e4"
+    }
+  }
+}

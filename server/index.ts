@@ -14,6 +14,7 @@ import { MiaospeedTester } from './miaospeed.js';
 import { TelegramService } from './telegram.js';
 import { Hy2Certificates } from './hy2-certificates.js';
 import { RelayStore } from './relays.js';
+import { RealityScanner } from './reality-scanner.js';
 
 async function main() {
   const config = loadConfig(process.argv.includes('--dev'));
@@ -59,11 +60,14 @@ async function main() {
   );
   const telegram = new TelegramService(settings.telegramStore, miaospeed);
   const relays = new RelayStore(settings.machines, settings.resources);
+  const realityScanner = new RealityScanner(settings.realityScans, config.dataDir);
   let app: ReturnType<typeof createApp>;
   try {
     await kernels.initialize();
+    await realityScanner.initialize();
     app = createApp({
       certificates,
+      realityScanner,
       miaospeed,
       telegram,
       machines: settings.machines,
@@ -82,6 +86,7 @@ async function main() {
       subscriptions: settings.subscriptions,
     });
   } catch (error) {
+    await realityScanner.close();
     await telegram.close();
     await miaospeed.close();
     await tester.close();
@@ -104,6 +109,7 @@ async function main() {
     if (closing) return;
     closing = true;
     server.close();
+    await realityScanner.close();
     await relays.close();
     if ('closeAllConnections' in server) server.closeAllConnections();
     await telegram.close();

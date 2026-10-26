@@ -34,12 +34,15 @@ import { registerMachineRoutes } from './machine-routes.js';
 import { registerRelayRoutes, type RelayStore } from './relays.js';
 import { registerAgentAssets, assertPrivateFileNotShared } from './machine-assets.js';
 import type { WebsiteRoutingStore } from './website-routing.js';
+import { registerRealityScannerRoutes } from './reality-scanner-routes.js';
+import type { RealityScanner } from './reality-scanner.js';
 
 export type AppOptions = {
   files?: UpstreamFiles;
   certificates?: Hy2Certificates;
   nodeReporting?: NodeReporting;
   websiteRouting?: WebsiteRoutingStore;
+  realityScanner?: RealityScanner;
   machines?: MachineStore;
   relays?: RelayStore;
   miaospeed?: MiaospeedTester;
@@ -57,6 +60,7 @@ export function createApp({
   certificates,
   nodeReporting,
   websiteRouting,
+  realityScanner,
   machines,
   relays,
   miaospeed,
@@ -85,6 +89,7 @@ export function createApp({
     '/api/machines',
     '/api/relays',
     '/api/website-routing',
+    '/api/reality-scanner',
   ]);
   app.use('*', async (context, next) => {
     context.header('X-Content-Type-Options', 'nosniff');
@@ -118,6 +123,7 @@ export function createApp({
         '/api/machines/',
         '/api/relays/',
         '/api/website-routing/',
+        '/api/reality-scanner/',
       ].some((prefix) => context.req.path.startsWith(prefix));
     if (['POST', 'PATCH', 'DELETE', 'PUT'].includes(context.req.method) && managed) {
       const origin = context.req.header('Origin');
@@ -157,6 +163,7 @@ export function createApp({
     await next();
   });
   if (machines) registerMachineRoutes(app, machines, config);
+  if (realityScanner) registerRealityScannerRoutes(app, realityScanner);
   if (relays) registerRelayRoutes(app, relays);
   registerAgentAssets(app);
   const routing = () => {

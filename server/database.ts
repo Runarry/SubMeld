@@ -18,6 +18,7 @@ import { NodeReporting } from './node-reporting.js';
 import { MachineStore } from './machines.js';
 import { randomBytes } from 'node:crypto';
 import { WebsiteRoutingStore } from './website-routing.js';
+import { RealityScannerStore } from './reality-scanner-store.js';
 export function openSettings(dataDir: string, development: boolean, client = new SubStoreClient()) {
   if (process.platform === 'win32' && !development)
     throw new Error('生产数据权限需要 Linux 容器；Windows 仅支持显式开发模式。');
@@ -103,6 +104,7 @@ export function openSettings(dataDir: string, development: boolean, client = new
       files,
       nodes,
       websiteRouting: new WebsiteRoutingStore(database),
+      realityScans: new RealityScannerStore(database),
       nodeReporting: new NodeReporting(database, resources),
       machines,
       subscriptions,

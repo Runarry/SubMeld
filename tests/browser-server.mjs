@@ -15,6 +15,8 @@ import { openSettings } from '../dist/server/database.js';
 import { hashPassword, Auth } from '../dist/server/auth.js';
 import { Converter } from '../dist/server/converter/pool.js';
 import { RelayStore } from '../dist/server/relays.js';
+import { RealityScanner } from '../dist/server/reality-scanner.js';
+import { scannerTlsFixture } from './reality-scanner-fixture.mjs';
 
 mkdirSync('.cache', { recursive: true });
 const directory = mkdtempSync(resolve('.cache/browser-'));
@@ -89,7 +91,16 @@ const telegram = new TelegramService(settings.telegramStore, miaospeed, {
 telegram.start();
 const relays = new RelayStore(settings.machines, settings.resources);
 relays.start();
+const scannerTarget = await scannerTlsFixture({ SNICallback() {} });
+const realityScanner = new RealityScanner(settings.realityScans, directory, {
+  async fetchPage(url) {
+    if (url !== 'https://scanner-fixture.test/') throw new Error('Unexpected scanner fixture page');
+    return '<a href="https://localhost/a">first</a><a href="https://localhost/b">duplicate</a>';
+  },
+});
+await realityScanner.initialize();
 const app = createApp({
+  realityScanner,
   machines: settings.machines,
   relays,
   miaospeed,
@@ -116,6 +127,8 @@ const app = createApp({
 });
 const server = serve({
   fetch: async (request) => {
+    if (new URL(request.url).pathname === '/__scanner_fixture')
+      return Response.json({ port: scannerTarget.port });
     if (
       new URL(request.url).pathname === '/sw.js' &&
       request.headers.get('cookie')?.includes('submeld-test-legacy-worker=1')
@@ -141,6 +154,7 @@ const httpConfig = loadConfig(false, {
   DATA_DIR: directory,
 });
 const httpApp = createApp({
+  realityScanner,
   machines: settings.machines,
   relays,
   nodeReporting: settings.nodeReporting,
@@ -173,6 +187,8 @@ async function close() {
     listener.closeAllConnections();
   }
   await telegram.close();
+  await realityScanner.close();
+  await scannerTarget.close();
   await relays.close();
   await tester.close();
   await miaospeed.close();

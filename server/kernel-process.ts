@@ -2,7 +2,13 @@ import { spawn } from 'node:child_process';
 import { AppError } from './errors.js';
 
 /** Fixed executable/argument arrays only. Child output never reaches application logs. */
-export function startProcess(binary: string, args: string[], cwd?: string, input?: string) {
+export function startProcess(
+  binary: string,
+  args: string[],
+  cwd?: string,
+  input?: string,
+  onOutput?: (chunk: Buffer, stream: 'stdout' | 'stderr') => void,
+) {
   const child = spawn(binary, args, {
     cwd,
     windowsHide: true,
@@ -31,8 +37,12 @@ export function startProcess(binary: string, args: string[], cwd?: string, input
   child.stdout?.on('data', (chunk: Buffer) => {
     stdout = (stdout + chunk.toString('utf8')).slice(-65536);
     append(chunk);
+    onOutput?.(chunk, 'stdout');
   });
-  child.stderr?.on('data', append);
+  child.stderr?.on('data', (chunk: Buffer) => {
+    append(chunk);
+    onOutput?.(chunk, 'stderr');
+  });
   child.on('error', () => {
     failed = true;
   });

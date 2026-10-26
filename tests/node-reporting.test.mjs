@@ -381,6 +381,8 @@ test('restarting preserves the reporting identity and token without a second nod
         'machine_tasks',
         'machines',
         'node_test_results',
+        'reality_scan_results',
+        'reality_scans',
         'settings',
         'speed_reports',
         'speed_results',
