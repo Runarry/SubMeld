@@ -64,7 +64,10 @@ test('local deletion only ignores candidate ports for valid HY2 hopping ranges',
     assert.deepEqual(list.errors, []);
     const removing = resources.deleteNodes({ nodes: [ref(list.nodes[0])] });
     if (succeeds) {
-      assert.deepEqual(await removing, { deleted: 1 });
+      const result = await removing;
+      assert.equal(result.deleted, 1);
+      assert.equal(result.excluded, 0);
+      assert.equal(result.resources[0].state, 'verified');
       assert.equal(writes, 1);
       assert.deepEqual(JSON.parse(record.content), { proxies: [kept], extra: 'preserved' });
     } else {

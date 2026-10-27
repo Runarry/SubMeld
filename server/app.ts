@@ -161,7 +161,7 @@ export function createApp({
   });
   app.use('/api/*', async (c, next) => {
     if (
-      /^\/api\/(nodes|subscriptions)(?:\/|$)/.test(c.req.path) &&
+      /^\/api\/subscriptions(?:\/|$)/.test(c.req.path) &&
       !/\/(artifacts|cancel)(?:\/|$)/.test(c.req.path)
     )
       await resources.sync();
@@ -442,7 +442,10 @@ export function createApp({
     });
     return context.json({ authenticated: false });
   });
-  app.get('/api/nodes/resources', (c) => c.json({ resources: resources.listResources() }));
+  app.get('/api/nodes/resources', async (c) => {
+    await resources.sync();
+    return c.json({ resources: resources.listResources() });
+  });
   app.get('/api/nodes', async (c) =>
     c.json(
       await nodes.list(

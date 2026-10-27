@@ -4,6 +4,7 @@ export default defineConfig({
   testMatch: [
     'browser.spec.mjs',
     'node-tests.browser.mjs',
+    'node-sync.browser.mjs',
     'website-routing.browser.mjs',
     'reality-scanner.browser.mjs',
     'hy2.browser.mjs',

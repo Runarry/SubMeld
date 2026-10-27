@@ -8,8 +8,9 @@ export function createNodeStore(resources: UpstreamResources) {
     delete: (input: unknown) => resources.deleteNodes(input),
     async get(input: unknown) {
       const ref = nodeRefSchema.parse(input);
-      await resources.preview(ref.resourceId);
-      const row = resources.current(ref);
+      await resources.sync();
+      const snapshot = await resources.preview(ref.resourceId);
+      const row = resources.current(ref, snapshot);
       return { ...row.view, original: row.original, processed: row.processed };
     },
   };

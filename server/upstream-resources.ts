@@ -1,5 +1,6 @@
 import { removeLocalNodes } from './local-content.js';
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { AppError } from './errors.js';
 import {
   SubStoreClient,
@@ -11,6 +12,7 @@ import { checkedDraft } from './converter/normalized.js';
 import {
   addResourceSchema,
   deleteNodesSchema,
+  type DeleteNodesResult,
   type NodeRef,
   type NodeSelector,
   type NodeView,
@@ -70,16 +72,50 @@ function snapshotNode(raw: RawNode) {
   }
   return raw;
 }
+const nodeContentHash = (nodes: RawNode[]) => hash(nodes.map((raw) => cleanRaw(snapshotNode(raw))));
 
 /** Upstream records and preview credentials stay in memory. No editable node database. */
 export class UpstreamResources {
   private entries = new Map<string, Entry>();
   private snapshots = new Map<string, Snapshot>();
+  private previewTickets = new Map<string, number>();
+  private sequence = 0;
+  private catalogVersion = 0;
   constructor(readonly client: SubStoreClient) {}
   sync() {
     return this.client.exclusive(() => this.syncUnlocked());
   }
   async syncUnlocked() {
+    try {
+      await this.readCatalog();
+    } catch (error) {
+      for (const id of this.entries.keys()) this.invalidate(id);
+      throw error;
+    }
+  }
+  private invalidate(id: string) {
+    this.snapshots.delete(id);
+    this.previewTickets.set(id, ++this.sequence);
+  }
+  private invalidateCollections(name: string) {
+    for (const [id, entry] of this.entries)
+      if (
+        entry.type === 'collection' &&
+        Array.isArray(entry.record.subscriptions) &&
+        entry.record.subscriptions.includes(name)
+      )
+        this.invalidate(id);
+  }
+  private acceptRecord(id: string, entry: Entry) {
+    const old = this.entries.get(id);
+    if (hash(old?.record) === hash(entry.record)) return;
+    this.catalogVersion++;
+    this.invalidate(id);
+    if (old?.type === 'sub') this.invalidateCollections(old.record.name);
+    if (entry.type === 'sub') this.invalidateCollections(entry.record.name);
+    this.entries.set(id, entry);
+  }
+  private async readCatalog() {
     const catalog = (
       await Promise.all(
         (['sub', 'collection', 'file'] as const).map(async (type) =>
@@ -116,10 +152,14 @@ export class UpstreamResources {
           409,
         );
       next.set(id.id, entry);
-      if (hash(this.entries.get(id.id)?.record) !== hash(entry.record))
-        this.snapshots.delete(id.id);
     }
-    for (const id of this.snapshots.keys()) if (!next.has(id)) this.snapshots.delete(id);
+    for (const [id, entry] of next) this.acceptRecord(id, entry);
+    for (const [id, entry] of this.entries)
+      if (!next.has(id)) {
+        this.catalogVersion++;
+        this.invalidate(id);
+        if (entry.type === 'sub') this.invalidateCollections(entry.record.name);
+      }
     this.entries = next;
   }
   record(id: string): Entry {
@@ -159,8 +199,16 @@ export class UpstreamResources {
   async preview(id: string, force = false) {
     const entry = this.record(id),
       resource = this.resource(id);
-    const data = await this.client.preview(resource.type, entry.record, force);
-    if (this.resource(id).revision !== resource.revision)
+    const ticket = ++this.sequence;
+    this.previewTickets.set(id, ticket);
+    let data: Awaited<ReturnType<SubStoreClient['preview']>>;
+    try {
+      data = await this.client.preview(resource.type, entry.record, force);
+    } catch (error) {
+      if (this.previewTickets.get(id) === ticket) this.invalidate(id);
+      throw error;
+    }
+    if (this.previewTickets.get(id) !== ticket || this.resource(id).revision !== resource.revision)
       throw new AppError('REVISION_CONFLICT', '读取期间订阅已修改，请重试。', 409);
     const snapshotHash = hash({
       original: data.original.map(snapshotNode),
@@ -174,8 +222,11 @@ export class UpstreamResources {
     const linked = new Set<number>();
     const local =
       resource.type === 'sub' &&
-      entry.record.source === 'local' &&
-      !['localFirst', 'remoteFirst'].includes(String(entry.record.mergeSources));
+      ((entry.record.source === 'local' &&
+        !['localFirst', 'remoteFirst'].includes(String(entry.record.mergeSources))) ||
+        (['localFirst', 'remoteFirst'].includes(String(entry.record.mergeSources)) &&
+          typeof entry.record.url === 'string' &&
+          !entry.record.url.trim()));
     const add = (original: RawNode | null, processed: RawNode | null, rawIndex: number | null) => {
       const raw = processed ?? original ?? {};
       const name = typeof raw.name === 'string' ? raw.name : '未命名节点';
@@ -225,10 +276,15 @@ export class UpstreamResources {
     for (const [index, original] of data.original.entries())
       if (!linked.has(index) && !counts.has(index)) add(original, null, index);
     const snapshot = { resource, snapshotHash, ...data, rows };
+    const previous = this.snapshots.get(id);
+    if (resource.type === 'sub' && previous && previous.snapshotHash !== snapshotHash)
+      this.invalidateCollections(entry.record.name);
     this.snapshots.set(id, snapshot);
     return snapshot;
   }
   async list(resourceId?: string, search = '', page = 0, force = false) {
+    await this.sync();
+    const version = this.catalogVersion;
     const resources = this.listResources();
     const selected = resourceId
       ? resources.filter((r) => r.id === resourceId)
@@ -236,9 +292,12 @@ export class UpstreamResources {
     if (resourceId && !selected.length) throw new AppError('NOT_FOUND', '订阅已不存在。', 404);
     const nodes: NodeView[] = [],
       errors: { resourceId: string; message: string }[] = [];
+    const readSnapshots: Snapshot[] = [];
     for (const resource of selected) {
       try {
-        nodes.push(...(await this.preview(resource.id, force)).rows.map((row) => row.view));
+        const snapshot = await this.preview(resource.id, force);
+        readSnapshots.push(snapshot);
+        nodes.push(...snapshot.rows.map((row) => row.view));
       } catch (error) {
         errors.push({
           resourceId: resource.id,
@@ -246,6 +305,11 @@ export class UpstreamResources {
         });
       }
     }
+    if (this.catalogVersion !== version)
+      throw new AppError('REVISION_CONFLICT', '读取期间订阅已修改，请刷新列表。', 409);
+    for (const snapshot of readSnapshots)
+      if (this.cached(snapshot.resource.id).snapshotHash !== snapshot.snapshotHash)
+        throw new AppError('REVISION_CONFLICT', '读取期间节点预览已变化，请刷新列表。', 409);
     const filtered = nodes.filter((node) =>
       (node.name + ' ' + node.protocol + ' ' + node.resourceName)
         .toLowerCase()
@@ -256,13 +320,15 @@ export class UpstreamResources {
       resources,
       errors,
       total: filtered.length,
+      readAt: new Date().toISOString(),
+      complete: errors.length === 0,
     };
   }
-  current(ref: NodeRef) {
-    const snapshot = this.cached(ref.resourceId);
+  current(ref: NodeRef, snapshot = this.cached(ref.resourceId)) {
     const row = snapshot.rows[ref.nodeIndex];
     if (
       !row ||
+      snapshot.resource.id !== ref.resourceId ||
       snapshot.snapshotHash !== ref.snapshotHash ||
       snapshot.resource.revision !== ref.revision
     )
@@ -334,15 +400,17 @@ export class UpstreamResources {
       throw new AppError('INVALID_REQUEST', '不能重复选择同一节点。', 400);
     return this.client.exclusive(async () => {
       await this.syncUnlocked();
-      await this.prepare(refs.map((r) => r.resourceId));
+      const captured = new Map<string, { entry: Entry; snapshot: Snapshot }>();
+      for (const id of new Set(refs.map((ref) => ref.resourceId)))
+        captured.set(id, {
+          entry: structuredClone(this.record(id)),
+          snapshot: await this.preview(id),
+        });
       const changes = new Map<string, { removed: Set<number>; names: string[] }>();
       for (const ref of refs) {
-        const row = this.current(ref);
-        if (
-          ['machine-source', 'relay-source'].includes(
-            marker(this.record(ref.resourceId).record)?.role ?? '',
-          )
-        )
+        const capture = captured.get(ref.resourceId)!;
+        const row = this.current(ref, capture.snapshot);
+        if (['machine-source', 'relay-source'].includes(marker(capture.entry.record)?.role ?? ''))
           throw new AppError('MANAGED_NODE', '此节点由机器或中转线路管理，请在对应页面删除。', 409);
         if (row.view.deletion === 'unavailable')
           throw new AppError(
@@ -356,15 +424,19 @@ export class UpstreamResources {
         else change.names.push(row.view.name);
         changes.set(ref.resourceId, change);
       }
-      const patches: { id: string; entry: Entry; patch: Record<string, unknown> }[] = [];
+      const patches: {
+        id: string;
+        entry: Entry;
+        patch: Record<string, unknown>;
+        expected: Awaited<ReturnType<SubStoreClient['preview']>>;
+        deleted: number;
+        excluded: number;
+      }[] = [];
       for (const [id, change] of changes) {
-        const entry = this.record(id),
-          snapshot = this.cached(id);
+        const { entry, snapshot } = captured.get(id)!;
         const patch: Record<string, unknown> = {};
+        const remaining = snapshot.original.filter((_, index) => !change.removed.has(index));
         if (change.removed.size) {
-          const remaining = snapshot.original
-            .filter((_, index) => !change.removed.has(index))
-            .map((raw) => cleanRaw(snapshotNode(raw)));
           const content = await removeLocalNodes(
             String(entry.record.content ?? ''),
             change.removed,
@@ -376,7 +448,7 @@ export class UpstreamResources {
             content,
             process: [],
           });
-          if (hash(checked.original.map((raw) => cleanRaw(snapshotNode(raw)))) !== hash(remaining))
+          if (nodeContentHash(checked.original) !== nodeContentHash(remaining))
             throw new AppError(
               'NODE_DELETE_UNSAFE',
               '无法保证其他节点字段完整，请在 Sub-Store 原生页面编辑。',
@@ -398,29 +470,138 @@ export class UpstreamResources {
               _submeldExcluded: true,
             },
           ];
-        patches.push({ id, entry, patch });
+        const expected = await this.client.preview(snapshot.resource.type, {
+          ...entry.record,
+          ...patch,
+        });
+        if (
+          nodeContentHash(expected.original) !== nodeContentHash(remaining) ||
+          expected.processed.some((raw) => change.names.includes(String(raw.name))) ||
+          (!change.removed.size &&
+            nodeContentHash(expected.processed) !==
+              nodeContentHash(
+                snapshot.processed.filter((raw) => !change.names.includes(String(raw.name))),
+              ))
+        )
+          throw new AppError(
+            'NODE_DELETE_UNSAFE',
+            '上游预览与预期修改不一致，尚未写入；请刷新后检查处理规则。',
+            409,
+          );
+        patches.push({
+          id,
+          entry,
+          patch,
+          expected,
+          deleted: change.removed.size,
+          excluded: change.names.length,
+        });
       }
-      const completed: string[] = [];
-      for (const { id, entry, patch } of patches) {
+      const result: DeleteNodesResult = {
+        deleted: 0,
+        excluded: 0,
+        resources: patches.map(({ id }) => ({
+          resourceId: id,
+          name: captured.get(id)!.snapshot.resource.name,
+          state: 'notAttempted',
+          deleted: 0,
+          excluded: 0,
+          message: '尚未执行。',
+        })),
+      };
+      let conflict = false;
+      for (const [index, { id, entry, patch, expected, deleted, excluded }] of patches.entries()) {
+        const outcome = result.resources[index]!;
+        // A batch holds immutable preflight snapshots; previews from other requests
+        // cannot change the source positions used to build these patches.
+        try {
+          const latest = await this.readRecord(id, entry.type);
+          this.acceptRecord(id, { type: entry.type, record: latest });
+          if (!isDeepStrictEqual(latest, entry.record)) {
+            conflict = true;
+            outcome.state = 'failed';
+            outcome.message = '写入前订阅已变化，未覆盖新内容；请重新选择。';
+            break;
+          }
+        } catch {
+          this.invalidate(id);
+          outcome.state = 'failed';
+          outcome.message = '写入前无法核对上游资源，本订阅未执行。';
+          break;
+        }
+        let writeFailed = false;
         try {
           await this.client.api(
             '/api/' + entry.type + '/' + encodeURIComponent(entry.record.name),
             patch,
             'PATCH',
           );
-          completed.push(id);
         } catch {
-          await this.syncUnlocked();
-          throw new AppError(
-            'UPSTREAM_PARTIAL_WRITE',
-            '上游未完成全部删除，已完成 ' + completed.length + ' 个订阅；请刷新后检查。',
-            502,
-          );
+          writeFailed = true;
         }
+        this.invalidate(id);
+        if (entry.type === 'sub') this.invalidateCollections(entry.record.name);
+        try {
+          const saved = await this.readRecord(id, entry.type);
+          this.acceptRecord(id, { type: entry.type, record: saved });
+          if (isDeepStrictEqual(saved, entry.record)) {
+            outcome.state = 'failed';
+            outcome.message = '回读确认原文和处理规则未改变，修改未生效。';
+          } else if (!isDeepStrictEqual(saved, { ...entry.record, ...patch })) {
+            outcome.state = 'unknown';
+            outcome.message = '回读内容与预期不同，无法确认修改结果；请检查上游当前内容。';
+          } else {
+            const checked = await this.client.preview(
+              captured.get(id)!.snapshot.resource.type,
+              saved,
+            );
+            // Re-read after preview as a provider or an external writer can change
+            // the record while upstream processors are running.
+            const after = await this.readRecord(id, entry.type);
+            this.acceptRecord(id, { type: entry.type, record: after });
+            if (
+              !isDeepStrictEqual(after, saved) ||
+              nodeContentHash(checked.original) !== nodeContentHash(expected.original) ||
+              nodeContentHash(checked.processed) !== nodeContentHash(expected.processed)
+            ) {
+              outcome.state = 'unknown';
+              outcome.message = '已发出修改，但保存内容或实际预览未通过核验；请刷新检查。';
+            } else {
+              outcome.state = 'verified';
+              outcome.deleted = deleted;
+              outcome.excluded = excluded;
+              outcome.message = '已回读保存内容并核验实际预览。';
+              result.deleted += deleted;
+              result.excluded += excluded;
+            }
+          }
+        } catch {
+          this.invalidate(id);
+          outcome.state = 'unknown';
+          outcome.message = '修改已发出，回读或预览失败，结果无法确认；请刷新检查。';
+        }
+        if (writeFailed || outcome.state !== 'verified') break;
       }
-      await this.syncUnlocked();
-      return { deleted: refs.length };
+      if (result.resources.some((resource) => resource.state !== 'verified'))
+        throw new AppError(
+          conflict ? 'REVISION_CONFLICT' : 'UPSTREAM_PARTIAL_WRITE',
+          '未能确认全部操作完成。已核验删除 ' +
+            result.deleted +
+            ' 个、排除 ' +
+            result.excluded +
+            ' 个。',
+          conflict ? 409 : 502,
+          undefined,
+          result,
+        );
+      return result;
     });
+  }
+  private async readRecord(id: string, type: Entry['type']) {
+    const matches = (await this.client.records(type)).filter((record) => marker(record)?.id === id);
+    if (matches.length !== 1)
+      throw new AppError('REVISION_CONFLICT', '上游资源已消失或身份不唯一，请重新选择。', 409);
+    return matches[0]!;
   }
   async write(forward: () => Promise<Response>) {
     return this.client.exclusive(async () => {

@@ -36,6 +36,8 @@ export const nodeListSchema = z.object({
   resources: z.array(resourceSchema),
   errors: z.array(z.object({ resourceId: z.string(), message: z.string() })),
   total: z.number().int().nonnegative(),
+  readAt: z.iso.datetime(),
+  complete: z.boolean(),
 });
 export const nodeDetailsSchema = nodeViewSchema.extend({
   original: z.record(z.string(), z.unknown()).nullable(),
@@ -50,3 +52,18 @@ export const addResourceSchema = z.strictObject({
 export const deleteNodesSchema = z.strictObject({
   nodes: z.array(nodeRefSchema).min(1).max(MAX_NODES),
 });
+export const deleteNodesResultSchema = z.object({
+  deleted: z.number().int().nonnegative(),
+  excluded: z.number().int().nonnegative(),
+  resources: z.array(
+    z.object({
+      resourceId: z.string().uuid(),
+      name: z.string(),
+      state: z.enum(['verified', 'failed', 'unknown', 'notAttempted']),
+      deleted: z.number().int().nonnegative(),
+      excluded: z.number().int().nonnegative(),
+      message: z.string(),
+    }),
+  ),
+});
+export type DeleteNodesResult = z.infer<typeof deleteNodesResultSchema>;

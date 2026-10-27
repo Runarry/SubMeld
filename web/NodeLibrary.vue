@@ -5,6 +5,8 @@ import {
   nodeDetailsSchema,
   nodeRefSchema,
   resourceSchema,
+  deleteNodesResultSchema,
+  type DeleteNodesResult,
   type NodeView,
   type Resource,
 } from '../server/shared/resources';
@@ -15,6 +17,7 @@ import ModalDialog from './ui/ModalDialog.vue';
 import NodeReportingSettings from './NodeReportingSettings.vue';
 import { machineViewSchema, type MachineView } from '../server/shared/machines';
 import { z } from 'zod';
+import { ApiError } from './api';
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
 }>();
@@ -28,6 +31,11 @@ const nodes = ref<NodeView[]>([]),
   busy = ref(false),
   message = ref(''),
   errors = ref<string[]>([]);
+const fresh = ref(false),
+  complete = ref(false),
+  readAt = ref(''),
+  readError = ref(''),
+  mutationResult = ref<DeleteNodesResult | null>(null);
 const form = ref<{ name: string; source: 'local' | 'remote'; content: string; url: string } | null>(
   null,
 );
@@ -52,6 +60,10 @@ function locationChanged() {
   selected.value = [];
   message.value = '';
   errors.value = [];
+  fresh.value = false;
+  deleting.value = null;
+  detail.value = null;
+  mutationResult.value = null;
   if (busy.value) {
     reloadPending = true;
     return;
@@ -59,7 +71,8 @@ function locationChanged() {
   void act(() => load());
 }
 const native = '/?api=' + encodeURIComponent(location.origin + '/upstream/sub-store');
-const key = (node: NodeView) => node.resourceId + ':' + node.nodeIndex;
+const key = (node: NodeView) =>
+  [node.resourceId, node.revision, node.snapshotHash, node.nodeIndex].join(':');
 const nodeRef = (node: NodeView) =>
   nodeRefSchema.parse({
     resourceId: node.resourceId,
@@ -70,18 +83,35 @@ const nodeRef = (node: NodeView) =>
 const subject = (node: NodeView): TestSubject => ({ kind: 'node', ...nodeRef(node) });
 const testing = useNodeTests(() => nodes.value.filter((n) => n.testable).map(subject), props.api);
 const chosen = computed(() => nodes.value.filter((n) => selected.value.includes(key(n))));
+const actionName = (values: NodeView[]) => {
+  const content = values.some((node) => node.deletion === 'content');
+  const filter = values.some((node) => node.deletion === 'filter');
+  return content && filter ? '删除及排除' : filter ? '排除' : '删除';
+};
+const deletingStale = computed(
+  () =>
+    !fresh.value ||
+    deleting.value?.some((node) => !nodes.value.some((current) => key(current) === key(node))),
+);
 let alive = true,
   ticket = 0,
-  reloadPending = false;
+  reloadPending = false,
+  refreshPending = false,
+  loading = false;
+let timer: ReturnType<typeof setInterval> | undefined;
+let loadedQuery: { page: number; resourceId: string; search: string } | undefined;
 onBeforeUnmount(() => {
   alive = false;
   ticket++;
   window.removeEventListener('hashchange', locationChanged);
+  window.removeEventListener('focus', poll);
+  document.removeEventListener('visibilitychange', poll);
+  clearInterval(timer);
 });
-async function act(action: () => Promise<void>) {
+async function act(action: () => Promise<unknown>, clearMessage = true) {
   if (busy.value) return;
   busy.value = true;
-  message.value = '';
+  if (clearMessage) message.value = '';
   try {
     await action();
   } catch (e) {
@@ -91,44 +121,81 @@ async function act(action: () => Promise<void>) {
       busy.value = false;
       if (reloadPending) {
         reloadPending = false;
+        refreshPending = false;
         void act(() => load());
+      } else if (refreshPending) {
+        refreshPending = false;
+        poll();
       }
     }
   }
 }
-async function load(force = false) {
+async function load(force = false, background = false): Promise<void> {
   const current = ++ticket;
-  const requested = { page: page.value, resourceId: resourceId.value, search: search.value };
-  const result = nodeListSchema.parse(
-    await props.api(
-      '/api/nodes?page=' +
-        requested.page +
-        '&resourceId=' +
-        encodeURIComponent(requested.resourceId) +
-        '&search=' +
-        encodeURIComponent(requested.search) +
-        (force ? '&refresh=1' : ''),
-    ),
-  );
-  if (!alive || current !== ticket) return;
-  nodes.value = result.nodes;
-  resources.value = result.resources;
-  total.value = result.total;
-  errors.value = result.errors.map((e) => e.message);
-  selected.value = [];
-  const query = new URLSearchParams();
-  if (requested.resourceId) query.set('resource', requested.resourceId);
-  if (requested.search) query.set('search', requested.search);
-  if (requested.page) query.set('page', String(requested.page));
-  history.replaceState(null, '', '#/nodes' + (query.size ? '?' + query : ''));
-  if (!nodes.value.length && requested.page) {
-    page.value = requested.page - 1;
-    await load(force);
+  const requested =
+    background && loadedQuery
+      ? { ...loadedQuery }
+      : { page: page.value, resourceId: resourceId.value, search: search.value };
+  loading = true;
+  try {
+    const result = nodeListSchema.parse(
+      await props.api(
+        '/api/nodes?page=' +
+          requested.page +
+          '&resourceId=' +
+          encodeURIComponent(requested.resourceId) +
+          '&search=' +
+          encodeURIComponent(requested.search) +
+          (force ? '&refresh=1' : ''),
+      ),
+    );
+    if (!alive || current !== ticket) return;
+    nodes.value = result.nodes;
+    resources.value = result.resources;
+    total.value = result.total;
+    errors.value = result.errors.map(
+      (e) =>
+        (result.resources.find((resource) => resource.id === e.resourceId)?.name ?? '订阅') +
+        '：' +
+        e.message,
+    );
+    fresh.value = true;
+    complete.value = result.complete;
+    readAt.value = result.readAt;
+    readError.value = '';
+    loadedQuery = requested;
+    selected.value = selected.value.filter((value) =>
+      result.nodes.some((node) => key(node) === value),
+    );
+    if (detail.value && !result.nodes.some((node) => key(node) === key(detail.value!)))
+      detail.value = null;
+    const query = new URLSearchParams();
+    if (requested.resourceId) query.set('resource', requested.resourceId);
+    if (requested.search) query.set('search', requested.search);
+    if (requested.page) query.set('page', String(requested.page));
+    history.replaceState(null, '', '#/nodes' + (query.size ? '?' + query : ''));
+    if (!nodes.value.length && requested.page && result.complete) {
+      page.value = Math.max(0, Math.ceil(result.total / 25) - 1);
+      await load(force);
+    }
+  } catch (error) {
+    if (!alive || current !== ticket) return;
+    fresh.value = false;
+    selected.value = [];
+    readError.value = error instanceof Error ? error.message : '无法读取 Sub-Store。';
+  } finally {
+    loading = false;
   }
 }
 async function save() {
   if (!form.value) return;
-  const saved = resourceSchema.parse(await props.api('/api/nodes', form.value));
+  let saved: Resource;
+  try {
+    saved = resourceSchema.parse(await props.api('/api/nodes', form.value));
+  } catch (error) {
+    if (alive && !reloadPending) await load();
+    throw error;
+  }
   if (!alive) return;
   form.value = null;
   if (reloadPending) return;
@@ -139,16 +206,44 @@ async function save() {
   if (alive && !reloadPending) message.value = '已保存到 Sub-Store。';
 }
 async function remove() {
-  if (!deleting.value) return;
-  await props.api('/api/nodes/delete', { nodes: deleting.value.map(nodeRef) });
-  if (!alive) return;
-  deleting.value = null;
-  if (reloadPending) return;
-  await load();
-  if (alive && !reloadPending) message.value = '删除操作已保存到 Sub-Store。';
+  if (!deleting.value || deletingStale.value) return;
+  const values = deleting.value.map(nodeRef);
+  mutationResult.value = null;
+  try {
+    const result = deleteNodesResultSchema.parse(
+      await props.api('/api/nodes/delete', { nodes: values }),
+    );
+    if (result.resources.some((resource) => resource.state !== 'verified'))
+      throw new ApiError('未能确认全部操作完成。', [], 502, 'UPSTREAM_PARTIAL_WRITE', result);
+    if (alive && !reloadPending) {
+      mutationResult.value = result;
+      message.value = '已核验删除 ' + result.deleted + ' 个、排除 ' + result.excluded + ' 个。';
+    }
+  } catch (error) {
+    if (alive && !reloadPending && error instanceof ApiError)
+      mutationResult.value = error.nodeMutation ?? null;
+    throw error;
+  } finally {
+    if (alive) {
+      deleting.value = null;
+      selected.value = [];
+      if (!reloadPending) await load();
+    }
+  }
+}
+function poll() {
+  if (document.visibilityState !== 'visible' || !alive) return;
+  if (busy.value) {
+    if (!loading) refreshPending = true;
+    return;
+  }
+  void act(() => load(false, true), false);
 }
 onMounted(() => {
   window.addEventListener('hashchange', locationChanged);
+  window.addEventListener('focus', poll);
+  document.addEventListener('visibilitychange', poll);
+  timer = setInterval(poll, 30000);
   void act(() => load());
   void props
     .api('/api/machines')
@@ -216,30 +311,55 @@ onMounted(() => {
       ><button :disabled="busy" @click="act(() => load(true))">刷新上游</button>
     </div>
     <p v-if="message" role="status" class="notice">{{ message }}</p>
+    <p v-if="readError" role="alert">
+      {{ readError }}
+      {{ readAt ? '下面是上次读取结果，当前无法核对上游状态。' : '尚未取得节点列表。' }}
+    </p>
+    <p v-if="readAt" class="muted">
+      {{ fresh ? '上游读取时间' : '上次读取时间' }}：{{ new Date(readAt).toLocaleString() }}
+      {{ fresh && !complete ? ' · 部分订阅读取失败' : '' }}
+    </p>
+    <template v-if="mutationResult">
+      <p
+        v-for="result in mutationResult.resources.filter((item) => item.state !== 'verified')"
+        :key="result.resourceId"
+        role="alert"
+      >
+        {{ result.name }}：{{ result.message }}
+      </p>
+    </template>
     <p v-for="(error, i) in errors" :key="i" role="alert">{{ error }}</p>
     <p v-if="testing.error" role="alert">{{ testing.error }}</p>
     <div class="selection-bar">
-      <span>{{ total }} 个节点 · 已选 {{ chosen.length }}</span
+      <span
+        >{{ !fresh ? '上次读取 ' : !complete ? '已读取 ' : '' }}{{ total }} 个节点 · 已选
+        {{ chosen.length }}</span
       ><button
-        :disabled="!chosen.length || testing.starting"
+        :disabled="!fresh || busy || !chosen.length || testing.starting"
         @click="testing.start(chosen.map(subject))"
       >
         测试所选</button
       ><button
-        :disabled="!chosen.length || busy || chosen.some((n) => n.deletion === 'unavailable')"
+        :disabled="
+          !fresh || !chosen.length || busy || chosen.some((n) => n.deletion === 'unavailable')
+        "
         class="danger"
         @click="deleting = chosen"
       >
-        删除所选
+        {{ actionName(chosen) }}所选
       </button>
     </div>
     <div class="panel node-list">
       <p v-if="busy && !nodes.length" role="status">正在读取 Sub-Store…</p>
-      <p v-else-if="!nodes.length">当前没有节点。可添加订阅地址或粘贴节点文本。</p>
+      <p v-else-if="!nodes.length && fresh && complete">
+        当前没有节点。可添加订阅地址或粘贴节点文本。
+      </p>
+      <p v-else-if="!nodes.length">尚未读取到可显示的节点，请检查上游读取状态。</p>
       <article v-for="node in nodes" :key="key(node)" class="node-row">
         <input
           v-model="selected"
           type="checkbox"
+          :disabled="busy || !fresh"
           :value="key(node)"
           :aria-label="'选择 ' + node.name"
         />
@@ -265,7 +385,7 @@ onMounted(() => {
         </div>
         <div class="row-actions">
           <button
-            :disabled="busy"
+            :disabled="busy || !fresh"
             @click="
               act(async () => {
                 const result = nodeDetailsSchema.parse(
@@ -276,13 +396,17 @@ onMounted(() => {
             "
           >
             查看</button
-          ><button :disabled="testing.starting" @click="testing.start([subject(node)])">测试</button
           ><button
-            :disabled="busy || node.deletion === 'unavailable'"
+            :disabled="busy || !fresh || testing.starting"
+            @click="testing.start([subject(node)])"
+          >
+            测试</button
+          ><button
+            :disabled="busy || !fresh || node.deletion === 'unavailable'"
             class="danger"
             @click="deleting = [node]"
           >
-            删除
+            {{ actionName([node]) }}
           </button>
         </div>
       </article>
@@ -380,18 +504,31 @@ onMounted(() => {
         ><button @click="detail = null">关闭</button></template
       ></ModalDialog
     >
-    <ModalDialog v-if="deleting" label="删除节点" :dismissible="!busy" @close="deleting = null"
-      ><h2>删除 {{ deleting.length }} 个节点</h2>
-      <p>
-        手动导入的节点会从保存内容中实际移除；远程或脚本生成的节点会通过精确名称规则排除。远程节点改名后需要重新设置排除规则。
+    <ModalDialog
+      v-if="deleting"
+      :label="actionName(deleting) + '节点'"
+      :dismissible="!busy"
+      @close="deleting = null"
+      ><h2>{{ actionName(deleting) }} {{ deleting.length }} 个节点</h2>
+      <p v-if="deleting.some((node) => node.deletion === 'content')">
+        删除 {{ deleting.filter((node) => node.deletion === 'content').length }} 个节点：从
+        Sub-Store 保存的原文中实际移除，并核验剩余内容。
+      </p>
+      <p v-if="deleting.some((node) => node.deletion === 'filter')">
+        排除
+        {{ deleting.filter((node) => node.deletion === 'filter').length }}
+        个节点：保存精确名称排除规则，原始内容保留。远程或脚本节点改名后需要重新设置排除规则。
       </p>
       <p v-if="resourceId && resources.find((r) => r.id === resourceId)?.type === 'collection'">
         此次排除只影响当前组合订阅。
       </p>
+      <p v-if="deletingStale" role="alert">上游状态已变化或无法核对，请关闭后重新选择节点。</p>
       <p v-if="message" role="alert">{{ message }}</p>
       <template #footer
         ><button :disabled="busy" @click="deleting = null">取消</button
-        ><button class="danger" :disabled="busy" @click="act(remove)">确认删除</button></template
+        ><button class="danger" :disabled="busy || deletingStale" @click="act(remove)">
+          确认{{ actionName(deleting) }}
+        </button></template
       ></ModalDialog
     >
   </section>
