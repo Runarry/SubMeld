@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { testSubjectSchema, DEFAULT_PROBE_URL, coreLabels } from './node-tests.js';
 import { renderTargetSchema, MAX_BYTES, MAX_NODES } from './contracts.js';
+import { backendIdSchema, backendSnapshotSchema } from './miaospeed-backends.js';
 
 export const metricDefinitions = [
   ['TEST_PING_RTT', '平均 RTT', 'ms'],
@@ -61,6 +62,7 @@ export function executionCore(settings: SpeedSettings) {
 export const speedRequestSchema = z
   .strictObject({
     name: z.string().trim().min(1).max(120).default('综合测试'),
+    backendId: backendIdSchema.optional(),
     subjects: z.array(speedSubjectSchema).min(1).max(MAX_NODES),
     metrics: z
       .array(metricIdSchema)
@@ -166,6 +168,7 @@ export const speedReportSchema = z.strictObject({
   createdAt: z.string(),
   finishedAt: z.string().nullable(),
   backendVersion: z.string().nullable(),
+  backend: backendSnapshotSchema.nullable().default(null),
   settings: speedSettingsSchema,
   metrics: z.array(metricIdSchema),
   scripts: z.array(
@@ -184,11 +187,12 @@ export const reportListSchema = z.strictObject({
   total: z.number().int(),
 });
 export const speedStatusSchema = z.strictObject({
+  backendId: backendIdSchema.nullable().default(null),
   configured: z.boolean(),
   connected: z.boolean(),
   version: z.string().nullable(),
   apiVersion: z.literal(3),
-  uploadEnabled: z.boolean(),
+  uploadEnabled: z.boolean().nullable(),
   checkedAt: z.string().nullable(),
   error: z.string().nullable(),
   active: z.string().nullable(),

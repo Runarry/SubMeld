@@ -7,10 +7,10 @@ import {
   type SpeedReport,
   type SpeedRow,
 } from './shared/miaospeed.js';
-import { reportColumns, reportTitle } from './shared/report-export.js';
+import { reportBackend, reportColumns, reportTitle } from './shared/report-export.js';
 
 const WIDTH = 1500,
-  HEADER_HEIGHT = 448,
+  HEADER_HEIGHT = 518,
   FOOTER_HEIGHT = 64,
   CARD_HEIGHT = 118,
   CARD_GAP = 10,
@@ -168,11 +168,14 @@ function header(
   parameters.forEach((line, index) => text(ctx, line, 30, 224 + index * 25, WIDTH - 60));
   font(ctx, 19, true);
   ctx.fillStyle = '#16222f';
+  font(ctx, 16);
+  text(ctx, reportBackend(report), 30, 380, WIDTH - 60, 3);
+  font(ctx, 19, true);
   text(
     ctx,
     `${group.label} · 第 ${groupIndex + 1} / ${groupCount} 组 · ${group.columns.length} 列 · 节点 ${count ? offset + 1 : 0}–${offset + count} / ${report.results.length} · 图 ${page}`,
     30,
-    392,
+    462,
     WIDTH - 60,
   );
 }

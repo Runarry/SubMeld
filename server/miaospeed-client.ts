@@ -93,6 +93,9 @@ export class MiaospeedClient {
   configured() {
     return !!this.url && !!this.token;
   }
+  clearCredentials() {
+    this.token = '';
+  }
   async run(
     settings: SpeedSettings,
     nodes: { Name: string; Payload: string }[],

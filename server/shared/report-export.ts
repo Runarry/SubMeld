@@ -21,6 +21,12 @@ export function reportTitle(report: SpeedReport): string {
   return `${report.name} · ${report.createdAt} · miaospeed ${report.backendVersion ?? '未知'} · 节点内核 ${speedCoreLabels[report.settings.nodeCore]}`;
 }
 
+export function reportBackend(report: SpeedReport): string {
+  return report.backend
+    ? '测速服务：' + report.backend.name + ' · ' + report.backend.url + ' · ' + report.backend.id
+    : '测速服务：历史未记录';
+}
+
 function cell(input: unknown) {
   let value = String(input ?? '').replace(/\0/g, '');
   if (/^[\s]*[=+@-]/.test(value)) value = "'" + value;
@@ -33,7 +39,7 @@ export function reportCsv(
   columns: { id: string; label: string }[] = reportColumns(report),
 ): string {
   const records: unknown[][] = [
-    [reportTitle(report)],
+    [reportTitle(report), reportBackend(report)],
     ['测试参数', JSON.stringify(report.settings)],
     [
       '节点',

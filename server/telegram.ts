@@ -5,10 +5,12 @@ import { AppError } from './errors.js';
 import { TelegramClient, TelegramApiError } from './telegram-client.js';
 import { TelegramStore, unfinished } from './telegram-store.js';
 import type { MiaospeedTester } from './miaospeed.js';
+import type { BackendConnection } from './miaospeed-backends.js';
 import { MAX_BYTES } from './shared/contracts.js';
 import { type SpeedPreview, type SpeedReport, previewInputSchema } from './shared/miaospeed.js';
 import {
   telegramTaskLabels,
+  telegramSettingsPatchSchema,
   type TelegramProfile,
   type TelegramStatus,
   type TelegramTask,
@@ -43,6 +45,7 @@ type Input = z.infer<typeof previewInputSchema> | { kind: 'telegram-file'; fileI
 type Pending = {
   input?: Input;
   profile: TelegramProfile;
+  backend: BackendConnection;
   preview?: SpeedPreview;
   abort: AbortController;
 };
@@ -121,7 +124,14 @@ export class TelegramService {
   update(input: unknown) {
     return this.serial(async () => {
       const before = this.store.settings();
-      const after = this.store.update(input);
+      const patch = telegramSettingsPatchSchema.parse(input);
+      const profile = patch.profile ?? before.profile;
+      if ((patch.enabled ?? before.enabled) || patch.profile?.backendId) {
+        if (!profile.backendId)
+          throw new AppError('MIAOSPEED_UNCONFIGURED', '请先选择 Telegram 测速服务。', 400);
+        this.speed.captureBackend(profile.backendId, profile.settings.nodeCore);
+      }
+      const after = this.store.update(patch);
       for (const task of this.store.all()) {
         if (!after.enabled || !after.allowedUserIds.includes(task.userId)) {
           if (unfinished(task)) this.cancel(task.id);
@@ -417,7 +427,12 @@ export class TelegramService {
       return;
     }
     let input: Input;
+    const profile = structuredClone(this.store.settings().profile);
+    let backend: BackendConnection;
     try {
+      if (!profile.backendId)
+        throw new AppError('MIAOSPEED_UNCONFIGURED', '请先选择 Telegram 测速服务。', 400);
+      backend = this.speed.captureBackend(profile.backendId, profile.settings.nodeCore);
       if (message.document) {
         if ((message.document.file_size ?? 0) > MAX_BYTES)
           throw new AppError('INPUT_LIMIT_EXCEEDED', '配置文件不能超过 4 MiB。', 413);
@@ -450,7 +465,8 @@ export class TelegramService {
     if (!created) return;
     this.queue.set(task.id, {
       input,
-      profile: structuredClone(this.store.settings().profile),
+      profile,
+      backend,
       abort: new AbortController(),
     });
     await this.progress(task.id);
@@ -521,6 +537,7 @@ export class TelegramService {
     const pending = this.queue.get(taskId);
     pending?.abort.abort();
     if (pending) {
+      pending.backend.token = '';
       pending.input = undefined;
       if (pending.preview) this.speed.input.discard([pending.preview.id]);
     }
@@ -572,6 +589,7 @@ export class TelegramService {
     for (const [key, pending] of this.queue) {
       const task = this.store.get(key);
       if (task.state === 'queued' && Date.parse(task.expiresAt) <= this.now()) {
+        pending.backend.token = '';
         pending.abort.abort();
         pending.input = undefined;
         if (pending.preview) this.speed.input.discard([pending.preview.id]);
@@ -678,6 +696,7 @@ export class TelegramService {
       const report = await this.speed.start(
         {
           name: 'Telegram ' + taskId.slice(0, 8),
+          backendId: pending.backend.backend.id,
           settings: pending.profile.settings,
           metrics: pending.profile.metrics,
           scripts: selected,
@@ -689,6 +708,7 @@ export class TelegramService {
         },
         'telegram',
         reportId,
+        pending.backend,
       );
       this.activeId = taskId;
       this.patch(taskId, {
@@ -699,6 +719,7 @@ export class TelegramService {
       if (pending.abort.signal.aborted || !this.permitted(this.store.get(taskId)))
         this.speed.cancel(reportId);
       this.queue.delete(taskId);
+      pending.backend.token = '';
       pending.input = undefined;
       pending.preview = undefined;
     } catch (error) {
@@ -713,6 +734,7 @@ export class TelegramService {
       if (pending.preview) this.speed.input.discard([pending.preview.id]);
       pending.preview = undefined;
       pending.input = undefined;
+      pending.backend.token = '';
       this.queue.delete(taskId);
       this.patch(taskId, {
         state: this.closed ? 'interrupted' : pending.abort.signal.aborted ? 'cancelled' : 'failed',
@@ -810,6 +832,7 @@ export class TelegramService {
     await this.control;
     this.connection.abort();
     for (const [key, pending] of this.queue) {
+      pending.backend.token = '';
       pending.abort.abort();
       pending.input = undefined;
       if (pending.preview) this.speed.input.discard([pending.preview.id]);

@@ -122,6 +122,52 @@ async function accepted(f, updateId, value, userId = 101) {
   return f.telegramStore.all().find((task) => task.updateId === updateId);
 }
 
+test(
+  'Telegram queued remote jobs keep their submitted connection after edits, deletion and preset changes',
+  { timeout: 45000 },
+  async (t) => {
+    const f = await setup(t);
+    const scripts = await f.miaospeedScripts.put({
+      name: 'Queue identity fixture',
+      content: "function handler(){return {text:'remote queue measured'};}",
+    });
+    const script = scripts.scripts.find((s) => s.name === 'Queue identity fixture');
+    const registry = f.miaospeedStore.backends;
+    const remote = registry
+      .put({ name: 'Queued location', url: f.config.miaospeedUrl, token: f.config.miaospeedToken })
+      .backends.find((b) => b.kind === 'remote');
+    const release = f.testActivity.acquire('kernels');
+    t.after(release);
+    await f.enable({ ...profile([script.id]), metrics: [], backendId: remote.id });
+    const task = await accepted(f, 1, content);
+    const queued = f.service.queue.get(task.id);
+    assert.equal(queued.backend.backend.id, remote.id);
+    registry.put(
+      {
+        name: 'Different location',
+        url: 'ws://unused.invalid',
+        token: 'changed-public-test-token',
+      },
+      remote.id,
+    );
+    registry.remove(remote.id);
+    await f.service.update({
+      profile: { ...profile([script.id]), metrics: [], backendId: 'environment' },
+    });
+    release();
+    await waitFor(() => f.telegramStore.get(task.id).state === 'completed', 30000);
+    const report = f.miaospeedStore.get(f.telegramStore.get(task.id).reportId);
+    assert.equal(report.backend.id, remote.id);
+    assert.equal(report.backend.name, 'Queued location');
+    assert.equal(report.backend.url, f.config.miaospeedUrl);
+    assert.equal(report.results[0].measurements[0].value, 'remote queue measured');
+    assert.equal(queued.backend.token, '');
+    assert.ok(!JSON.stringify(report).includes(f.config.miaospeedToken));
+    assert.ok(!JSON.stringify(f.telegramStore.all()).includes(f.config.miaospeedToken));
+    assert.equal(f.service.queue.size, 0);
+  },
+);
+
 function taskDatabase(t) {
   const db = new Database(':memory:');
   db.exec('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)');
@@ -174,10 +220,24 @@ function legacyTasks(db, tasks) {
 
 async function pollingService(t, store, peer) {
   // Exercise real polling and intake without starting a measurement worker in these protocol tests.
-  const service = new TelegramService(store, undefined, {
-    client: (savedToken) => new TelegramClient(savedToken, null, { apiOrigin: peer.origin }),
-    intervalMs: 60000,
-  });
+  const service = new TelegramService(
+    store,
+    {
+      captureBackend: () => ({
+        backend: {
+          id: 'environment',
+          name: 'Polling fixture',
+          url: 'ws://unused.invalid',
+          kind: 'environment',
+        },
+        token: 'public-polling-only',
+      }),
+    },
+    {
+      client: (savedToken) => new TelegramClient(savedToken, null, { apiOrigin: peer.origin }),
+      intervalMs: 60000,
+    },
+  );
   t.after(() => service.close());
   store.update({ enabled: true, token, allowedUserIds: ['101', '202'], profile: profile() });
   return service;

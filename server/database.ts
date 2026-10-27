@@ -91,6 +91,7 @@ export function openSettings(dataDir: string, development: boolean, client = new
     const miaospeedStore = new MiaospeedStore(database);
     const miaospeedScripts = new MiaospeedScripts(resources);
     const telegramStore = new TelegramStore(database, () => ({
+      backendId: miaospeedStore.backends.list().defaultBackendId,
       settings: miaospeedStore.settings(),
       metrics: [...metricIds],
       scriptIds: miaospeedScripts

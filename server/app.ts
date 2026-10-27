@@ -26,6 +26,11 @@ import { readJson } from './input.js';
 import { MAX_BYTES } from './shared/contracts.js';
 import { revisionSchema } from './shared/resources.js';
 import { scriptConfigSchema } from './shared/miaospeed.js';
+import {
+  backendCheckSchema,
+  backendDefaultSchema,
+  backendIdSchema,
+} from './shared/miaospeed-backends.js';
 import type { TelegramService } from './telegram.js';
 import type { NodeReporting } from './node-reporting.js';
 import type { Hy2Certificates } from './hy2-certificates.js';
@@ -257,10 +262,32 @@ export function createApp({
     await empty(c.req.raw);
     return c.json(bot().resend(c.req.param('id')));
   });
-  app.get('/api/miaospeed/status', (c) => c.json(speed().status()));
-  app.post('/api/miaospeed/status/check', async (c) => {
+  app.get('/api/miaospeed/backends', (c) => c.json(speed().store.backends.list()));
+  app.post('/api/miaospeed/backends', async (c) =>
+    c.json(speed().store.backends.put(await readJson(c.req.raw, 8192)), 201),
+  );
+  app.patch('/api/miaospeed/backends/default', async (c) => {
+    const value = backendDefaultSchema.parse(await readJson(c.req.raw, 8192));
+    return c.json(speed().store.backends.setDefault(value.backendId));
+  });
+  app.patch('/api/miaospeed/backends/:id', async (c) =>
+    c.json(
+      speed().store.backends.put(
+        await readJson(c.req.raw, 8192),
+        backendIdSchema.parse(c.req.param('id')),
+      ),
+    ),
+  );
+  app.delete('/api/miaospeed/backends/:id', async (c) => {
     await empty(c.req.raw);
-    return c.json(await speed().check());
+    return c.json(speed().store.backends.remove(backendIdSchema.parse(c.req.param('id'))));
+  });
+  app.get('/api/miaospeed/status', (c) =>
+    c.json(speed().status(backendIdSchema.optional().parse(c.req.query('backendId')))),
+  );
+  app.post('/api/miaospeed/status/check', async (c) => {
+    const value = backendCheckSchema.parse(await readJson(c.req.raw, 8192));
+    return c.json(await speed().check(value.backendId));
   });
   app.get('/api/miaospeed/settings', (c) => c.json(speed().store.settings()));
   app.patch('/api/miaospeed/settings', async (c) =>

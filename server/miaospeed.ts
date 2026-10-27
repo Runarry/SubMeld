@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { AppError } from './errors.js';
 import type { Config } from './config.js';
@@ -9,6 +9,7 @@ import { MiaospeedClient, type Matrix } from './miaospeed-client.js';
 import { MiaospeedInput } from './miaospeed-input.js';
 import { MiaospeedScripts, backendScript } from './miaospeed-scripts.js';
 import { MiaospeedStore } from './miaospeed-store.js';
+import type { BackendConnection } from './miaospeed-backends.js';
 import { startBridge } from './miaospeed-bridge.js';
 import { measurements } from './miaospeed-results.js';
 import { publicAddress, resolveSource } from './probe-address.js';
@@ -79,6 +80,20 @@ export async function validateTargets(
   }
 }
 type ReportValidity = { checkedAt: number; staleRows: Set<number> };
+type BackendStatus = {
+  connected: boolean;
+  version: string | null;
+  checkedAt: string | null;
+  error: string | null;
+};
+const emptyStatus = (): BackendStatus => ({
+  connected: false,
+  version: null,
+  checkedAt: null,
+  error: null,
+});
+const connectionKey = (connection: BackendConnection) =>
+  createHash('sha256').update(JSON.stringify(connection)).digest('hex');
 
 export class MiaospeedTester {
   private currentId: string | null = null;
@@ -89,12 +104,7 @@ export class MiaospeedTester {
   private closing: Promise<void> | undefined;
   private abort = new AbortController();
   private closed = false;
-  private statusValue = {
-    connected: false,
-    version: null as string | null,
-    checkedAt: null as string | null,
-    error: null as string | null,
-  };
+  private statuses = new Map<string, { key: string; value: BackendStatus }>();
   readonly client: MiaospeedClient;
   constructor(
     readonly store: MiaospeedStore,
@@ -109,20 +119,58 @@ export class MiaospeedTester {
     >,
     private targetCheck = validateTargets,
   ) {
+    store.backends.configure(config.miaospeedUrl, config.miaospeedToken);
     this.client = new MiaospeedClient(config.miaospeedUrl, config.miaospeedToken);
   }
-  status() {
+  captureBackend(id: string | undefined, core: SpeedSettings['nodeCore']): BackendConnection {
+    const connection = this.store.backends.capture(id);
+    if (connection.backend.kind === 'remote' && core !== 'native')
+      throw new AppError(
+        'MIAOSPEED_CORE_UNSUPPORTED',
+        '远端测速服务仅支持 miaospeed 内置 Mihomo，请修改执行内核。',
+        422,
+      );
+    return connection;
+  }
+  private clientFor(connection: BackendConnection) {
+    return connection.backend.kind === 'environment'
+      ? this.client
+      : new MiaospeedClient(connection.backend.url, connection.token);
+  }
+  private saveStatus(connection: BackendConnection, value: BackendStatus) {
+    // A late response must not replace the status of edited or deleted configuration.
+    try {
+      const current = this.store.backends.capture(connection.backend.id);
+      if (connectionKey(current) === connectionKey(connection))
+        this.statuses.set(connection.backend.id, { key: connectionKey(connection), value });
+    } catch {
+      /* The service may have been deleted while this task ran. */
+    }
+  }
+  status(id?: string) {
+    let connection: BackendConnection | undefined;
+    let value = emptyStatus();
+    try {
+      connection = this.store.backends.capture(id);
+      const cached = this.statuses.get(connection.backend.id);
+      if (cached?.key === connectionKey(connection)) value = cached.value;
+    } catch (error) {
+      value.error = error instanceof AppError ? error.message : '测速服务配置无效。';
+    }
     return {
-      ...this.statusValue,
-      configured: this.client.configured(),
+      ...value,
+      backendId: connection?.backend.id ?? null,
+      configured: !!connection,
       apiVersion: 3 as const,
-      uploadEnabled: this.client.configured(),
+      uploadEnabled: null,
       active: this.activity.current(),
     };
   }
-  async check() {
+  async check(id?: string) {
+    const connection = this.store.backends.capture(id);
+    const client = this.clientFor(connection);
     try {
-      const value = await this.client.run(
+      const value = await client.run(
         this.store.settings(),
         [],
         [],
@@ -131,21 +179,24 @@ export class MiaospeedTester {
         undefined,
         true,
       );
-      this.statusValue = {
+      this.saveStatus(connection, {
         connected: true,
         version: value.version,
         checkedAt: new Date().toISOString(),
         error: null,
-      };
+      });
     } catch (error) {
-      this.statusValue = {
-        ...this.statusValue,
+      this.saveStatus(connection, {
+        ...emptyStatus(),
         connected: false,
         checkedAt: new Date().toISOString(),
         error: error instanceof AppError ? error.message : '后端检查失败。',
-      };
+      });
+    } finally {
+      connection.token = '';
+      if (connection.backend.kind === 'remote') client.clearCredentials();
     }
-    return this.status();
+    return this.status(connection.backend.id);
   }
   private checkReport(report: SpeedReport) {
     const pending = this.reportChecks.get(report.id);
@@ -217,7 +268,12 @@ export class MiaospeedTester {
       throw error;
     }
   }
-  async start(input: unknown, origin: SpeedReport['origin'] = 'web', reportId = randomUUID()) {
+  async start(
+    input: unknown,
+    origin: SpeedReport['origin'] = 'web',
+    reportId = randomUUID(),
+    capturedBackend?: BackendConnection,
+  ) {
     if (this.closed) throw new AppError('TEST_UNAVAILABLE', '测试服务已停止。', 503);
     const value = speedRequestSchema.parse(input),
       settings = validateSpeedSettings(value.settings);
@@ -227,9 +283,17 @@ export class MiaospeedTester {
       new Set(value.scripts.map((s) => s.id)).size !== value.scripts.length
     )
       throw new AppError('INVALID_REQUEST', '测试对象或脚本不能重复。', 400);
-    if (!this.client.configured())
-      throw new AppError('MIAOSPEED_UNCONFIGURED', '请先配置 miaospeed 后端。', 503);
+    const connection = capturedBackend
+      ? structuredClone(capturedBackend)
+      : this.captureBackend(value.backendId, settings.nodeCore);
+    if (connection.backend.kind === 'remote' && settings.nodeCore !== 'native')
+      throw new AppError(
+        'MIAOSPEED_CORE_UNSUPPORTED',
+        '远端测速服务仅支持 miaospeed 内置 Mihomo，请修改执行内核。',
+        422,
+      );
     const release = this.activity.acquire('miaospeed');
+    const client = this.clientFor(connection);
     this.abort = new AbortController();
     const signal = this.abort.signal;
     let resolveReady!: (report: SpeedReport) => void;
@@ -263,6 +327,7 @@ export class MiaospeedTester {
           createdAt: new Date().toISOString(),
           finishedAt: null,
           backendVersion: null,
+          backend: connection.backend,
           settings,
           metrics: value.metrics,
           scripts: scripts.map(({ id, name, revision, source }) => ({
@@ -367,7 +432,7 @@ export class MiaospeedTester {
                   this.store.saveRow(report.id, row);
                   this.store.save(report);
                 };
-                const result = await this.client.run(
+                const result = await client.run(
                   settings,
                   [{ Name: name, Payload: payload }],
                   matrices,
@@ -378,18 +443,18 @@ export class MiaospeedTester {
                 if (result.slots.length !== 1)
                   throw new AppError('MIAOSPEED_PROTOCOL', '后端返回的节点数量与请求不一致。', 502);
                 update(result.slots[0]!, result.version);
-                this.statusValue = {
+                this.saveStatus(connection, {
                   connected: true,
                   version: result.version,
                   checkedAt: new Date().toISOString(),
                   error: null,
-                };
+                });
                 const entry = bridge ? node.raw : null;
                 if (entry && value.metrics.includes('GEOIP_INBOUND')) {
                   const entryMetric = row.measurements.find((m) => m.id === 'GEOIP_INBOUND')!;
                   try {
                     const entryPayload = await this.input.payload(entry, 'node-entry', signal);
-                    const entryResult = await this.client.run(
+                    const entryResult = await client.run(
                       settings,
                       [{ Name: 'node-entry', Payload: entryPayload }],
                       [{ Type: 'GEOIP_INBOUND', Params: '' }],
@@ -444,6 +509,11 @@ export class MiaospeedTester {
                     : '测试无法完成，未将未知结果视为成功。';
                 row.stale = row.state === 'stale';
                 if (error instanceof AppError && error.code.startsWith('MIAOSPEED_')) {
+                  this.saveStatus(connection, {
+                    ...emptyStatus(),
+                    checkedAt: new Date().toISOString(),
+                    error: row.message,
+                  });
                   report.state = 'failed';
                   report.error = row.message;
                 }
@@ -516,6 +586,8 @@ export class MiaospeedTester {
             this.store.save(report);
           });
       } finally {
+        connection.token = '';
+        if (connection.backend.kind === 'remote') client.clearCredentials();
         captured.length = 0;
         try {
           await lease?.release();

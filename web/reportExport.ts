@@ -6,7 +6,7 @@ import {
   type SpeedReport,
   type SpeedRow,
 } from '../server/shared/miaospeed';
-import { reportCsv, reportTitle } from '../server/shared/report-export';
+import { reportBackend, reportCsv, reportTitle } from '../server/shared/report-export';
 
 const measurementTokens: Record<Measurement['status'], string> = {
   measured: 'measured',
@@ -68,6 +68,7 @@ export async function exportPng(
   page: number,
 ) {
   const parameters = [
+    reportBackend(report),
     `下行 ${report.settings.downloadSeconds}s × ${report.settings.downloadThreads} · 上行 ${report.settings.uploadSeconds}s × ${report.settings.uploadThreads} · Ping ${report.settings.pingCount} 次 · 第 ${page + 1} 页`,
     `重试 ${report.settings.retries} · 请求超时 ${report.settings.requestTimeoutMs}ms · 任务上限 ${report.settings.timeoutSeconds}s`,
     'HTTPS 目标：' + report.settings.pingUrl,

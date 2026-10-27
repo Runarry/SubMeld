@@ -19,6 +19,8 @@ const sources = [
   'Dockerfile',
   'compose.yaml',
   'compose.dev.yaml',
+  'compose.central.yaml',
+  'compose.miaospeed.yaml',
   'eslint.config.js',
   'vite.config.ts',
   'playwright.config.ts',

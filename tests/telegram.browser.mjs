@@ -117,6 +117,7 @@ test('Telegram saves an independent complete preset and handles write-only secre
     expect(patch.proxyUrl).toContain(replacementProxySecret);
     const stored = await api(page, '/api/telegram/settings');
     expect(stored.profile).toEqual({
+      backendId: 'environment',
       settings: {
         ...webSettings,
         nodeCore: 'xray',

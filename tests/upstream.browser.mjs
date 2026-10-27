@@ -328,8 +328,8 @@ test('nodes, test center, support files and test settings remain directly access
   await expect(page.getByRole('heading', { name: '测试中心', exact: true })).toBeVisible();
   await page.goto('/submeld/#/koipy');
   await expect(page).toHaveURL(/#\/tests$/);
-  await page.getByRole('button', { name: '后端状态', exact: true }).click();
-  await page.getByRole('button', { name: '检查后端连接', exact: true }).click();
+  await page.getByRole('button', { name: '测速服务', exact: true }).click();
+  await page.getByRole('button', { name: '检查连接 部署配置服务', exact: true }).click();
   await expect(page.getByText('连接：可用', { exact: false })).toBeVisible();
   await page.screenshot({ path: info.outputPath('miaospeed-status.png'), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(

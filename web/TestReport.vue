@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { reportBackend } from '../server/shared/report-export';
 import { computed, ref, watch } from 'vue';
 import {
   metricDefinitions,
@@ -104,6 +105,7 @@ async function png() {
           {{ report.backendVersion || '待返回' }} · 节点内核
           {{ speedCoreLabels[report.settings.nodeCore] }}
         </p>
+        <p class="muted" style="overflow-wrap: anywhere">{{ reportBackend(report) }}</p>
       </div>
       <span class="report-state">{{ labels[report.state] }}</span>
     </div>

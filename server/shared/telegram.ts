@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { metricIdSchema, metricIds, speedSettingsSchema } from './miaospeed.js';
+import { backendIdSchema } from './miaospeed-backends.js';
 
 export const telegramUserIdSchema = z
   .string()
@@ -7,6 +8,7 @@ export const telegramUserIdSchema = z
   .refine((value) => Number.isSafeInteger(Number(value)), '请输入 Telegram 数字用户 ID。');
 export const telegramProfileSchema = z
   .strictObject({
+    backendId: backendIdSchema.nullable().default('environment'),
     settings: speedSettingsSchema,
     metrics: z
       .array(metricIdSchema)

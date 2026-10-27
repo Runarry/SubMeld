@@ -23,10 +23,12 @@ import {
 } from '../server/shared/telegram';
 import { formatTime } from './format';
 import ListPagination from './ui/ListPagination.vue';
+import type { BackendView } from '../server/shared/miaospeed-backends';
 
 const props = defineProps<{
   api: (path: string, body?: unknown, method?: string) => Promise<unknown>;
   scripts: TestScript[];
+  backends: BackendView[];
 }>();
 const emit = defineEmits<{ report: [id: string] }>();
 const configuration = ref<TelegramSettingsView | null>(null),
@@ -52,6 +54,9 @@ const status = ref<TelegramStatus | null>(null),
   failed = ref(false),
   pollError = ref('');
 const enabledScripts = computed(() => props.scripts.filter((script) => script.enabled));
+const selectedBackend = computed(() =>
+  props.backends.find((backend) => backend.id === profile.value.backendId),
+);
 const unavailableScripts = computed(
   () =>
     profile.value.scriptIds.filter((id) => !enabledScripts.value.some((s) => s.id === id)).length,
@@ -120,6 +125,10 @@ async function save() {
     if (enabled.value && (clearToken.value || (!token.value.trim() && !previous.tokenConfigured)))
       throw new Error('启用 Telegram 前请设置 Bot Token。');
     const checkedProfile = telegramProfileSchema.safeParse(profile.value);
+    if (enabled.value && !selectedBackend.value?.tokenConfigured)
+      throw new Error('请选择可用的 Telegram 测速服务。');
+    if (selectedBackend.value?.kind === 'remote' && profile.value.settings.nodeCore !== 'native')
+      throw new Error('远端测速服务仅支持 miaospeed 内置 Mihomo，请修改执行内核。');
     if (!checkedProfile.success)
       throw new Error(
         !profile.value.metrics.length && !profile.value.scriptIds.length
@@ -298,8 +307,33 @@ onBeforeUnmount(() => {
         <p class="muted">首次从网页默认参数初始化，之后独立保存；每个新任务使用此预设。</p>
         <div class="test-settings-grid">
           <label
+            >Telegram 测速服务<select v-model="profile.backendId">
+              <option :value="null">请选择测速服务</option>
+              <option
+                v-if="profile.backendId && !selectedBackend"
+                :value="profile.backendId"
+                disabled
+              >
+                原服务已删除，请重新选择
+              </option>
+              <option
+                v-for="backend in backends"
+                :key="backend.id"
+                :value="backend.id"
+                :disabled="!backend.tokenConfigured"
+              >
+                {{ backend.name }}
+              </option>
+            </select></label
+          >
+          <label
             >节点执行内核<select v-model="profile.settings.nodeCore">
-              <option v-for="(label, core) in speedCoreLabels" :key="core" :value="core">
+              <option
+                v-for="(label, core) in speedCoreLabels"
+                :key="core"
+                :value="core"
+                :disabled="selectedBackend?.kind === 'remote' && core !== 'native'"
+              >
                 {{ label }}
               </option>
             </select></label

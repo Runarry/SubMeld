@@ -5,6 +5,8 @@ import NodeTestsPage from './NodeTestsPage.vue';
 import TestReport from './TestReport.vue';
 import TestScripts from './TestScripts.vue';
 import TelegramSettings from './TelegramSettings.vue';
+import MiaospeedBackends from './MiaospeedBackends.vue';
+import { backendListSchema } from '../server/shared/miaospeed-backends';
 import ListPagination from './ui/ListPagination.vue';
 import { formatTime } from './format';
 import { nodeListSchema, type NodeView, type Resource } from '../server/shared/resources';
@@ -30,6 +32,22 @@ const props = defineProps<{
   initialTab?: 'comprehensive' | 'cores';
 }>();
 const tab = ref<string>(props.initialTab ?? 'comprehensive');
+const backendList = ref<z.infer<typeof backendListSchema>>({
+  backends: [],
+  defaultBackendId: null,
+});
+const backendId = ref<string | null>(null);
+const selectedBackend = computed(() =>
+  backendList.value.backends.find((backend) => backend.id === backendId.value),
+);
+const incompatibleCore = computed(
+  () => selectedBackend.value?.kind === 'remote' && settings.value.nodeCore !== 'native',
+);
+function updateBackends(value: z.infer<typeof backendListSchema>) {
+  backendList.value = value;
+  if (backendId.value && !value.backends.some((backend) => backend.id === backendId.value))
+    backendId.value = null;
+}
 const saved = ref<TestSubject[]>([...props.subjects]),
   sourceMode = ref<'saved' | 'temporary'>('saved');
 const settings = ref(speedSettingsSchema.parse({})),
@@ -177,12 +195,16 @@ async function file(event: Event) {
 }
 async function start() {
   await act(async () => {
+    if (!backendId.value) throw new Error('请选择测速服务。');
+    if (incompatibleCore.value)
+      throw new Error('远端服务仅支持 miaospeed 内置 Mihomo，请修改执行内核。');
     const selection: ReportSelection = { kind: 'latest' };
     const request = selectReport(selection);
     try {
       const result = speedReportSchema.parse(
         await props.api('/api/miaospeed/tests', {
           name: name.value,
+          backendId: backendId.value,
           subjects: selectedSubjects.value,
           metrics: metrics.value,
           scripts: enabledScripts.value
@@ -244,15 +266,24 @@ async function readReport(selection: ReportSelection, historyLookup = false) {
 }
 async function refresh() {
   const epoch = ++pollEpoch;
+  const selectedBackendId = backendId.value;
   const selection = reportSelection;
   try {
     const [state] = await Promise.all([
-      props.api('/api/miaospeed/status'),
+      props.api(
+        '/api/miaospeed/status' +
+          (selectedBackendId ? '?backendId=' + encodeURIComponent(selectedBackendId) : ''),
+      ),
       !reportLoading && (selection.kind === 'latest' || report.value?.state === 'running')
         ? readReport(selection)
         : Promise.resolve(),
     ]);
-    if (alive && epoch === pollEpoch && reportSelection === selection)
+    if (
+      alive &&
+      epoch === pollEpoch &&
+      reportSelection === selection &&
+      backendId.value === selectedBackendId
+    )
       status.value = speedStatusSchema.parse(state);
   } catch (error) {
     if (alive && epoch === pollEpoch && reportSelection === selection)
@@ -280,6 +311,13 @@ function repeatReport() {
   if (!previous) return;
   tab.value = 'comprehensive';
   settings.value = { ...previous.settings };
+  backendId.value =
+    previous.backend &&
+    backendList.value.backends.some(
+      (backend) => backend.id === previous.backend!.id && backend.tokenConfigured,
+    )
+      ? previous.backend.id
+      : null;
   metrics.value = [...previous.metrics];
   selectedScripts.value = previous.scripts
     .filter((ref) =>
@@ -308,6 +346,7 @@ function repeatReport() {
       : '已载入报告参数和对象，请核对后开始测试。';
   if (selectedScripts.value.length !== previous.scripts.length)
     message.value += ' 部分脚本已更新或停用，请重新勾选。';
+  if (!backendId.value) message.value += ' 原测速服务已删除或历史未记录，请明确选择测速服务。';
 }
 function preset(kind: string) {
   metrics.value =
@@ -332,14 +371,21 @@ watch(tab, (value) => {
   if (value === 'history') void act(loadHistory);
   if (value === 'cores') sourceMode.value = 'saved';
 });
+watch(backendId, () => {
+  status.value = null;
+  void refresh();
+});
 onMounted(() => {
   void act(async () => {
-    const [configuration, catalog] = await Promise.all([
+    const [configuration, catalog, services] = await Promise.all([
       props.api('/api/miaospeed/settings'),
       props.api('/api/miaospeed/scripts'),
+      props.api('/api/miaospeed/backends'),
     ]);
     if (!alive) return;
     settings.value = speedSettingsSchema.parse(configuration);
+    backendList.value = backendListSchema.parse(services);
+    backendId.value = backendList.value.defaultBackendId;
     scripts.value = scriptsSchema.parse(catalog).scripts;
     if (!scripts.value.length)
       scripts.value = scriptsSchema.parse(
@@ -365,7 +411,7 @@ onBeforeUnmount(() => {
     <header class="page-header">
       <div>
         <h1>测试中心</h1>
-        <p class="muted">从当前部署位置测试节点的速度、稳定性、解锁和拓扑。</p>
+        <p class="muted">综合测试从所选测速服务执行；三内核检查在 SubMeld 主站执行。</p>
       </div>
       <span class="report-state">{{
         status?.active ? '有任务运行中' : status?.configured ? '后端已配置' : '等待后端配置'
@@ -379,7 +425,7 @@ onBeforeUnmount(() => {
           ['history', '历史报告'],
           ['scripts', '检测脚本'],
           ['telegram', 'Telegram'],
-          ['backend', '后端状态'],
+          ['backend', '测速服务'],
         ]"
         :key="item[0]"
         type="button"
@@ -562,10 +608,29 @@ onBeforeUnmount(() => {
             </button>
           </details>
           <div class="test-launch">
+            <label
+              >测速服务<select v-model="backendId">
+                <option :value="null">请选择测速服务</option>
+                <option
+                  v-for="backend in backendList.backends"
+                  :key="backend.id"
+                  :value="backend.id"
+                  :disabled="!backend.tokenConfigured"
+                >
+                  {{ backend.name
+                  }}{{ backend.id === backendList.defaultBackendId ? '（默认）' : '' }}
+                </option>
+              </select></label
+            >
             <label>报告名称<input v-model="name" maxlength="120" /></label
             ><label
               >节点执行内核<select v-model="settings.nodeCore">
-                <option v-for="(label, core) in speedCoreLabels" :key="core" :value="core">
+                <option
+                  v-for="(label, core) in speedCoreLabels"
+                  :key="core"
+                  :value="core"
+                  :disabled="selectedBackend?.kind === 'remote' && core !== 'native'"
+                >
                   {{ label }}
                 </option>
               </select></label
@@ -574,6 +639,8 @@ onBeforeUnmount(() => {
               class="primary"
               :disabled="
                 busy ||
+                !selectedBackend?.tokenConfigured ||
+                incompatibleCore ||
                 !selectedSubjects.length ||
                 (!metrics.length && !selectedScripts.length) ||
                 !!status?.active
@@ -583,6 +650,9 @@ onBeforeUnmount(() => {
               开始综合测试
             </button>
           </div>
+          <p v-if="incompatibleCore" class="error-note">
+            远端测速服务仅支持 miaospeed 内置 Mihomo，请修改节点执行内核。
+          </p>
           <p class="muted">
             节点执行内核适用于已保存节点和临时节点；REALITY 节点可选择 Xray。 每个节点的下行
             {{ settings.downloadSeconds }} 秒、上行
@@ -609,7 +679,8 @@ onBeforeUnmount(() => {
             <strong>{{ item.name }}</strong>
             <p>
               {{ formatTime(item.createdAt) }} · {{ item.completed }}/{{ item.total }} ·
-              {{ item.state }} · {{ item.origin === 'telegram' ? 'Telegram' : '网页' }}
+              {{ item.state }} · {{ item.origin === 'telegram' ? 'Telegram' : '网页' }} ·
+              {{ item.backend?.name || '测速服务：历史未记录' }}
             </p>
           </div>
           <div class="toolbar">
@@ -663,6 +734,7 @@ onBeforeUnmount(() => {
       v-if="tab === 'telegram'"
       :api="api"
       :scripts="scripts"
+      :backends="backendList.backends"
       @report="
         async (id) => {
           await viewReport(id);
@@ -670,31 +742,12 @@ onBeforeUnmount(() => {
         }
       "
     />
-    <section v-if="tab === 'backend'" class="test-card">
-      <h2>miaospeed 后端</h2>
-      <p>API v3 · 上传测速已在配套容器配置中启用</p>
-      <p>
-        连接：{{ status?.connected ? '可用' : '尚未确认' }} · 实际版本：{{
-          status?.version || '未检查'
-        }}
-      </p>
-      <p v-if="status?.checkedAt">检查时间：{{ formatTime(status.checkedAt) }}</p>
-      <p v-if="status?.error" class="error-note">{{ status.error }}</p>
-      <button
-        type="button"
-        :disabled="busy"
-        @click="
-          act(async () => {
-            status = speedStatusSchema.parse(await api('/api/miaospeed/status/check', {}));
-          })
-        "
-      >
-        检查后端连接
-      </button>
-      <p class="muted">
-        后端连接与 Token 由部署环境配置。更新官方镜像后手动重建后端容器，页面会记录实际返回的版本。
-      </p>
-    </section>
+    <MiaospeedBackends
+      v-if="tab === 'backend'"
+      :api="api"
+      :value="backendList"
+      @change="updateBackends"
+    />
     <button
       v-if="report && report.state !== 'running' && (tab === 'comprehensive' || tab === 'history')"
       type="button"

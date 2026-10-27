@@ -8,6 +8,147 @@ import { randomUUID } from 'node:crypto';
 import { measurementText, speedReportSchema } from '../dist/server/shared/miaospeed.js';
 import { login, api, noOverflow } from './browser-helpers.mjs';
 
+test('manage remote services, select native execution, keep report identity and choose a Telegram preset', async ({
+  page,
+}, info) => {
+  await login(page);
+  const label = '远端服务-' + info.project.name;
+  let backendId, script;
+  try {
+    const catalog = await api(page, '/api/miaospeed/scripts', {
+      name: '服务选择脚本-' + info.project.name,
+      content: "function handler(){return {text:'远端服务验收完成'};}",
+    });
+    script = catalog.scripts.find((s) => s.name === '服务选择脚本-' + info.project.name);
+    await page.getByRole('button', { name: '测试中心', exact: true }).click();
+    await page.getByRole('button', { name: '测速服务', exact: true }).click();
+    await page.getByRole('button', { name: '添加测速服务', exact: true }).click();
+    await page.getByLabel('服务名称', { exact: true }).fill(label);
+    await page.getByLabel('WebSocket 地址', { exact: true }).fill(process.env.MIAOSPEED_URL);
+    await page.getByLabel('服务 Token', { exact: true }).fill(process.env.MIAOSPEED_TOKEN);
+    await page.getByRole('button', { name: '保存测速服务', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: '测速服务已保存' })).toBeVisible();
+    let services = await api(page, '/api/miaospeed/backends');
+    backendId = services.backends.find((b) => b.name === label).id;
+    expect(JSON.stringify(services)).not.toContain(process.env.MIAOSPEED_TOKEN);
+    await page.getByRole('button', { name: '编辑 ' + label, exact: true }).click();
+    await expect(page.getByLabel('服务 Token', { exact: true })).toHaveValue('');
+    await page.getByRole('button', { name: '保存测速服务', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: '测速服务已保存' })).toBeVisible();
+    await page.getByRole('button', { name: '检查连接 ' + label, exact: true }).click();
+    await expect(page.getByText('连接：可用', { exact: false })).toBeVisible();
+    await page.getByRole('button', { name: '设为默认 ' + label, exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: '默认测速服务已设置' })).toBeVisible();
+    await noOverflow(page);
+    await page.screenshot({ path: info.outputPath('remote-services.png'), fullPage: true });
+    await page.getByRole('button', { name: '综合测试', exact: true }).click();
+    await page.getByRole('combobox', { name: '节点执行内核', exact: true }).selectOption('xray');
+    await page.getByRole('combobox', { name: '测速服务', exact: true }).selectOption(backendId);
+    await expect(
+      page.getByText('远端测速服务仅支持 miaospeed 内置 Mihomo，请修改节点执行内核。', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: '开始综合测试', exact: true })).toBeDisabled();
+    await page.getByRole('combobox', { name: '节点执行内核', exact: true }).selectOption('native');
+    await page.getByRole('button', { name: '临时节点', exact: true }).click();
+    await page.getByLabel('节点或配置文本', { exact: true }).fill(
+      JSON.stringify({
+        proxies: [
+          {
+            name: '服务选择节点',
+            type: 'ss',
+            server: '127.0.0.1',
+            port: 9,
+            cipher: 'aes-128-gcm',
+            password: 'browser-public-fixture',
+          },
+        ],
+      }),
+    );
+    await page.getByRole('button', { name: '预览临时节点', exact: true }).click();
+    await expect(page.locator('.test-preview')).toContainText('1 项');
+    for (const box of await page.locator('.test-card .test-options input[type=checkbox]').all())
+      await box.uncheck();
+    await page.getByRole('checkbox', { name: script.name, exact: true }).check();
+    await page.getByLabel('报告名称', { exact: true }).fill(label + '报告');
+    await page.getByRole('button', { name: '开始综合测试', exact: true }).click();
+    await expect
+      .poll(async () => (await api(page, '/api/miaospeed/tests/current')).report?.state)
+      .toBe('completed');
+    const report = (await api(page, '/api/miaospeed/tests/current')).report;
+    expect(report.backend.id).toBe(backendId);
+    expect(report.results[0].measurements[0].value).toBe('远端服务验收完成');
+    await expect(page.getByRole('region', { name: '综合测试报告', exact: true })).toContainText(
+      '远端服务验收完成',
+    );
+    await expect(page.getByRole('region', { name: '综合测试报告', exact: true })).toContainText(
+      label,
+    );
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出筛选结果 CSV', exact: true }).click();
+    const csvFile = await download;
+    await csvFile.saveAs(info.outputPath('remote-report.csv'));
+    const csv = await readFile(info.outputPath('remote-report.csv'), 'utf8');
+    expect(csv).toContain(label);
+    expect(csv).toContain(backendId);
+    expect(csv).not.toContain(process.env.MIAOSPEED_TOKEN);
+    const pngDownload = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出本页 PNG', exact: true }).click();
+    await (await pngDownload).saveAs(info.outputPath('remote-export.png'));
+    await noOverflow(page);
+    await page.screenshot({ path: info.outputPath('remote-report.png'), fullPage: true });
+    await page.getByRole('button', { name: 'Telegram', exact: true }).click();
+    await page
+      .getByRole('combobox', { name: 'Telegram 测速服务', exact: true })
+      .selectOption(backendId);
+    await page.getByRole('combobox', { name: '节点执行内核', exact: true }).selectOption('native');
+    await page.getByRole('button', { name: '保存 Telegram 设置', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Telegram 设置已保存' })).toBeVisible();
+    expect((await api(page, '/api/telegram/settings')).profile.backendId).toBe(backendId);
+    await page.getByRole('button', { name: '测速服务', exact: true }).click();
+    await page.getByRole('button', { name: '删除 ' + label, exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: '测速服务已删除' })).toBeVisible();
+    services = await api(page, '/api/miaospeed/backends');
+    expect(services.defaultBackendId).toBeNull();
+    await page.getByRole('button', { name: '综合测试', exact: true }).click();
+    await page.getByRole('button', { name: '使用此报告配置重测', exact: true }).click();
+    await expect(
+      page.getByRole('combobox', { name: '测速服务', exact: true }).locator('option:checked'),
+    ).toHaveText('请选择测速服务');
+    await expect(page.getByRole('status').filter({ hasText: '请明确选择测速服务' })).toBeVisible();
+    expect((await api(page, '/api/miaospeed/reports/' + report.id)).backend.name).toBe(label);
+  } finally {
+    const telegram = await api(page, '/api/telegram/settings');
+    await api(
+      page,
+      '/api/telegram/settings',
+      {
+        enabled: false,
+        profile: {
+          ...telegram.profile,
+          backendId: 'environment',
+          settings: { ...telegram.profile.settings, nodeCore: 'native' },
+        },
+      },
+      'PATCH',
+    );
+    await api(page, '/api/miaospeed/backends/default', { backendId: 'environment' }, 'PATCH');
+    if (
+      backendId &&
+      (await api(page, '/api/miaospeed/backends')).backends.some((b) => b.id === backendId)
+    )
+      await api(page, '/api/miaospeed/backends/' + backendId, {}, 'DELETE');
+    if (script)
+      await api(
+        page,
+        '/api/miaospeed/scripts/' + script.id,
+        { revision: script.revision },
+        'DELETE',
+      );
+  }
+});
+
 test('temporary text, URL and file, script editing, reports and PNG/CSV exports', async ({
   page,
 }, info) => {
@@ -216,7 +357,7 @@ async function openControlledReports(page, reports) {
     onReport: null,
   };
   // Control report timing only; login, settings, scripts and the page use the existing server fixture.
-  await page.route('**/api/miaospeed/status', (route) => {
+  await page.route(/\/api\/miaospeed\/status(?:\?.*)?$/, (route) => {
     fixture.statusReads++;
     return route.fulfill({
       json: {

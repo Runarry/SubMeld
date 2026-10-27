@@ -151,6 +151,12 @@ Mihomo 与 sing-box 经上游转换输出；Xray 使用随项目交付、在 Sub
 
 综合测试与三内核检查同时只运行一个批次。可取消并保留部分结果；后端断线停止，重启后未结束报告标记中断。报告支持筛选、排序、延迟/速度曲线、IP/ASN 详情、手动删除、当前页 PNG 与全部筛选结果 CSV。对象变化后保留历史快照并标为过期，不覆盖当前有效结果。
 
+“测速服务”栏目可添加多台远端服务，保存名称、完整 WebSocket 地址和 Token，逐台检查连接并设置默认。综合测试按次选择服务，远端仅支持 miaospeed 内置 Mihomo；独立 Mihomo、sing-box、Xray 综合测试继续使用“部署配置服务”和主站临时 SOCKS 入口。三内核连通性检查仍在主站执行。多台服务共用现有单批次锁，不并行测速，也不在失败时自动换服务器。
+
+服务配置作为运行设置保存在 SQLite，Token 只写不回显，编辑时留空保留原值。环境变量提供的“部署配置服务”只读，升级后继续作为默认；未配置环境服务时，首次添加的服务自动成为默认。删除默认服务后需重新选择。连接检查验证 Token 与 API 响应，不表示上传、UDP 或平台检测已通过。
+
+任务提交时固定服务连接，修改或删除服务只影响新任务。报告、PNG 和 CSV 记录提交时的服务名称、地址、身份与实际后端版本，不包含 Token。旧报告显示“历史未记录”，重测需明确选择服务；已删除服务的报告仍可查看。订阅解析、目标 DNS/Fake-IP/公网地址预检和报告存储仍在主站，预检并非远端实测。
+
 测试中心每 2 秒读取最新进度，当前报告的节点有效性每 30 秒向上游核对一次；打开历史报告时立即核对。测试执行前与结果保存前仍核对真实快照，展示核对频率不影响迟到结果保护。
 
 4.7.6 没有中断已执行宏的 API。取消后立即停止后续节点并关闭临时测速入口；当前普通节点探测结束前保留批次锁，页面显示“正在取消”。断线后不再提交节点，后端已发出的请求仍可能运行到自身超时。
@@ -182,6 +188,8 @@ Mihomo 与 sing-box 经上游转换输出；Xray 使用随项目交付、在 Sub
 GeoIP 可选：将兼容的 Country MMDB 数据库放在 `$DATA_DIR/reality-scanner/Country.mmdb`（默认容器路径 `/data/reality-scanner/Country.mmdb`）。启动和实际扫描会检查是否可读；缺失或损坏不影响扫描，地区显示未知。数据库自行提供，不自动下载。任务参数、版本、计数及结构化结果存入 SQLite；临时输入在任务结束后清理，网页正文与原始 URL 不进入历史。扫描不会修改节点、机器配置或 Sub-Store 文件。
 
 ### Telegram 测速
+
+Telegram 独立预设可选择测速服务，新预设初始复制网页默认服务，旧预设继续使用环境服务。入队时固定连接及 Token，排队期间修改或删除服务不改变已提交任务；新任务引用已删除服务时明确失败，需修改预设后重发。
 
 在测试中心的“Telegram”栏目保存 Bot Token、Telegram 数字用户 ID 白名单和独立测试预设，再启用机器人。用户私聊 `/start` 可查看自己的 ID。支持可选 HTTP/HTTPS 代理及代理认证，代理仅用于 Telegram 收发消息和文件，不影响 Sub-Store、miaospeed 或测试流量。设置读取不返回 Token 或代理认证信息；留空保留原值，显式清除才删除。Token 与运行设置存放在现有私有 SQLite 数据目录中。
 
@@ -227,6 +235,35 @@ SQLite 保存账号、运行设置、测试结果、Telegram 任务归属／回�
 
 ## Linux 容器部署
 
+### 远端仅部署测速服务
+
+复制 [compose.miaospeed.yaml](compose.miaospeed.yaml) 到远端目录，并在该目录的私有 `.env` 中设置随机 `MIAOSPEED_TOKEN`。运行：
+
+```sh
+docker compose -f compose.miaospeed.yaml up -d
+```
+
+此配置只启动一个锁定版本的官方 miaospeed 容器，启用上传测速，不需要本项目源码、SubMeld、Sub-Store 或数据库。默认映射 `127.0.0.1:8765`；`MIAOSPEED_BIND` 和 `MIAOSPEED_PORT` 可调整宿主监听地址与端口。Token 可用 `openssl rand -hex 32` 生成。
+
+公网接入使用自己的 HTTPS 反向代理，将 `/miaospeed` WebSocket 转发到 `http://127.0.0.1:8765`，启用 WebSocket Upgrade，并将读写超时设为大于最长测试任务。页面填写 `wss://测速域名/miaospeed` 和对应 Token；使用有效证书，不关闭证书验证。可信内网可将 `MIAOSPEED_BIND` 设置为远端内网 IP，填写 `ws://内网IP:8765/miaospeed`。WS 不加密节点载荷，公网使用 WSS。不同机器各自保存 Token，不需要发布任何临时 SOCKS 端口。
+
+### 仅连接远端的主站
+
+使用 [compose.central.yaml](compose.central.yaml) 仅运行 SubMeld 和 Sub-Store。私有 `.env` 只需主站配置（如 `PUBLIC_ORIGIN`），不需要本地 miaospeed Token：
+
+```sh
+docker compose -f compose.central.yaml build submeld
+# 仅新安装执行初始化；已有账号跳过这一条。
+docker compose -f compose.central.yaml run --rm --no-deps submeld node dist/server/cli.js init
+docker compose -f compose.central.yaml up -d
+```
+
+登录后进入“测试中心 → 测速服务”添加远端，检查连接并选择默认服务，再开始综合测试。Telegram 在自己的预设中选择服务。
+
+已有三容器实例可直接升级 SubMeld 后添加远端，无需改动上游数据。需要改为纯远端时，在原目录保持相同 Compose 项目名称与数据卷，先用原配置 `docker compose stop miaospeed`，再运行中央配置；不要执行 `down -v`。中央配置保留现有卷名，本机三内核连通性检查仍可使用。
+
+### 同机三服务
+
 三服务配置见 [compose.yaml](compose.yaml)。SubMeld 默认将 3000 端口绑定宿主回环；使用自己的 HTTPS 反向代理，保留路径和 Cookie。`PORT` 可设置为其他 1–65535 端口，监听、端口映射及健康检查同步使用该端口。
 
 1. 准备私有 `.env`，设置实际 HTTPS PUBLIC_ORIGIN 和随机 MIAOSPEED_TOKEN。
@@ -238,7 +275,7 @@ SQLite 保存账号、运行设置、测试结果、Telegram 任务归属／回�
 
 macvlan 部署应复用已配置的外部网络，仅将 SubMeld 加入局域网；Sub-Store 和 miaospeed 保留在项目自己的 bridge 网络。将 `MIAOSPEED_BRIDGE_BIND` 设置为 SubMeld 在该 bridge 网络上的固定 IPv4，使三内核临时 SOCKS 的 TCP/UDP 仅监听内部地址；`MIAOSPEED_BRIDGE_HOST` 则填写 miaospeed 可达的该地址或服务名。macvlan 不需要发布宿主机端口。持久化数据可通过绑定挂载放在项目目录，SubMeld 数据目录需允许容器的 node 用户（UID 1000）读写。
 
-网页不接触 miaospeed Token，不挂载 Docker socket。备份时停止服务并保存 Sub-Store 卷、账号与测试报告卷、私有环境配置；已有 Koipy 配置目录保留。旧 `#/koipy` 链接进入测试中心。
+网页仅在新增或修改服务时提交 miaospeed Token，读取配置不回显，测速连接由服务端建立，不挂载 Docker socket。备份时停止服务并保存 Sub-Store 卷、账号与测试报告卷、私有环境配置；已有 Koipy 配置目录保留。旧 `#/koipy` 链接进入测试中心。
 
 密码重置需先停止 SubMeld：开发使用 `pnpm admin:reset-password --dev`，容器使用 `docker compose run --rm --no-deps submeld node dist/server/cli.js reset-password`。
 

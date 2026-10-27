@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AppError } from './errors.js';
 import { storedSpeedSettings } from './legacy-test-data.js';
 import { record } from './converter/model.js';
+import { MiaospeedBackends } from './miaospeed-backends.js';
 import {
   speedReportSchema,
   speedRowSchema,
@@ -36,7 +37,9 @@ function legacyProgress<T extends z.infer<typeof reportSummarySchema>>(report: T
 }
 
 export class MiaospeedStore {
+  readonly backends: MiaospeedBackends;
   constructor(private db: Database.Database) {
+    this.backends = new MiaospeedBackends(db);
     db.exec(
       'CREATE TABLE IF NOT EXISTS speed_reports(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,metadata TEXT NOT NULL); CREATE TABLE IF NOT EXISTS speed_results(report_id TEXT NOT NULL REFERENCES speed_reports(id) ON DELETE CASCADE,position INTEGER NOT NULL,result TEXT NOT NULL,PRIMARY KEY(report_id,position));',
     );

@@ -1,0 +1,18 @@
+services:
+  miaospeed:
+    image: airportr/miaospeed@sha256:16c7181c35f2f43f55bfa2b14dc73b43feb5bf7eaea6cfa21a716a31a60b6659
+    dns: [223.5.5.5, 1.1.1.1]
+    ports:
+      - '${MIAOSPEED_BIND:-127.0.0.1}:${MIAOSPEED_PORT:-8765}:8765'
+    command:
+      [
+        'server',
+        '-bind',
+        '0.0.0.0:8765',
+        '-path',
+        'miaospeed',
+        '-token',
+        '${MIAOSPEED_TOKEN:?Set MIAOSPEED_TOKEN}',
+        '-upload',
+      ]
+    restart: unless-stopped

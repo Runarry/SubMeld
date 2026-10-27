@@ -17,6 +17,7 @@ import { AppError } from '../dist/server/errors.js';
 import { TestActivity } from '../dist/server/test-activity.js';
 import { MiaospeedInput } from '../dist/server/miaospeed-input.js';
 import { MiaospeedStore } from '../dist/server/miaospeed-store.js';
+import { MiaospeedBackends } from '../dist/server/miaospeed-backends.js';
 import { launchBridge, freeBridgePort } from '../dist/server/miaospeed-bridge.js';
 import { measurements } from '../dist/server/miaospeed-results.js';
 import { backendScript, bundledScripts } from '../dist/server/miaospeed-scripts.js';
@@ -31,6 +32,8 @@ import { newSubscription } from '../dist/server/shared/subscriptions.js';
 import Database from 'better-sqlite3';
 
 function lifecycleFixture() {
+  const backendDb = new Database(':memory:');
+  backendDb.exec('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)');
   const calls = {
     acquire: 0,
     release: 0,
@@ -55,6 +58,7 @@ function lifecycleFixture() {
   };
   let saved;
   const store = {
+    backends: new MiaospeedBackends(backendDb),
     create(report) {
       calls.create++;
       saved = structuredClone(report);
@@ -94,6 +98,7 @@ function lifecycleFixture() {
     },
     matches: () => true,
     close() {
+      backendDb.close();
       calls.close++;
       assert.equal(activity.current(), null, 'Input must outlive the whole batch');
     },
