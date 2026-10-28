@@ -200,7 +200,7 @@ export const speedStatusSchema = z.strictObject({
 export function measurementText(value: Measurement) {
   if (value.value === null) return value.message || '未知';
   if (typeof value.value === 'number') {
-    if (value.unit === 'B/s') return (value.value / 1048576).toFixed(2) + ' MiB/s';
+    if (value.unit === 'B/s') return ((value.value * 8) / 1_000_000).toFixed(2) + ' Mbps';
     return String(Math.round(value.value * 100) / 100) + (value.unit ? ' ' + value.unit : '');
   }
   return value.value;

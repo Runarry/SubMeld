@@ -204,7 +204,8 @@ test('shared CSV keeps all rows, chosen metrics/scripts, units, raw samples and 
     assert.equal(records[index + 3][2], row.state);
     assert.deepEqual(JSON.parse(records[index + 3].at(-1)), row.measurements);
   }
-  assert.equal(records[3][7], '2.00 MiB/s');
+  assert.equal(records[3][7], '16.78 Mbps');
+  assert.equal(records[3][8], '8.39 Mbps');
   assert.equal(records[4][3], '是');
   assert.equal(records[4][4], 'Xray');
   assert.equal(records[3][4], 'Xray');
@@ -305,7 +306,7 @@ test('PNG pages decode and cover every node and selected column with Chinese, em
     '已取消',
     '快照已过期',
     'Xray 26.9.27',
-    '2.00 MiB/s',
+    '16.78 Mbps',
     '完整参数、原始单位、采样及 IP/ASN 拓扑',
   ])
     assert.ok(contents.includes(value), value);

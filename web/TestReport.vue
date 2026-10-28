@@ -226,7 +226,11 @@ async function png() {
               />
             </svg>
             <p class="sample-values">
-              {{ metric.samples.join(' / ') }} {{ metric.unit }}
+              {{
+                metric.unit === 'B/s'
+                  ? metric.samples.map((value) => measurementText({ ...metric, value })).join(' / ')
+                  : metric.samples.join(' / ') + ' ' + metric.unit
+              }}
             </p></template
           >
           <ul v-if="metric.geo.length">

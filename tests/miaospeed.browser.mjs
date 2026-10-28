@@ -407,7 +407,7 @@ async function openControlledReports(page, reports) {
   return fixture;
 }
 
-test('report cells preserve data colors and PNG uses current theme colors and fonts', async ({
+test('report cells and PNG use Mbps and preserve data colors and theme fonts', async ({
   page,
 }, info) => {
   const cases = [
@@ -459,7 +459,24 @@ test('report cells preserve data colors and PNG uses current theme colors and fo
       },
     ],
   });
+  report.metrics.push('SPEED_PER_SECOND');
+  report.results[0].measurements.unshift({
+    id: 'SPEED_PER_SECOND',
+    label: '逐秒下行',
+    unit: 'B/s',
+    status: 'measured',
+    value: 1_000_000,
+    samples: [0, 125_000, 1_000_000],
+    geo: [],
+    color: null,
+    message: '',
+  });
   await openControlledReports(page, [report]);
+  await expect(page.locator('.report-scroll tbody td').first()).toHaveText('8.00 Mbps');
+  await page.getByRole('button', { name: report.results[0].name, exact: true }).click();
+  await expect(page.locator('.sample-values')).toHaveText('0.00 Mbps / 1.00 Mbps / 8.00 Mbps');
+  await noOverflow(page);
+  await page.screenshot({ path: info.outputPath('speed-mbps.png'), fullPage: true });
   const expected = await page.evaluate(() => {
     const overrides = {
       '--bg': '#d9e4ef',
@@ -509,13 +526,13 @@ test('report cells preserve data colors and PNG uses current theme colors and fo
   });
   const cells = page.locator('.report-scroll tbody td');
   for (const [index, item] of cases.entries()) {
-    await expect(cells.nth(index)).toHaveCSS(
+    await expect(cells.nth(index + 1)).toHaveCSS(
       'background-color',
       item.color
         ? `rgb(${[1, 3, 5].map((start) => parseInt(item.color.slice(start, start + 2), 16)).join(', ')})`
         : expected.colors[item.backgroundToken].css,
     );
-    await expect(cells.nth(index)).toHaveCSS('color', expected.colors[item.textToken].css);
+    await expect(cells.nth(index + 1)).toHaveCSS('color', expected.colors[item.textToken].css);
   }
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出本页 PNG', exact: true }).click();
@@ -537,6 +554,7 @@ test('report cells preserve data colors and PNG uses current theme colors and fo
     window.restoreReportDrawing();
     return window.reportDrawing;
   });
+  expect(drawn.some((item) => item.text === '逐秒下行: 8.00 Mbps')).toBe(true);
   expect(pixel(0, 0)).toBe(expected.colors['--bg'].canvas);
   expect(drawn[0]).toMatchObject({
     text: report.name,
