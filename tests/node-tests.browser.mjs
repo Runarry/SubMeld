@@ -27,6 +27,74 @@ async function startBatch(page) {
   return (await started.json()).id;
 }
 
+test('SS2022 single-key nodes are selectable and invalid keys show a specific reason', async ({
+  page,
+}, info) => {
+  await login(page);
+  const methods = [
+    '2022-blake3-aes-128-gcm',
+    '2022-blake3-aes-256-gcm',
+    '2022-blake3-chacha20-poly1305',
+  ];
+  const proxies = methods.map((cipher, i) => ({
+    type: 'ss',
+    name: 'SS2022-' + i,
+    server: 'example.com',
+    port: 443,
+    cipher,
+    password: Buffer.alloc(i === 0 ? 16 : 32, 251).toString('base64'),
+  }));
+  proxies.push({ ...proxies[0], name: 'invalid-key', password: 'invalid-public-key!' });
+  const resource = await api(page, '/api/nodes', {
+    name: 'SS2022-' + info.project.name,
+    source: 'local',
+    content: JSON.stringify({ proxies }),
+  });
+  try {
+    await page.getByRole('button', { name: '刷新上游', exact: true }).click();
+    await page.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
+    await expect(page.locator('.node-row')).toHaveCount(4);
+    const invalid = page.locator('.node-row').filter({ hasText: 'invalid-key' });
+    await expect(invalid).toContainText('标准 Base64');
+    const invalidNode = (await api(page, '/api/nodes?resourceId=' + resource.id)).nodes.find(
+      (item) => item.name === 'invalid-key',
+    );
+    expect(invalidNode.testable).toBe(false);
+    const rejected = await page.request.post('/api/node-tests', {
+      headers: { Origin: 'http://127.0.0.1:3210', 'X-SubMeld-Request': '1' },
+      data: {
+        subjects: [
+          {
+            kind: 'node',
+            resourceId: invalidNode.resourceId,
+            revision: invalidNode.revision,
+            snapshotHash: invalidNode.snapshotHash,
+            nodeIndex: invalidNode.nodeIndex,
+          },
+        ],
+      },
+    });
+    expect(rejected.status()).toBe(422);
+    expect((await rejected.json()).message).toContain('标准 Base64');
+    for (let i = 0; i < 3; i++) {
+      await page.getByRole('checkbox', { name: '选择 SS2022-' + i, exact: true }).check();
+    }
+    await page.getByRole('button', { name: '测试所选', exact: true }).click();
+    await page.getByRole('button', { name: '三内核检查', exact: true }).click();
+    const batchId = await startBatch(page);
+    await expect
+      .poll(async () => (await api(page, '/api/node-tests/' + batchId)).state, { timeout: 20000 })
+      .toBe('completed');
+    const results = (await api(page, '/api/node-tests/' + batchId)).results;
+    expect(results).toHaveLength(9);
+    expect(results.every((result) => result.status === 'passed')).toBe(true);
+    await noOverflow(page);
+    await page.screenshot({ path: info.outputPath('ss2022-tests.png'), fullPage: true });
+  } finally {
+    await cleanup(page, { resource });
+  }
+});
+
 test('HY2 mport and certificate pins remain selectable with per-core compatibility results', async ({
   page,
 }, info) => {

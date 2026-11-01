@@ -187,7 +187,7 @@ test('invalid nodes block output until explicitly excluded', async () => {
   await assert.rejects(async () => await produceInput({ items: [] }), { code: 'EMPTY_OUTPUT' });
 });
 
-test('unsupported transports, SS2022 and missing REALITY key are rejected in native nodes', () => {
+test('unsupported transports and missing REALITY key are rejected in native nodes', () => {
   for (const patch of [
     { network: 'xhttp' },
     { 'reality-opts': {} },
@@ -197,10 +197,6 @@ test('unsupported transports, SS2022 and missing REALITY key are rejected in nat
       code: 'TARGET_UNSUPPORTED',
     });
   }
-  assert.throws(
-    () => checkedDraft({ ...toUpstream(node('ss')), cipher: '2022-blake3-aes-128-gcm' }),
-    { code: 'TARGET_UNSUPPORTED' },
-  );
 });
 
 test('Base64 has its own output cap while valid URI remains available', async () => {

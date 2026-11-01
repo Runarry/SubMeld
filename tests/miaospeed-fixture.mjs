@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { dualPort, start } from './kernel-fixture.mjs';
@@ -9,7 +10,7 @@ import { node } from './fixtures.mjs';
 import { speedSettingsSchema } from '../dist/server/shared/miaospeed.js';
 
 // Disposable real proxy/HTTP/STUN services. No personal subscriptions or public credentials.
-export async function controlledNetwork(binary, directory) {
+export async function controlledNetwork(binary, directory, method = 'aes-128-gcm') {
   const counts = { http: 0, download: 0, upload: 0, stun: 0, scripts: 0 };
   // Native HTTP ping uses LF-only headers; accept them in this controlled fixture.
   const server = createServer({ insecureHTTPParser: true }, async (req, res) => {
@@ -92,8 +93,10 @@ export async function controlledNetwork(binary, directory) {
   draft.name = 'controlled node';
   draft.server = '127.0.0.1';
   draft.port = await dualPort();
-  draft.auth.password = 'proxy-public-test-only';
-  draft.protocolOptions.method = 'aes-128-gcm';
+  draft.auth.password = method.startsWith('2022-blake3-')
+    ? randomBytes(method === '2022-blake3-aes-128-gcm' ? 16 : 32).toString('base64')
+    : 'proxy-public-test-only';
+  draft.protocolOptions.method = method;
   const proxy = await start(
     binary,
     'singbox',
@@ -104,7 +107,7 @@ export async function controlledNetwork(binary, directory) {
           type: 'shadowsocks',
           listen: '0.0.0.0',
           listen_port: draft.port,
-          method: 'aes-128-gcm',
+          method,
           password: draft.auth.password,
         },
       ],
@@ -131,7 +134,7 @@ export async function controlledNetwork(binary, directory) {
     type: 'ss',
     server: 'host.docker.internal',
     port: draft.port,
-    cipher: 'aes-128-gcm',
+    cipher: method,
     password: draft.auth.password,
     udp: true,
   };

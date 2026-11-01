@@ -1,6 +1,6 @@
 import { AppError } from '../errors.js';
 import { preflight } from './input.js';
-import { fromUpstream, record, validateDraft } from './model.js';
+import { fromUpstream, record, shadowsocksDiagnostics, validateDraft } from './model.js';
 export function checkedDraft(value: unknown, index = 0) {
   if (!record(value)) throw new AppError('TARGET_UNSUPPORTED', '节点结构无法完整转换。', 422);
   const metadata = new Set([
@@ -38,6 +38,16 @@ export function checkedDraft(value: unknown, index = 0) {
       422,
       diagnostics,
     );
+  if (raw.type === 'ss') {
+    const invalid = shadowsocksDiagnostics(raw.cipher, raw.password, index);
+    if (invalid.length)
+      throw new AppError(
+        'TARGET_UNSUPPORTED',
+        '节点「' + String(value.name ?? index + 1) + '」：' + invalid[0]!.message,
+        422,
+        invalid,
+      );
+  }
   try {
     const draft = fromUpstream(value, index);
     const invalid = validateDraft(draft, index);

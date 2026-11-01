@@ -24,10 +24,20 @@ export function renderFixtures(target) {
   ).toString('base64url');
   reality.tls.shortId = '00aabb';
   reality.protocolOptions.flow = 'xtls-rprx-vision';
-  for (const method of ['aes-256-gcm', 'chacha20-ietf-poly1305']) {
+  for (const method of [
+    'aes-256-gcm',
+    'chacha20-ietf-poly1305',
+    '2022-blake3-aes-128-gcm',
+    '2022-blake3-aes-256-gcm',
+    '2022-blake3-chacha20-poly1305',
+  ]) {
     const n = node('ss');
     n.name = 'SS ' + method;
     n.protocolOptions.method = method;
+    if (method.startsWith('2022-blake3-'))
+      n.auth.password = Buffer.alloc(method === '2022-blake3-aes-128-gcm' ? 16 : 32, 251).toString(
+        'base64',
+      );
     result.push(n);
   }
   for (const security of ['aes-128-gcm', 'chacha20-poly1305', 'none', 'zero']) {

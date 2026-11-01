@@ -6,6 +6,7 @@ import {
   diagnostic,
   draftSchema,
   protocols,
+  shadowsocksMethods,
   type Diagnostic,
   type NodeDraft,
 } from '../shared/contracts.js';
@@ -15,6 +16,31 @@ export function record(value: unknown): value is Record<string, unknown> {
 }
 const string = (v: unknown) => (typeof v === 'string' ? v : '');
 const object = (v: unknown): Record<string, unknown> => (record(v) ? v : {});
+export function shadowsocksDiagnostics(
+  method: unknown,
+  password: unknown,
+  i: number,
+): Diagnostic[] {
+  const fail = (message: string, field = 'auth.password') => [
+    diagnostic(i, 'TARGET_FEATURE_UNSUPPORTED', message, field),
+  ];
+  if (!shadowsocksMethods.some((supported) => supported === method))
+    return fail('此 SS 加密方式尚不支持测试或增强输出。', 'protocolOptions.method');
+  if (typeof method !== 'string' || !method.startsWith('2022-blake3-')) return [];
+  if (typeof password !== 'string') return fail('SS2022 密钥必须是 Base64 字符串。');
+  if (password.includes(':'))
+    return fail('SS2022 多用户组合密钥尚不支持测试或增强输出，请使用原生输出。');
+  if (
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(password) ||
+    password.length % 4 !== 0 ||
+    Buffer.from(password, 'base64').toString('base64') !== password
+  )
+    return fail('SS2022 密钥必须使用有效的标准 Base64 编码。');
+  const bytes = method === '2022-blake3-aes-128-gcm' ? 16 : 32;
+  if (Buffer.from(password, 'base64').length !== bytes)
+    return fail('此 SS2022 加密方式需要 Base64 解码后恰好 ' + bytes + ' 字节的密钥。');
+  return [];
+}
 export function validateDraft(node: NodeDraft, i: number): Diagnostic[] {
   const errors: Diagnostic[] = [];
   const fail = (field: string, message: string) =>
@@ -38,6 +64,8 @@ export function validateDraft(node: NodeDraft, i: number): Diagnostic[] {
   )
     fail('auth.uuid', 'UUID 格式无效。');
   if ('password' in node.auth && !node.auth.password) fail('auth.password', '认证密码不能为空。');
+  if (node.protocol === 'ss')
+    errors.push(...shadowsocksDiagnostics(node.protocolOptions.method, node.auth.password, i));
   if (['ss', 'hysteria2', 'tuic'].includes(node.protocol) && node.transport.type !== 'tcp')
     fail('transport.type', '此协议不支持选择 WS 或 gRPC 传输。');
   if (node.protocol === 'ss' && node.tls.mode !== 'none')

@@ -11,7 +11,7 @@ import {
   type Subscription,
   type SubscriptionDetail,
 } from './shared/subscriptions.js';
-export const ENGINE_VERSION = 'upstream-native-7';
+export const ENGINE_VERSION = 'upstream-native-8';
 export function createSubscriptionStore(resources: UpstreamResources, files: UpstreamFiles) {
   function get(id: string): Subscription {
     const value = files.get(id, 'plan');

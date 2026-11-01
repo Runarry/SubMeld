@@ -5,6 +5,14 @@ export const MAX_NODES = 2000;
 export const MAX_DEPTH = 32;
 export const protocols = ['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'tuic'] as const;
 export type Protocol = (typeof protocols)[number];
+export const shadowsocksMethods = [
+  'aes-128-gcm',
+  'aes-256-gcm',
+  'chacha20-ietf-poly1305',
+  '2022-blake3-aes-128-gcm',
+  '2022-blake3-aes-256-gcm',
+  '2022-blake3-chacha20-poly1305',
+] as const;
 const text = z.string().max(16384);
 const authText = z.string().max(16384);
 const tls = z.strictObject({
@@ -35,7 +43,7 @@ export const draftSchema = z.discriminatedUnion('protocol', [
     protocol: z.literal('ss'),
     auth: z.strictObject({ password: authText }),
     protocolOptions: z.strictObject({
-      method: z.enum(['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305']),
+      method: z.enum(shadowsocksMethods),
     }),
   }),
   z.strictObject({

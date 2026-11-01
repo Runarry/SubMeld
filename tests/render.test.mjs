@@ -170,7 +170,7 @@ for (const target of ['mihomo', 'singbox', 'xray'])
         if (target === 'mihomo') {
           assert.equal(n.server, d.server);
           assert.equal(n.port, d.port);
-          if ('password' in d.auth) assert.equal(n.password, TEST_PASSWORD);
+          if ('password' in d.auth) assert.equal(n.password, d.auth.password);
           else assert.equal(n.uuid, d.auth.uuid);
           if (d.transport.type === 'ws') {
             assert.equal(n['ws-opts'].path, d.transport.path);
@@ -181,7 +181,7 @@ for (const target of ['mihomo', 'singbox', 'xray'])
         } else if (target === 'singbox') {
           assert.equal(n.server, d.server);
           assert.equal(n.server_port, d.port);
-          if ('password' in d.auth) assert.equal(n.password, TEST_PASSWORD);
+          if ('password' in d.auth) assert.equal(n.password, d.auth.password);
           else assert.equal(n.uuid, d.auth.uuid);
           if (d.transport.type === 'ws') {
             assert.equal(n.transport.path, d.transport.path);
@@ -200,7 +200,7 @@ for (const target of ['mihomo', 'singbox', 'xray'])
           assert.equal(server.port, d.port);
           if (d.protocol === 'hysteria2')
             assert.equal(n.streamSettings.hysteriaSettings.auth, TEST_PASSWORD);
-          else if ('password' in d.auth) assert.equal(server.password, TEST_PASSWORD);
+          else if ('password' in d.auth) assert.equal(server.password, d.auth.password);
           else assert.equal(server.users[0].id, d.auth.uuid);
           if (d.transport.type === 'ws') {
             assert.equal(n.streamSettings.wsSettings.path, d.transport.path);
