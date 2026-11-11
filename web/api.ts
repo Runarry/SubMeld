@@ -1,5 +1,9 @@
 import { errorSchema, type Diagnostic } from '../server/shared/contracts';
 import { deleteNodesResultSchema, type DeleteNodesResult } from '../server/shared/resources';
+import {
+  subscriptionValidationSchema,
+  type SubscriptionValidation,
+} from '../server/shared/subscriptions';
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -7,6 +11,7 @@ export class ApiError extends Error {
     public status = 0,
     public code = '',
     public nodeMutation?: DeleteNodesResult,
+    public subscriptionValidation?: SubscriptionValidation,
   ) {
     super(message);
   }
@@ -32,12 +37,16 @@ export async function request(
         ? value.nodeMutation
         : undefined,
     );
+    const validation = subscriptionValidationSchema.safeParse(
+      value && typeof value === 'object' && 'validation' in value ? value.validation : undefined,
+    );
     throw new ApiError(
       error.success ? error.data.message : '服务响应无效。',
       error.success ? error.data.diagnostics : [],
       response.status,
       error.success ? error.data.code : '',
       mutation.success ? mutation.data : undefined,
+      validation.success ? validation.data : undefined,
     );
   }
   return value;

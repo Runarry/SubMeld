@@ -145,15 +145,15 @@ test('output form selects a single native node and keeps its selection after edi
     await page.getByRole('button', { name: '添加输出方案', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '管理输出方案', exact: true });
     await dialog.getByLabel('方案名称', { exact: true }).fill('single-' + info.project.name);
-    await dialog.getByRole('combobox', { name: '输入类型', exact: true }).selectOption('node');
-    const field = dialog.getByRole('group', { name: '单个节点', exact: true });
-    await field.getByRole('combobox', { name: '所属订阅', exact: true }).selectOption(resource.id);
-    await field
-      .getByRole('combobox', { name: '单个节点节点', exact: true })
-      .selectOption({ label: b.name + ' · ss' });
-    await dialog.getByRole('button', { name: '加入输入', exact: true }).click();
-    await dialog.getByRole('button', { name: '保存方案', exact: true }).click();
-    await expect(dialog.getByRole('status')).toHaveText('方案与输出文件已保存到 Sub-Store。');
+    await dialog.getByRole('combobox', { name: '节点来源', exact: true }).selectOption(resource.id);
+    await dialog
+      .getByRole('checkbox', { name: '选择节点 ' + b.name + ' · ' + resource.name, exact: true })
+      .check();
+    await dialog.getByRole('button', { name: '加入 1 项', exact: true }).click();
+    await dialog.getByRole('button', { name: '检查并保存', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '方案与输出文件已保存到 Sub-Store。',
+    );
     plan = (await api(page, '/api/subscriptions')).subscriptions.find(
       (p) => p.name === 'single-' + info.project.name,
     ).id;
@@ -168,8 +168,10 @@ test('output form selects a single native node and keeps its selection after edi
     );
     const updatedName = 'single-edited-' + info.project.name;
     await dialog.getByLabel('方案名称', { exact: true }).fill(updatedName);
-    await dialog.getByRole('button', { name: '保存方案', exact: true }).click();
-    await expect(dialog.getByRole('status')).toHaveText('方案与输出文件已保存到 Sub-Store。');
+    await dialog.getByRole('button', { name: '检查并保存', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '方案与输出文件已保存到 Sub-Store。',
+    );
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await page.reload();
     await page
@@ -208,15 +210,18 @@ test('output form produces native files, shares immediate updates and revokes ad
     await navigate(page, '输出方案');
     await page.getByRole('button', { name: '添加输出方案', exact: true }).click();
     await page.getByLabel('方案名称', { exact: true }).fill(a.name);
-    await page.getByRole('combobox', { name: '选择输入', exact: true }).selectOption(resource.id);
-    await page.getByRole('button', { name: '加入输入', exact: true }).click();
+    await page.getByRole('tab', { name: '订阅与组合', exact: true }).click();
+    await page.getByRole('checkbox', { name: '选择来源 ' + resource.name, exact: true }).check();
+    await page.getByRole('button', { name: '加入 1 项', exact: true }).click();
     await page.getByRole('checkbox', { name: 'Xray 完整配置', exact: true }).check();
     await page.getByRole('checkbox', { name: 'sing-box 完整配置', exact: true }).check();
-    await page.getByRole('button', { name: '保存方案', exact: true }).click();
+    await page.getByRole('button', { name: '检查并保存', exact: true }).click();
     await expect(page.getByRole('heading', { name: '生成与分享', exact: true })).toBeVisible();
     plan = (await api(page, '/api/subscriptions')).subscriptions.find((p) => p.name === a.name).id;
     const dialog = page.getByRole('dialog', { name: '管理输出方案', exact: true });
-    await expect(dialog.getByRole('status')).toHaveText('方案与输出文件已保存到 Sub-Store。');
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '方案与输出文件已保存到 Sub-Store。',
+    );
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     const planRow = page.locator('.plan-row').filter({ hasText: a.name });
     await expect(planRow).toBeVisible();
@@ -228,8 +233,10 @@ test('output form produces native files, shares immediate updates and revokes ad
     await dialog.getByText('筛选与完整配置设置', { exact: true }).click();
     await dialog.getByLabel('名称前缀', { exact: true }).fill('edited-');
     await dialog.getByLabel('本机监听端口', { exact: true }).fill('12080');
-    await dialog.getByRole('button', { name: '保存方案', exact: true }).click();
-    await expect(dialog.getByRole('status')).toHaveText('方案与输出文件已保存到 Sub-Store。');
+    await dialog.getByRole('button', { name: '检查并保存', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '方案与输出文件已保存到 Sub-Store。',
+    );
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await page.reload();
     await page
@@ -268,6 +275,207 @@ test('output form produces native files, shares immediate updates and revokes ad
     await page.getByRole('button', { name: '确认撤销', exact: true }).click();
     await expect(input).toHaveCount(0);
     expect((await page.request.get(url)).status()).not.toBe(200);
+  } finally {
+    await cleanup(page, { resource, plan });
+  }
+});
+
+test('output picker keeps cross-page and cross-source selections, explains ambiguous names and preserves order', async ({
+  page,
+}, info) => {
+  await login(page);
+  const drafts = Array.from({ length: 27 }, (_, index) => ({
+    ...node('ss'),
+    name: 'batch-' + String(index).padStart(2, '0'),
+  }));
+  const duplicate = { ...node('ss'), name: 'ambiguous' };
+  const first = await api(page, '/api/nodes', {
+    name: 'batch-source-A-' + info.project.name,
+    source: 'local',
+    content: JSON.stringify({ proxies: [...drafts, duplicate, duplicate].map(toUpstream) }),
+  });
+  const second = await api(page, '/api/nodes', {
+    name: 'batch-source-B-' + info.project.name,
+    source: 'local',
+    content: JSON.stringify({ proxies: [toUpstream(drafts[1])] }),
+  });
+  const collectionName = 'batch-collection-' + info.project.name;
+  let plan;
+  let collection;
+  try {
+    await api(page, '/upstream/sub-store/api/collections', {
+      name: collectionName,
+      subscriptions: [second.upstreamName],
+    });
+    collection = (await api(page, '/api/nodes/resources')).resources.find(
+      (resource) => resource.upstreamName === collectionName,
+    );
+    await navigate(page, '输出方案');
+    await page.getByRole('button', { name: '添加输出方案', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '管理输出方案' });
+    const picker = dialog.getByRole('region', { name: '添加方案输入' });
+    const sourceFilter = picker.getByRole('combobox', { name: '节点来源', exact: true });
+    const choose = (name, resource) =>
+      picker.getByRole('checkbox', {
+        name: '选择节点 ' + name + ' · ' + resource.name,
+        exact: true,
+      });
+    await dialog.getByLabel('方案名称', { exact: true }).fill('batch-plan-' + info.project.name);
+    await sourceFilter.selectOption(first.id);
+    await choose('batch-01', first).check();
+    await choose('batch-00', first).check();
+    await picker.getByRole('button', { name: '下一页', exact: true }).click();
+    await choose('batch-26', first).check();
+    await sourceFilter.selectOption(second.id);
+    await expect(choose('batch-01', second)).toBeEnabled();
+    await picker.getByRole('checkbox', { name: '全选本页', exact: true }).check();
+    await sourceFilter.selectOption('');
+    await picker.getByLabel('搜索方案输入', { exact: true }).fill('batch-01');
+    await expect(choose('batch-01', first)).toBeEnabled();
+    await expect(choose('batch-01', first)).toBeChecked();
+    await expect(choose('batch-01', second)).toBeChecked();
+    await sourceFilter.selectOption(first.id);
+    await picker.getByLabel('搜索方案输入', { exact: true }).fill('ambiguous');
+    await expect(picker.getByText('同一来源内名称重复，请先改名', { exact: true })).toHaveCount(2);
+    await expect(
+      picker.getByRole('checkbox', { name: '选择节点 ambiguous · ' + first.name, exact: true }),
+    ).toHaveCount(2);
+    for (const checkbox of await picker
+      .getByRole('checkbox', { name: '选择节点 ambiguous · ' + first.name, exact: true })
+      .all())
+      await expect(checkbox).toBeDisabled();
+    await picker.getByRole('tab', { name: '订阅与组合', exact: true }).click();
+    await picker.getByLabel('搜索方案输入', { exact: true }).fill('');
+    await picker.getByRole('checkbox', { name: '选择来源 ' + second.name, exact: true }).check();
+    const collectionOption = picker.getByRole('checkbox', {
+      name: '选择来源 ' + collectionName,
+      exact: true,
+    });
+    await collectionOption.check();
+    await picker.getByRole('button', { name: '加入 6 项', exact: true }).click();
+    await expect(collectionOption).toBeDisabled();
+    const inputs = dialog.locator('.input-list li');
+    await expect(inputs.locator(':scope > span')).toHaveText([
+      'batch-01 · ' + first.name,
+      'batch-00 · ' + first.name,
+      'batch-26 · ' + first.name,
+      'batch-01 · ' + second.name,
+      second.name,
+      collectionName,
+    ]);
+    await page.screenshot({ path: info.outputPath('batch-output-picker.png'), fullPage: true });
+    await inputs.first().getByRole('button', { name: /^下移/ }).click();
+    await dialog.getByRole('button', { name: '检查并保存', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '方案与输出文件已保存到 Sub-Store。',
+    );
+    plan = (await api(page, '/api/subscriptions')).subscriptions.find(
+      (item) => item.name === 'batch-plan-' + info.project.name,
+    ).id;
+    const saved = await api(page, '/api/subscriptions/' + plan);
+    expect(saved.inputs).toEqual([
+      { kind: 'node', resourceId: first.id, nodeName: 'batch-00' },
+      { kind: 'node', resourceId: first.id, nodeName: 'batch-01' },
+      { kind: 'node', resourceId: first.id, nodeName: 'batch-26' },
+      { kind: 'node', resourceId: second.id, nodeName: 'batch-01' },
+      { kind: 'resource', id: second.id },
+      { kind: 'resource', id: collection.id },
+    ]);
+    const footer = await dialog.locator('.modal-footer').boundingBox();
+    expect(footer.y + footer.height).toBeLessThanOrEqual(page.viewportSize().height);
+    await noOverflow(page);
+    await page.screenshot({ path: info.outputPath('batch-output-inputs.png'), fullPage: true });
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.reload();
+    await page
+      .locator('.plan-row')
+      .filter({ hasText: saved.name })
+      .getByRole('button', { name: '管理方案', exact: true })
+      .click();
+    await expect(dialog.locator('.input-list li > span')).toHaveText([
+      'batch-00 · ' + first.name,
+      'batch-01 · ' + first.name,
+      'batch-26 · ' + first.name,
+      'batch-01 · ' + second.name,
+      second.name,
+      collectionName,
+    ]);
+  } finally {
+    await cleanup(page, { resource: first, plan });
+    if (collection)
+      await api(
+        page,
+        '/upstream/sub-store/api/collection/' + collection.upstreamName,
+        undefined,
+        'DELETE',
+      );
+    await cleanup(page, { resource: second });
+  }
+});
+
+test('output confirmation shows generation issues, preserves saved changes and blocks new shares until corrected', async ({
+  page,
+}, info) => {
+  await login(page);
+  const draft = node('ss');
+  const resource = await api(page, '/api/nodes', {
+    name: 'output-issues-' + info.project.name,
+    source: 'local',
+    content: JSON.stringify({ proxies: [toUpstream(draft)] }),
+  });
+  let plan;
+  try {
+    await navigate(page, '输出方案');
+    await page.getByRole('button', { name: '添加输出方案', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '管理输出方案' });
+    await dialog.getByLabel('方案名称', { exact: true }).fill(resource.name);
+    await dialog.getByRole('tab', { name: '订阅与组合', exact: true }).click();
+    await dialog.getByRole('checkbox', { name: '选择来源 ' + resource.name, exact: true }).check();
+    await dialog.getByRole('button', { name: '加入 1 项', exact: true }).click();
+    await dialog.getByRole('checkbox', { name: 'Xray 完整配置', exact: true }).check();
+    await dialog.getByRole('button', { name: '检查并保存', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '方案与输出文件已保存到 Sub-Store。',
+    );
+    plan = (await api(page, '/api/subscriptions')).subscriptions.find(
+      (item) => item.name === resource.name,
+    ).id;
+    await dialog.getByRole('button', { name: '创建分享地址', exact: true }).click();
+    await expect(dialog.getByLabel('Xray 完整配置 分享地址', { exact: true })).toBeVisible();
+    const tokens = (await api(page, '/upstream/sub-store/api/tokens')).data;
+    const incompatible = { ...node('vless'), name: 'incompatible node' };
+    await api(
+      page,
+      '/upstream/sub-store/api/sub/' + resource.upstreamName,
+      { content: JSON.stringify({ proxies: [toUpstream(incompatible)] }) },
+      'PATCH',
+    );
+    await dialog.getByRole('button', { name: '创建分享地址', exact: true }).click();
+    const results = dialog.getByRole('region', { name: '输出检查结果' });
+    await expect(results.locator('[data-state="failed"]')).toContainText('Xray 完整配置');
+    await expect(results).toContainText('incompatible node');
+    await expect(results).toContainText(resource.name);
+    expect((await api(page, '/upstream/sub-store/api/tokens')).data).toEqual(tokens);
+    await dialog.getByRole('button', { name: '检查并保存', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toContainText('方案已保存');
+    await expect(results).toContainText('已有分享地址会读取保存后的方案');
+    await expect(dialog.getByLabel('方案名称', { exact: true })).toHaveValue(resource.name);
+    await dialog.getByRole('checkbox', { name: 'Xray 完整配置', exact: true }).uncheck();
+    await expect(results).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '创建分享地址', exact: true })).toBeDisabled();
+    await dialog.getByRole('button', { name: '检查并保存', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '方案与输出文件已保存到 Sub-Store。',
+    );
+    await dialog.getByRole('button', { name: '创建分享地址', exact: true }).click();
+    await expect(dialog.getByRole('status', { name: '方案操作结果' })).toHaveText(
+      '已检查所选格式，分享地址已就绪。',
+    );
+    await expect(dialog.getByLabel('URI 分享地址', { exact: true })).toBeFocused();
+    const url = await dialog.getByLabel('Mihomo 完整配置 分享地址', { exact: true }).inputValue();
+    expect((await page.request.get(url)).status()).toBe(200);
+    await noOverflow(page);
+    await page.screenshot({ path: info.outputPath('output-validation.png'), fullPage: true });
   } finally {
     await cleanup(page, { resource, plan });
   }

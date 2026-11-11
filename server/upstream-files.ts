@@ -5,6 +5,7 @@ import { hash, marker, type UpstreamResources } from './upstream-resources.js';
 import { identityKey, type UpstreamRecord } from './sub-store.js';
 import { defaultTemplates } from './templates/basic.js';
 import { hy2ResolverConnectionSchema } from './shared/hy2-certificates.js';
+import type { OutputFormat, SubscriptionConfig } from './shared/subscriptions.js';
 export const SCRIPT_VERSION = 1;
 let legacyChainOperatorContent: string | undefined;
 function legacyChainOperator() {
@@ -195,14 +196,14 @@ export class UpstreamFiles {
       return this.supportFiles();
     });
   }
-  async initialize() {
+  async initialize({ keepDuplicates = false } = {}) {
     const client = this.resources.client;
     const defaults = this.builtins();
     for (const seed of defaults) {
       const existing = this.resources
         .files(seed.role)
         .filter((f) => marker(f.record)?.format === seed.format);
-      if (existing.length > 1)
+      if (existing.length > 1 && !keepDuplicates)
         throw new AppError('FILE_DUPLICATE', '配套文件重复，请保留一份有效模板或运行脚本。', 409);
       if (existing.length) continue;
       await client.api('/api/files', {
@@ -229,7 +230,7 @@ export class UpstreamFiles {
       await this.ensureLegacyChainCompatibilityUnlocked();
     });
   }
-  private async ensureLegacyChainCompatibilityUnlocked() {
+  async ensureLegacyChainCompatibilityUnlocked() {
     for (const { id, record } of this.resources.files('runtime')) {
       if (marker(record)?.version !== SCRIPT_VERSION) continue;
       if (record.process !== undefined && !Array.isArray(record.process))
@@ -250,14 +251,54 @@ export class UpstreamFiles {
     }
   }
 }
+const loadRuntime = [
+  ' const files = $substore.read("files") || [];',
+  ' const helpers = files.filter(f => f._submeld?.role === "runtime" && f._submeld?.version === 1);',
+  ' if (helpers.length !== 1) throw Object.assign(new Error("运行脚本缺失或重复，请检查 Sub-Store 配套文件。"), {code: "RUNTIME_INVALID"});',
+  ' const code = await produceArtifact({type: "file", name: helpers[0].name});',
+  ' const generate = new Function("require", code + "; return SubMeldRuntime.generate;")(require);',
+];
+const writeGenerationError =
+  ' $content = JSON.stringify({error: {code: typeof error?.code === "string" ? error.code : "GENERATION_FAILED", message: typeof error?.code === "string" && typeof error?.message === "string" ? error.message : "上游脚本生成失败，请检查配套文件。", diagnostics: Array.isArray(error?.diagnostics) ? error.diagnostics : []}});';
+
+export function draftPreviewRecord(
+  config: SubscriptionConfig,
+  format: OutputFormat,
+): UpstreamRecord {
+  const id = randomUUID();
+  const name = 'sm-preview-' + id;
+  const script = [
+    'try {',
+    ...loadRuntime,
+    ' const draft = {...' +
+      JSON.stringify({ name, [identityKey]: { id, role: 'plan', version: SCRIPT_VERSION } }) +
+      ', content: $content};',
+    ' const read = key => key === "files" ? [...($substore.read(key) || []), draft] : $substore.read(key);',
+    ' const result = await generate({read, ProxyUtils, artifact: produceArtifact}, ' +
+      JSON.stringify(id) +
+      ', ' +
+      JSON.stringify(format) +
+      ', false);',
+    ' if (typeof result?.content !== "string") throw new Error("Invalid runtime result");',
+    ' if (!result.content.trim()) throw Object.assign(new Error("此格式生成内容为空，请检查输入与筛选条件。"), {code: "EMPTY_OUTPUT"});',
+    ' $content = JSON.stringify({generated: true});',
+    '} catch (error) {',
+    writeGenerationError,
+    '}',
+  ].join('\n');
+  return {
+    name,
+    type: 'file',
+    source: 'local',
+    content: JSON.stringify({ ...config, enabled: true }),
+    process: [{ type: 'Script Operator', args: { mode: 'script', content: script } }],
+  };
+}
+
 export function outputScript(planId: string, format: string) {
   return [
     'try {',
-    ' const files = $substore.read("files") || [];',
-    ' const helpers = files.filter(f => f._submeld?.role === "runtime" && f._submeld?.version === 1);',
-    ' if (helpers.length !== 1) throw new Error("Runtime missing");',
-    ' const code = await produceArtifact({type: "file", name: helpers[0].name});',
-    ' const generate = new Function("require", code + "; return SubMeldRuntime.generate;")(require);',
+    ...loadRuntime,
     ' const result = await generate({ read: key => $substore.read(key), ProxyUtils, artifact: produceArtifact }, ' +
       JSON.stringify(planId) +
       ', ' +
@@ -266,7 +307,7 @@ export function outputScript(planId: string, format: string) {
     ' $content = result.content;',
     '} catch (error) {',
     ' $options._res = { status: 422, headers: { "Content-Type": "application/json; charset=utf-8" } };',
-    ' $content = JSON.stringify({error: {code: typeof error.code === "string" ? error.code : "GENERATION_FAILED", message: typeof error.code === "string" ? error.message : "上游脚本生成失败，请检查配套文件。", diagnostics: Array.isArray(error.diagnostics) ? error.diagnostics : []}});',
+    writeGenerationError,
     '}',
   ].join('\n');
 }

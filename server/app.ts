@@ -14,12 +14,12 @@ import type { Config } from './config.js';
 import type { Auth } from './auth.js';
 import type { NodeStore } from './nodes.js';
 
-import type { SubscriptionStore } from './subscriptions.js';
+import { SubscriptionValidationError, type SubscriptionStore } from './subscriptions.js';
 
 import type { NodeTester } from './node-tests.js';
 import { testSelectionSchema } from './shared/node-tests.js';
 import { renderTargetSchema } from './shared/contracts.js';
-import { outputFormatSchema } from './shared/subscriptions.js';
+import { outputFormatSchema, type SubscriptionValidation } from './shared/subscriptions.js';
 
 import { AppError, publicError } from './errors.js';
 import { readJson } from './input.js';
@@ -490,6 +490,12 @@ export function createApp({
     return { revision, config };
   }
   const detail = (id: string) => subscriptions.detail(id, config.publicOrigin);
+  async function checkedDetail(id: string, revision: string, validation?: SubscriptionValidation) {
+    const result = await detail(id);
+    if (result.revision !== revision)
+      throw new AppError('REVISION_CONFLICT', '输出方案已修改，请重新载入。', 409);
+    return { ...result, validation };
+  }
   function testing() {
     if (!tester) throw new AppError('TEST_UNAVAILABLE', '节点测试服务尚未就绪。', 503);
     return tester;
@@ -539,21 +545,23 @@ export function createApp({
   app.get('/api/subscriptions', (c) => c.json(subscriptions.list(listPage(c.req.query('page')))));
   app.post('/api/subscriptions', async (c) => {
     const plan = await subscriptions.create(await readJson(c.req.raw, MAX_BYTES));
-    return c.json(await detail(plan.id), 201);
+    return c.json(await checkedDetail(plan.id, plan.revision, plan.validation), 201);
   });
   app.get('/api/subscriptions/:id', async (c) => c.json(await detail(c.req.param('id'))));
   app.patch('/api/subscriptions/:id', async (c) => {
     const body = await updateBody(c.req.raw);
     const plan = await subscriptions.update(c.req.param('id'), body.config, body.revision);
-    return c.json(await detail(plan.id));
+    return c.json(await checkedDetail(plan.id, plan.revision, plan.validation));
   });
   app.delete('/api/subscriptions/:id', async (c) => {
     await subscriptions.delete(c.req.param('id'), await requestRevision(c.req.raw));
     return c.json({ deleted: true });
   });
   app.post('/api/subscriptions/:id/share', async (c) => {
-    await subscriptions.share(c.req.param('id'), await requestRevision(c.req.raw), false);
-    return c.json(await detail(c.req.param('id')));
+    const id = c.req.param('id');
+    const revision = await requestRevision(c.req.raw);
+    const validation = await subscriptions.share(id, revision, false);
+    return c.json(await checkedDetail(id, revision, validation));
   });
   app.post('/api/subscriptions/:id/revoke', async (c) => {
     await subscriptions.share(c.req.param('id'), await requestRevision(c.req.raw), true);
@@ -619,7 +627,12 @@ export function createApp({
         code: result.code,
       }),
     );
-    return context.json(result, error instanceof AppError ? error.status : 500);
+    return context.json(
+      error instanceof SubscriptionValidationError
+        ? { ...result, validation: error.validation }
+        : result,
+      error instanceof AppError ? error.status : 500,
+    );
   });
   return app;
 }

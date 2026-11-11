@@ -19,6 +19,15 @@ test('native artifacts and shares acquire HY2 certificates and all three cores c
   const clientPort = await dualPort();
   await f.hopping(server.draft);
   const saved = await f.plan(server.draft, [...outputFormats], clientPort);
+  assert.ok(
+    saved.validation.every((result) => result.state === 'ok'),
+    JSON.stringify(saved.validation),
+  );
+  assert.equal(
+    f.resources.files('certificate-cache').length,
+    1,
+    'Saving must complete first-time certificate acquisition outside the write lock',
+  );
   const unauthorized = await f.app.request('/api/internal/hy2-certificates/resolve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

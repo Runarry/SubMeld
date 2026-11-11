@@ -7,7 +7,12 @@ import { checkedDraft } from './converter/normalized.js';
 import { renderInput } from './converter/render.js';
 import { produceInput } from './converter/engine.js';
 import { fillTemplate } from './templates/basic.js';
-import { diagnostic, type RenderItem, type NodeDraft } from './shared/contracts.js';
+import {
+  diagnostic,
+  type Diagnostic,
+  type RenderItem,
+  type NodeDraft,
+} from './shared/contracts.js';
 import { remoteCertificateResolver } from './converter/hy2-resolver-client.js';
 import type { Hy2CertificateResolver } from './shared/hy2-certificates.js';
 type Native = {
@@ -25,6 +30,7 @@ type Native = {
 };
 const records = z.array(z.object({ name: z.string() }).catchall(z.unknown()));
 const nodesSchema = z.array(z.record(z.string(), z.unknown()));
+type InputLocation = NonNullable<Diagnostic['location']>;
 export async function generate(native: Native, planId: string, requested: string, noCache = false) {
   const subs = records.parse(native.read('subs') ?? []);
   const collections = records.parse(native.read('collections') ?? []);
@@ -53,15 +59,12 @@ export async function generate(native: Native, planId: string, requested: string
   if (!plan.enabled || !plan.formats.includes(format))
     throw new AppError('OUTPUT_DISABLED', '方案或输出格式已停用。', 422);
   if (!plan.inputs.length) return { content: '', diagnostics: [] };
-  const cache = new Map<string, Record<string, unknown>[]>();
-  const readNodes = async (id: string) => {
-    const cached = cache.get(id);
-    if (cached) return cached;
-    const record = byId([...subs, ...collections], id);
+  const sources = [...subs, ...collections];
+  const cache = new Map<UpstreamRecord, Promise<Record<string, unknown>[]>>();
+  async function loadNodes(record: UpstreamRecord) {
     const type = subs.includes(record) ? 'subscription' : 'collection';
-    let raw: Record<string, unknown>[];
     try {
-      raw = nodesSchema.parse(
+      return nodesSchema.parse(
         await native.artifact({
           type,
           name: record.name,
@@ -74,26 +77,37 @@ export async function generate(native: Native, planId: string, requested: string
     } catch {
       throw new AppError(
         'RESOURCE_GENERATION_FAILED',
-        '无法读取订阅「' +
-          String(record.displayName || record.name) +
-          '」，请检查上游来源与处理规则。',
+        '无法读取节点，请检查上游来源与处理规则。',
         422,
       );
     }
-    cache.set(id, raw);
-    return raw;
-  };
-  const select = async (ref: { resourceId: string; nodeName: string }) => {
-    const list = (await readNodes(ref.resourceId)).filter((n) => n.name === ref.nodeName);
-    if (list.length !== 1)
-      throw new AppError(
-        'NODE_REFERENCE_INVALID',
-        '节点「' + ref.nodeName + '」不存在或名称重复，请重新选择。',
-        422,
-      );
-    return list[0]!;
-  };
+  }
   const items: RenderItem[] = [];
+  const origins: InputLocation[] = [];
+  const inputDiagnostics: Diagnostic[] = [];
+  let firstInputError: AppError | undefined;
+  function inputError(error: unknown, location: InputLocation) {
+    if (!(error instanceof AppError)) throw error;
+    firstInputError ??= error;
+    const details = error.diagnostics?.length
+      ? error.diagnostics
+      : [diagnostic(-1, error.code, error.message)];
+    inputDiagnostics.push(
+      ...details.map((detail) => ({
+        ...detail,
+        nodeIndex: -1,
+        location,
+      })),
+    );
+  }
+  function locate(error: unknown): never {
+    if (!(error instanceof AppError) || !error.diagnostics?.length) throw error;
+    const details = error.diagnostics.map((detail) => {
+      const location = origins[detail.nodeIndex];
+      return location ? { ...detail, location } : detail;
+    });
+    throw new AppError(error.code, error.message, error.status, details);
+  }
   const excluded = (name: string, types: string[]) =>
     (!!plan.includeName && !name.includes(plan.includeName)) ||
     (!!plan.excludeName && name.includes(plan.excludeName)) ||
@@ -103,32 +117,52 @@ export async function generate(native: Native, planId: string, requested: string
       return checkedDraft(raw, index);
     } catch (error) {
       if (error instanceof AppError) throw error;
-      throw new AppError(
-        'TARGET_UNSUPPORTED',
-        '存在当前增强输出无法完整表达的节点，请明确筛选或使用原生订阅输出。',
-        422,
-        [
-          diagnostic(
-            index,
-            'TARGET_UNSUPPORTED',
-            '节点「' +
-              String((raw as Record<string, unknown>)?.name ?? index + 1) +
-              '」的协议或参数无法完整转换。',
-          ),
-        ],
-      );
+      throw new AppError('TARGET_UNSUPPORTED', '协议或参数无法完整转换。', 422);
     }
   };
-  for (const ref of plan.inputs) {
-    const list = ref.kind === 'node' ? [await select(ref)] : await readNodes(ref.id);
+  for (const [index, ref] of plan.inputs.entries()) {
+    const origin: InputLocation = { inputIndex: index };
+    if (ref.kind === 'node') origin.nodeName = ref.nodeName;
+    let list: Record<string, unknown>[];
+    try {
+      const source = byId(sources, ref.kind === 'node' ? ref.resourceId : ref.id);
+      origin.resourceName = String(source.displayName || source.name);
+      let nodes = cache.get(source);
+      if (!nodes) {
+        nodes = loadNodes(source);
+        cache.set(source, nodes);
+      }
+      list = await nodes;
+      if (ref.kind === 'node') {
+        list = list.filter((raw) => raw.name === ref.nodeName);
+        if (list.length !== 1)
+          throw new AppError('NODE_REFERENCE_INVALID', '节点不存在或名称重复，请重新选择。', 422);
+      }
+    } catch (error) {
+      inputError(error, origin);
+      continue;
+    }
     for (const raw of list) {
       const skip = excluded(String(raw.name), [String(raw.type)]);
       if (skip) continue;
-      const node = draft(raw, items.length);
-      node.name = plan.prefix + node.name + plan.suffix;
-      items.push({ nodeIndex: items.length, draft: node, excluded: false, diagnostics: [] });
+      const location = { ...origin, nodeName: String(raw.name ?? '未命名节点') };
+      try {
+        const node = draft(raw, items.length);
+        node.name = plan.prefix + node.name + plan.suffix;
+        items.push({ nodeIndex: items.length, draft: node, excluded: false, diagnostics: [] });
+        origins.push(location);
+      } catch (error) {
+        inputError(error, location);
+      }
     }
   }
+  if (firstInputError)
+    throw new AppError(
+      firstInputError.code,
+      firstInputError.message,
+      firstInputError.status,
+      inputDiagnostics,
+    );
   const client = {
     async convert(data: string, target: string, internal = false): Promise<unknown> {
       return native.ProxyUtils.produce(
@@ -164,7 +198,7 @@ export async function generate(native: Native, planId: string, requested: string
   };
   let content: string;
   if (group === 'uri') {
-    const result = await produceInput({ items }, client);
+    const result = await produceInput({ items }, client).catch(locate);
     const output = format === 'base64' ? result.base64 : result.uri;
     if (output === null)
       throw new AppError('OUTPUT_LIMIT_EXCEEDED', 'Base64 输出超过允许大小。', 422);
@@ -192,7 +226,7 @@ export async function generate(native: Native, planId: string, requested: string
       undefined,
       (target, nodes, names, port) => fillTemplate(template, target, nodes, names, port),
       resolveCertificate,
-    );
+    ).catch(locate);
     content = format === group ? result.full : result.nodes;
   }
   if (

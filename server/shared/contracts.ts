@@ -101,6 +101,13 @@ export const diagnosticSchema = z.strictObject({
   nodeIndex: z.number().int(),
   field: z.string().optional(),
   message: z.string(),
+  location: z
+    .object({
+      inputIndex: z.number().int().nonnegative(),
+      resourceName: z.string().optional(),
+      nodeName: z.string().optional(),
+    })
+    .optional(),
 });
 export type Diagnostic = z.infer<typeof diagnosticSchema>;
 export const itemSchema = z.strictObject({

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MAX_NODES } from './contracts.js';
+import { errorSchema, MAX_NODES } from './contracts.js';
 import { nodeSelectorSchema, revisionSchema } from './resources.js';
 export const MAX_SUBSCRIPTIONS = 100;
 export const outputFormats = [
@@ -92,9 +92,20 @@ export const subscriptionSchema = subscriptionConfigSchema.extend({
   revision: revisionSchema,
 });
 export type Subscription = z.infer<typeof subscriptionSchema>;
+export const subscriptionValidationSchema = z.array(
+  z.discriminatedUnion('state', [
+    z.object({ format: outputFormatSchema, state: z.literal('ok') }),
+    errorSchema.extend({
+      format: outputFormatSchema,
+      state: z.enum(['failed', 'unverified']),
+    }),
+  ]),
+);
+export type SubscriptionValidation = z.infer<typeof subscriptionValidationSchema>;
 export const subscriptionDetailSchema = subscriptionSchema.extend({
   urls: z.partialRecord(outputFormatSchema, z.array(z.string())),
   errors: z.array(z.string()),
+  validation: subscriptionValidationSchema.optional(),
 });
 export type SubscriptionDetail = z.infer<typeof subscriptionDetailSchema>;
 export const subscriptionListSchema = z.object({

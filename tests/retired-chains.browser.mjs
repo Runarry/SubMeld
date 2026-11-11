@@ -29,8 +29,8 @@ test('retired chain bookmarks open relay routes and chain controls are absent', 
   await page.getByRole('button', { name: '添加输出方案', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '管理输出方案', exact: true });
   await expect(
-    dialog.getByRole('combobox', { name: '输入类型', exact: true }).locator('option'),
-  ).toHaveText(['订阅或组合', '单个节点']);
+    dialog.getByRole('tablist', { name: '输入类型', exact: true }).getByRole('tab'),
+  ).toHaveText(['节点', '订阅与组合']);
   await expect(dialog).not.toContainText('两跳链');
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   await navigate(page, '测试中心');

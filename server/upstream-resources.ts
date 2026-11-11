@@ -12,6 +12,7 @@ import { checkedDraft } from './converter/normalized.js';
 import {
   addResourceSchema,
   deleteNodesSchema,
+  nodeSelectorSchema,
   type DeleteNodesResult,
   type NodeRef,
   type NodeSelector,
@@ -216,9 +217,12 @@ export class UpstreamResources {
     });
     const rows: Snapshot['rows'] = [];
     const counts = new Map<number, number>();
-    for (const raw of data.processed)
+    const names = new Map<string, number>();
+    for (const raw of data.processed) {
       if (Number.isInteger(raw.id))
         counts.set(Number(raw.id), (counts.get(Number(raw.id)) ?? 0) + 1);
+      if (typeof raw.name === 'string') names.set(raw.name, (names.get(raw.name) ?? 0) + 1);
+    }
     const linked = new Set<number>();
     const local =
       resource.type === 'sub' &&
@@ -236,7 +240,12 @@ export class UpstreamResources {
       } catch (e) {
         testReason = e instanceof Error ? e.message : '此节点尚不支持测试。';
       }
-      const unique = data.processed.filter((n) => n.name === name).length === 1;
+      const unique = names.get(name) === 1;
+      let referenceError = '';
+      if (!processed) referenceError = '已被处理规则排除';
+      else if (!nodeSelectorSchema.safeParse({ resourceId: id, nodeName: processed.name }).success)
+        referenceError = '节点名称为空或过长，请先改名';
+      else if (!unique) referenceError = '同一来源内名称重复，请先改名';
       rows.push({
         original,
         processed,
@@ -250,6 +259,7 @@ export class UpstreamResources {
           protocol: typeof raw.type === 'string' ? raw.type : '未知',
           resourceName: resource.name,
           available: processed !== null,
+          referenceError,
           testable: !testReason,
           testReason,
           deletion: ['machine-source', 'relay-source'].includes(marker(entry.record)?.role ?? '')

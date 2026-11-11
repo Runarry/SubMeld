@@ -26,6 +26,7 @@ export const nodeViewSchema = nodeRefSchema.extend({
   protocol: z.string(),
   resourceName: z.string(),
   available: z.boolean(),
+  referenceError: z.string(),
   testable: z.boolean(),
   testReason: z.string(),
   deletion: z.enum(['content', 'filter', 'unavailable']),
